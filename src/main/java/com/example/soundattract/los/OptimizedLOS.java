@@ -18,9 +18,12 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.core.registries.BuiltInRegistries;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
@@ -240,7 +243,7 @@ public final class OptimizedLOS {
         }
     }
 
-    public static boolean hasLineOfSight(Level level, Vec3 start, Vec3 end, Mob looker) {
+    public static boolean hasLineOfSight(Level level, Vec3 start, Vec3 end, LivingEntity looker) {
         if (level == null || start == null || end == null) {
             return false;
         }
@@ -287,7 +290,7 @@ public final class OptimizedLOS {
         }
     }
 
-    private static boolean hasLineOfSightDda(Level level, Vec3 start, Vec3 end, Mob looker) {
+    private static boolean hasLineOfSightDda(Level level, Vec3 start, Vec3 end, LivingEntity looker) {
 
         try {
             if (SoundAttractConfig.COMMON.debugLogging.get()) {
@@ -396,7 +399,21 @@ public final class OptimizedLOS {
         return hasLineOfSightVanillaIgnoringNonBlocking(level, start, end, looker);
     }
 
-    private static boolean hasLineOfSightVanillaIgnoringNonBlocking(Level level, Vec3 start, Vec3 end, Mob looker) {
+    private static BlockHitResult clip(Level level, Vec3 start, Vec3 end, LivingEntity looker) {
+        if (looker != null) {
+            return level.clip(new ClipContext(start, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, looker));
+        }
+        return BlockGetter.traverseBlocks(start, end, null, (ignored, pos) -> {
+            BlockState state = level.getBlockState(pos);
+            VoxelShape shape = state.getCollisionShape(level, pos, CollisionContext.empty());
+            return shape.clip(start, end, pos);
+        }, (ignored) -> {
+            Vec3 diff = start.subtract(end);
+            return BlockHitResult.miss(end, Direction.getNearest(diff.x, diff.y, diff.z), BlockPos.containing(end));
+        });
+    }
+
+    private static boolean hasLineOfSightVanillaIgnoringNonBlocking(Level level, Vec3 start, Vec3 end, LivingEntity looker) {
         if (level == null || start == null || end == null) {
             return false;
         }
@@ -407,8 +424,7 @@ public final class OptimizedLOS {
                 return true;
             }
 
-            BlockHitResult hit = level.clip(new ClipContext(currentStart, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE,
-                    looker));
+            BlockHitResult hit = clip(level, currentStart, end, looker);
             if (hit.getType() == HitResult.Type.MISS) {
                 return true;
             }

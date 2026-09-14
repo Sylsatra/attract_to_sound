@@ -46,7 +46,7 @@ public class CamoLODUtil {
         if (distSq > 8 * 8) {
              Vec3 start = cameraPos;
              Vec3 end = entity.getEyePosition();
-             if (!OptimizedLOS.hasLineOfSight(entity.level(), start, end, null)) {
+             if (!OptimizedLOS.hasLineOfSight(entity.level(), start, end, mc.player)) {
                  return new LODResult(false, 16);
              }
         }
