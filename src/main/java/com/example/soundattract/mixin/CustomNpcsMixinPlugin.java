@@ -14,7 +14,9 @@ public class CustomNpcsMixinPlugin implements IMixinConfigPlugin {
     private static final String CUSTOMNPCS_MOD_ID = "customnpcs";
     private static final String[] CUSTOMNPCS_CORE_MIXINS = {
         "CustomNpcsEntityNPCInterfaceMixin",
-        "CustomNpcsUpdateTasksMixin"
+        "CustomNpcsUpdateTasksMixin",
+        "CustomNpcsRenderCustomNpcMixin",
+        "CustomNpcsLayerBackItemMixin"
     };
 
     private boolean customNpcsPresent = false;

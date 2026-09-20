@@ -60,13 +60,20 @@ dependencies {
 	modImplementation files('libs/CustomNPCs-Unofficial-Fabric-1.20.1.20251214.jar')
 	modImplementation files('libs/architectury-9.2.14-fabric.jar')
 	modImplementation files('libs/SmartBrainLib-fabric-1.20.1-1.15.jar')
-	modImplementation files('libs/quantified api-omni-1.4.4.jar')
+	modImplementation files('libs/quantified api-omni-2.2.3.jar')
+	include implementation('com.github.ben-manes.caffeine:caffeine:3.1.8')
 	modCompileOnly files('libs/TACZ-Refabricated-1.20.1-0.5.1-forge1.1.7-hotfix2.jar')
 
 	// Cardinal Components API for capability translation
 	include(modImplementation("dev.onyxstudios.cardinal-components-api:cardinal-components-base:${project.cca_version}"))
 	include(modImplementation("dev.onyxstudios.cardinal-components-api:cardinal-components-entity:${project.cca_version}"))
 	include(modImplementation("dev.onyxstudios.cardinal-components-api:cardinal-components-world:${project.cca_version}"))
+	testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+}
+
+test {
+	useJUnitPlatform()
 }
 
 processResources {

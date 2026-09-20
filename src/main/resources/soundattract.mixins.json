@@ -26,9 +26,12 @@
     "ItemInHandLayerMixin",
     "SimpleTextureMixin",
     "HttpTextureMixin",
+    "SimpleTextureTextureImageMixin",
     "NativeImageAccessor",
     "LivingEntityRendererRenderMixin",
     "LivingEntityRendererCamoMixin",
+    "CustomNpcsRenderCustomNpcMixin",
+    "CustomNpcsLayerBackItemMixin",
     "SoundEngineMixin"
   ],
   "server": [],

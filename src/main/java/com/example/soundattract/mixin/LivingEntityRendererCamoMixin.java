@@ -14,6 +14,7 @@ import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.client.renderer.entity.LivingEntityRenderer;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.client.renderer.entity.player.PlayerRenderer;
+import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.layers.RenderLayer;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.monster.AbstractIllager;
@@ -39,7 +40,9 @@ public abstract class LivingEntityRendererCamoMixin<T extends LivingEntity, M ex
                 return;
             }
 
-            if (model instanceof HumanoidModel) {
+            if (getClass().getName().equals("noppes.npcs.client.renderer.RenderCustomNpc")) {
+                return;
+            } else if (model instanceof HumanoidModel) {
                 addLayer(new GenericMobCamoLayer((RenderLayerParent) this));
             } else if (model instanceof IllagerModel) {
                 addLayer((RenderLayer) new GenericMobCamoLayer.Illager((RenderLayerParent<AbstractIllager, IllagerModel<AbstractIllager>>) this));

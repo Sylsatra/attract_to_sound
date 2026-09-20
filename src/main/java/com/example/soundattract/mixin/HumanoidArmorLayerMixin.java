@@ -39,11 +39,17 @@ public abstract class HumanoidArmorLayerMixin {
 
     private static ResourceLocation soundattract$buildArmorTexture(ItemStack stack, EquipmentSlot slot, String suffix) {
         if (!(stack.getItem() instanceof ArmorItem armorItem)) return null;
+        return soundattract$buildArmorTexture(armorItem.getMaterial().getName(), slot, suffix);
+    }
+
+    private static ResourceLocation soundattract$buildArmorTexture(String materialName, EquipmentSlot slot, String suffix) {
         boolean secondLayer = slot == EquipmentSlot.LEGS;
-        String path = "textures/models/armor/" + armorItem.getMaterial().getName()
+        ResourceLocation material = ResourceLocation.tryParse(materialName);
+        if (material == null) return null;
+        String path = "textures/models/armor/" + material.getPath()
             + "_layer_" + (secondLayer ? 2 : 1)
             + (suffix == null ? "" : "_" + suffix) + ".png";
-        return new ResourceLocation(path);
+        return material.withPath(path);
     }
 
     @Inject(method = "renderArmorPiece", at = @At("HEAD"), cancellable = true)
@@ -57,30 +63,26 @@ public abstract class HumanoidArmorLayerMixin {
     }
 
     @Inject(method = "renderArmorPiece", at = @At("TAIL"))
-    private void soundattract$captureResource(PoseStack poseStack, MultiBufferSource buffer, LivingEntity entity, EquipmentSlot slot, int packedLight, HumanoidModel<?> armorModel, CallbackInfo ci) {
-        if (s_IsRecording.get()) {
+    private void soundattract$tintArmorWithCamo(
+            PoseStack poseStack, MultiBufferSource buffer,
+            LivingEntity entity, EquipmentSlot slot,
+            int packedLight, HumanoidModel<?> armorModel,
+            CallbackInfo ci) {
+
+        if (!s_IsRecording.get()) return;
+        try {
             ItemStack stack = entity.getItemBySlot(slot);
             ResourceLocation main = soundattract$buildArmorTexture(stack, slot, null);
             if (main != null) s_CapturedTextures.get().add(main);
             ResourceLocation overlay = soundattract$buildArmorTexture(stack, slot, "overlay");
             if (overlay != null) s_CapturedTextures.get().add(overlay);
-        }
-    }
 
-    @Inject(method = "renderArmorPiece", at = @At("TAIL"))
-    private void soundattract$tintArmorWithCamo(
-            PoseStack poseStack, MultiBufferSource buffer, 
-            LivingEntity entity, EquipmentSlot slot, 
-            int packedLight, HumanoidModel<?> armorModel, 
-            CallbackInfo ci) {
-        
-        s_IsRecording.set(false);
-        if (entity.isInvisible() && SoundAttractConfig.shouldHideWornGearWhileInvisible()) return;
+            if (entity.isInvisible() && SoundAttractConfig.shouldHideWornGearWhileInvisible()) return;
         CamoLODUtil.LODResult lod = CamoLODUtil.getLOD(entity);
         if (!lod.shouldRender()) return;
 
         java.util.List<ResourceLocation> captured = new java.util.ArrayList<>(s_CapturedTextures.get());
-        
+
         if (entity == Minecraft.getInstance().player && entity.level().getGameTime() % 200 == 0) {
             if (captured.isEmpty()) {
             } else {
@@ -92,8 +94,6 @@ public abstract class HumanoidArmorLayerMixin {
 
         if (captured.isEmpty()) return;
 
-        ItemStack stack = entity.getItemBySlot(slot);
-
         if (isGeckoAnimatable(stack)) {
             return;
         }
@@ -101,40 +101,43 @@ public abstract class HumanoidArmorLayerMixin {
         if (stack.isEmpty() || !stack.hasTag()) return;
 
         net.minecraft.nbt.CompoundTag tag = stack.getTag();
-        
-        if (tag.contains("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_LIST)) {
+
+            if (tag.contains("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_LIST)) {
             net.minecraft.nbt.ListTag list = tag.getList("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_COMPOUND);
             com.example.soundattract.util.CamoUtil.BlendedCamoData blended = com.example.soundattract.util.CamoUtil.getBlendedDataFromTag(list);
-            
+
             if (blended.color().isPresent()) {
                 ResourceLocation smudgeTex = com.example.soundattract.camo.CamoTextureGenerator.getOrCreateMaskedSmudge(
-                    blended.seed(), 
-                    blended.color().get(), 
-                    blended.strength() * 2.0f, 
-                    captured, 
+                    blended.seed(),
+                    blended.color().get(),
+                    blended.strength() * 2.0f,
+                    captured,
                     lod.resolution(),
                     blended.erosion(),
                     blended.humidity(),
                     blended.temp()
                 );
-        
+
                 if (smudgeTex != null) {
                     VertexConsumer vertexConsumer = buffer.getBuffer(CamoRenderTypes.camoOverlay(smudgeTex));
                     armorModel.renderToBuffer(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY, 1.0f, 1.0f, 1.0f, 1.0f);
                 }
             }
-        } 
-        else if (tag.contains("soundattract:CamoStrength")) {
+            } else if (tag.contains("soundattract:CamoStrength")) {
             int color = tag.getInt("soundattract:CamoColor");
             float strength = tag.getFloat("soundattract:CamoStrength");
             long seed = tag.getLong("soundattract:CamoSeed");
 
             ResourceLocation smudgeTex = CamoTextureGenerator.getOrCreateMaskedSmudge(seed, color, strength, captured, lod.resolution(), 0, 0, 0);
-            
+
             if (smudgeTex != null) {
                 VertexConsumer vertexConsumer = buffer.getBuffer(CamoRenderTypes.camoOverlay(smudgeTex));
                 armorModel.renderToBuffer(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY, 1.0f, 1.0f, 1.0f, 1.0f);
             }
+            }
+        } finally {
+            s_IsRecording.set(false);
+            s_CapturedTextures.get().clear();
         }
     }
 

@@ -470,6 +470,17 @@ public class SoundTracker {
     private static final java.util.concurrent.ConcurrentHashMap<UUID, Integer> LAST_CANDIDATE_HASH = new java.util.concurrent.ConcurrentHashMap<>();
     private static final java.util.concurrent.ConcurrentHashMap<UUID, Map<String, MuffledResult>> ASYNC_MUFFLED_BY_MOB = new java.util.concurrent.ConcurrentHashMap<>();
 
+    public static void clearCaches() {
+        RAYCAST_CACHE.clear();
+        ASYNC_BEST_SOUND_BY_MOB.clear();
+        ASYNC_BEST_SOUND_RANGE.clear();
+        ASYNC_BEST_SOUND_WEIGHT.clear();
+        ASYNC_RESULT_GAME_TIME.clear();
+        LAST_SUBMIT_GAME_TIME.clear();
+        LAST_CANDIDATE_HASH.clear();
+        ASYNC_MUFFLED_BY_MOB.clear();
+    }
+
     private static void drainAsyncSoundScores(Level level) {
         try {
             List<SoundScoreResult> results = WorkSchedulerManager.get().drainSoundScoreResults();
@@ -510,7 +521,7 @@ public class SoundTracker {
         int raycastMax = SoundAttractConfig.COMMON.raycastCacheMaxEntries.get();
         String dimensionKey = level.dimension().location().toString();
 
-        if (useCache && QuantifiedCacheCompat.isUsable()) {
+        if (useCache) {
             String key = new StringBuilder(128)
                 .append(dimensionKey).append('|')
                 .append(soundId).append('|')

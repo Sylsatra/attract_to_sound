@@ -21,6 +21,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.phys.HitResult;
+import com.example.soundattract.tracking.SoundTracker;
 
 public class SoundAttractFabricEvents {
 
@@ -72,6 +73,7 @@ public class SoundAttractFabricEvents {
         });
 
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+            SoundTracker.clearCaches();
             ScentQueryCache.clear();
             ArrowInvestigationEvents.onServerStopping();
             FloorCreekEvents.onServerStopping();

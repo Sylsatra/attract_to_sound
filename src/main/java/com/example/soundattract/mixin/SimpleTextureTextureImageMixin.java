@@ -21,7 +21,7 @@ public abstract class SimpleTextureTextureImageMixin {
     private static final Map<Class<?>, Field> LOCATION_FIELD_CACHE =
             Collections.synchronizedMap(new WeakHashMap<>());
 
-    @Inject(method = "close", at = @At("HEAD"), require = 0)
+    @Inject(method = "close", at = @At("HEAD"), require = 1)
     private void soundattract$onTextureImageClose(CallbackInfo ci) {
         try {
             Object outer = findOuterInstance(this);

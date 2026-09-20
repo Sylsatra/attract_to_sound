@@ -19,12 +19,21 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import net.minecraft.world.effect.MobEffects;
 
 import java.util.Set;
 
 @Pseudo
 @Mixin(targets = "noppes.npcs.entity.EntityNPCInterface", remap = false)
 public abstract class CustomNpcsEntityNPCInterfaceMixin {
+
+    @Inject(method = "isInvisible()Z", at = @At("RETURN"), cancellable = true, remap = false)
+    private void soundattract$includeVanillaInvisibility(CallbackInfoReturnable<Boolean> cir) {
+        if (((net.minecraft.world.entity.LivingEntity) (Object) this).hasEffect(MobEffects.INVISIBILITY)) {
+            cir.setReturnValue(true);
+        }
+    }
 
     @Inject(method = "updateTasks()V", at = @At("TAIL"))
     private void soundattract$afterUpdateTasks(CallbackInfo ci) {

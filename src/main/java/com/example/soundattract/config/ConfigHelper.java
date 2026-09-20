@@ -134,6 +134,18 @@ public class ConfigHelper {
                 new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envColorSampleRadius", "sound_attract_stealth.camouflage_system.environmental_camouflage.envColorSampleRadius"),
                 new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envColorSampleYOffsetStart", "sound_attract_stealth.camouflage_system.environmental_camouflage.envColorSampleYOffsetStart"),
                 new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envColorSampleYOffsetEnd", "sound_attract_stealth.camouflage_system.environmental_camouflage.envColorSampleYOffsetEnd"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.environmentalCamouflageSamplingMode", "sound_attract_stealth.camouflage_system.environmental_camouflage.environmentalCamouflageSamplingMode"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropMaxDistance", "sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropMaxDistance"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropSampleRays", "sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropSampleRays"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropMinSamples", "sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropMinSamples"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropViewerCellSize", "sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropViewerCellSize"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropCacheTtlTicks", "sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropCacheTtlTicks"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropMinTps", "sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropMinTps"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropRecoveryTps", "sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropRecoveryTps"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropUseSkyColor", "sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropUseSkyColor"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropDaySkyColor", "sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropDaySkyColor"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropNightSkyColor", "sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropNightSkyColor"),
+                new Mapping("sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropRainSkyColor", "sound_attract_stealth.camouflage_system.environmental_camouflage.envBackdropRainSkyColor"),
                 new Mapping("sound_attract_stealth.detection_range_limits.minStealthDetectionRange", "sound_attract_stealth.detection_range_limits.minStealthDetectionRange"),
                 new Mapping("sound_attract_stealth.detection_range_limits.maxStealthDetectionRange", "sound_attract_stealth.detection_range_limits.maxStealthDetectionRange")
         ));

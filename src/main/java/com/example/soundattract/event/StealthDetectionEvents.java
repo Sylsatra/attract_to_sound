@@ -4,6 +4,7 @@ import com.example.soundattract.Soundattract;
 import com.example.soundattract.config.PlayerStance;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.util.CamoUtil;
+import com.example.soundattract.util.EnvironmentalCamoColor;
 import com.example.soundattract.enchantment.ModEnchantments;
 import com.example.soundattract.ai.MobGroupManager;
 import com.example.soundattract.ai.RaidManager;
@@ -304,7 +305,8 @@ public class StealthDetectionEvents {
 
         if (!skipExpensive && SoundAttractConfig.COMMON.enableEnvironmentalCamouflage.get()) {
             int finalColor = CamoUtil.getFinalPerceptionColor(target);
-            java.util.Optional<Integer> envColorOpt = getAverageEnvironmentalColor(target, level);
+            java.util.Optional<Integer> envColorOpt = EnvironmentalCamoColor.getEnvironmentalColor(
+                    target, looker, level, () -> getAverageEnvironmentalColor(target, level));
             
             if (envColorOpt.isPresent()) {
                 int envColor = envColorOpt.get();
@@ -1246,7 +1248,8 @@ public class StealthDetectionEvents {
 
         if (SoundAttractConfig.COMMON.enableEnvironmentalCamouflage.get()) {
             int finalColor = CamoUtil.getFinalPerceptionColor(player);
-            java.util.Optional<Integer> envColorOpt = getAverageEnvironmentalColor(player, level);
+            java.util.Optional<Integer> envColorOpt = EnvironmentalCamoColor.getEnvironmentalColor(
+                    player, mob, level, () -> getAverageEnvironmentalColor(player, level));
 
             if (envColorOpt.isPresent()) {
                 int envColor = envColorOpt.get();
