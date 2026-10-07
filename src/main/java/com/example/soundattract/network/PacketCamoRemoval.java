@@ -38,7 +38,7 @@ public class PacketCamoRemoval {
                             tag.remove("soundattract:CamoStrength");
                             tag.remove("soundattract:CamoColor");
                             tag.remove("soundattract:CamoSeed");
-                            
+
                             player.inventoryMenu.broadcastChanges();
                         }
                     }

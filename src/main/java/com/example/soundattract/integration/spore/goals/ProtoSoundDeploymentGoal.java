@@ -16,11 +16,6 @@ import net.minecraft.world.phys.Vec3;
 
 import java.util.EnumSet;
 
-/**
- * Custom AI goal for Proto to react to high-weight sounds.
- * 1. Spawns a Vigil scout toward the sound source.
- * 2. Biases biomass spreading toward the sound source.
- */
 public class ProtoSoundDeploymentGoal extends net.minecraft.world.entity.ai.goal.Goal {
     private final Proto proto;
     private int cooldown = 0;
@@ -36,7 +31,7 @@ public class ProtoSoundDeploymentGoal extends net.minecraft.world.entity.ai.goal
             cooldown--;
             return false;
         }
-        
+
         if (!com.example.soundattract.config.separate.IntegrationConfig.ENABLE_PROTO_SOUND_DEPLOYMENT.get()) {
             return false;
         }
@@ -54,7 +49,7 @@ public class ProtoSoundDeploymentGoal extends net.minecraft.world.entity.ai.goal
     public void start() {
         BlockPos targetPos = SporeGoalInjectorProxy.getActiveSoundTarget(proto);
         if (targetPos == null) return;
-        
+
         if (!com.example.soundattract.config.separate.IntegrationConfig.SMART_SPREAD_TO_SOUND.get()) {
             applyBiasedSpread(targetPos);
         }
@@ -74,13 +69,13 @@ public class ProtoSoundDeploymentGoal extends net.minecraft.world.entity.ai.goal
         }
 
         double biasFactor = com.example.soundattract.config.separate.IntegrationConfig.PROTO_SPREAD_LERP_FACTOR.get();
-        
+
         int targetX = (int) Mth.lerp(biasFactor, nodePos.getX(), soundPos.getX());
         int targetY = (int) Mth.lerp(biasFactor, nodePos.getY(), soundPos.getY());
         int targetZ = (int) Mth.lerp(biasFactor, nodePos.getZ(), soundPos.getZ());
-        
+
         BlockPos biasedCenter = new BlockPos(targetX, targetY, targetZ);
-        
+
         proto.generateChasing(biasedCenter, proto, 32, 2);
     }
 

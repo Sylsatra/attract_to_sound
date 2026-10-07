@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.immersive_melodies;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.config.separate.IntegrationConfig;
@@ -55,7 +57,7 @@ public class ImmersiveMelodiesEvents {
 
     private static boolean isInstrumentPlaying(ItemStack stack) {
         if (stack.isEmpty()) return false;
-        
+
         CompoundTag tag = stack.getTag();
         return tag != null && tag.getBoolean(TAG_PLAYING);
     }
@@ -87,8 +89,8 @@ public class ImmersiveMelodiesEvents {
         String meta = player.getUUID().toString() + "/ImmersiveMelody";
         String soundIdToUse = SoundTracker.buildIntegrationSoundId(baseId, meta);
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
-            SoundAttractMod.LOGGER.info("[ImmersiveMelodies] addSound: player={} | melody={} | range={} | weight={} | pos={}", 
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.IMMERSIVE_MELODIES)) {
+            SoundAttractMod.LOGGER.info("[ImmersiveMelodies] addSound: player={} | melody={} | range={} | weight={} | pos={}",
                 player.getName().getString(), melodyId, range, weight, pos);
         }
 
@@ -113,7 +115,7 @@ public class ImmersiveMelodiesEvents {
 
     private static double[] getMelodyOverride(String melodyId) {
         if (melodyId == null || melodyId.isEmpty()) return null;
-        
+
         List<? extends String> list = IntegrationConfig.IMMERSIVE_MELODIES_MELODY_OVERRIDES.get();
         for (String entry : list) {
             String[] parts = entry.split(":");

@@ -9,6 +9,16 @@ public class PerformanceConfig {
     public static final ForgeConfigSpec.IntValue INITIAL_GROUP_COMPUTATION_DELAY;
     public static final ForgeConfigSpec.IntValue WORKER_THREADS;
     public static final ForgeConfigSpec.IntValue WORKER_TASK_BUDGET_MS;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_SPATIAL_SCHEDULER;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_SPATIAL_GROUPS;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_SPATIAL_MOB_COUNT;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_SPATIAL_BRIDGE_QUERIES;
+    public static final ForgeConfigSpec.BooleanValue SPATIAL_SHADOW_PARITY;
+    public static final ForgeConfigSpec.IntValue SPATIAL_TICKET_TTL_TICKS;
+    public static final ForgeConfigSpec.IntValue SPATIAL_WARM_TTL_TICKS;
+    public static final ForgeConfigSpec.IntValue SPATIAL_MAILBOX_CAPACITY;
+    public static final ForgeConfigSpec.IntValue SPATIAL_IN_FLIGHT_FUTURES;
+    public static final ForgeConfigSpec.IntValue SPATIAL_WORK_UNITS_PER_TICK;
     public static final ForgeConfigSpec.IntValue SCAN_COOLDOWN_TICKS;
     public static final ForgeConfigSpec.DoubleValue COOLDOWN_TICKS_PER_MOB;
     public static final ForgeConfigSpec.DoubleValue MIN_TPS_FOR_SCAN_COOLDOWN;
@@ -51,6 +61,22 @@ public class PerformanceConfig {
 
         WORKER_TASK_BUDGET_MS = BUILDER.comment("Soft per-task time budget in milliseconds for worker computations before yielding.")
                 .defineInRange("workerTaskBudgetMs", 10, 1, 1000);
+
+        ENABLE_SPATIAL_SCHEDULER = BUILDER.comment("Enable the spatial scheduler subsystem.")
+                .define("enableSpatialScheduler", false);
+        ENABLE_SPATIAL_GROUPS = BUILDER.comment("Enable spatial group contracts and publication plumbing.")
+                .define("enableSpatialGroups", false);
+        ENABLE_SPATIAL_MOB_COUNT = BUILDER.comment("Enable index-backed mob counting.")
+                .define("enableSpatialMobCount", false);
+        ENABLE_SPATIAL_BRIDGE_QUERIES = BUILDER.comment("Enable index-backed bridge queries.")
+                .define("enableSpatialBridgeQueries", false);
+        SPATIAL_SHADOW_PARITY = BUILDER.comment("Run spatial parity checks in shadow mode.")
+                .define("spatialShadowParity", false);
+        SPATIAL_TICKET_TTL_TICKS = BUILDER.defineInRange("spatialTicketTtlTicks", 20, 1, 1000000);
+        SPATIAL_WARM_TTL_TICKS = BUILDER.defineInRange("spatialWarmTtlTicks", 40, 1, 1000000);
+        SPATIAL_MAILBOX_CAPACITY = BUILDER.defineInRange("spatialMailboxCapacity", 1024, 1, 1000000);
+        SPATIAL_IN_FLIGHT_FUTURES = BUILDER.defineInRange("spatialInFlightFutures", 64, 1, 1000000);
+        SPATIAL_WORK_UNITS_PER_TICK = BUILDER.defineInRange("spatialWorkUnitsPerTick", 128, 1, 1000000);
 
         SCAN_COOLDOWN_TICKS = BUILDER.comment("Minimum time in ticks between mob scans for new sounds.")
                 .defineInRange("scanCooldownTicks", 25, 1, 1000000);
@@ -95,7 +121,7 @@ public class PerformanceConfig {
         LOS_BATCH_QUEUE_MAX_SIZE = BUILDER.defineInRange("losBatchQueueMaxSize", 4096, 64, 1000000);
 
         ENABLE_LIVING_ENTITY_LOS_OVERRIDE = BUILDER.define("enableLivingEntityLosOverride", true);
-        
+
         MAX_MUFFLING_BLOCKS_TO_CHECK = BUILDER.comment("Maximum number of blocks to check for muffling between sound and mob.")
                 .defineInRange("maxMufflingBlocksToCheck", 16, 8, 256);
 

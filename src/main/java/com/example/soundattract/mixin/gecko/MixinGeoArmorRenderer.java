@@ -36,8 +36,8 @@ public abstract class MixinGeoArmorRenderer<T extends net.minecraft.world.item.I
     public void onActuallyRenderReturn(PoseStack poseStack, T animatable, BakedGeoModel model, RenderType renderType,
                                        MultiBufferSource bufferSource, VertexConsumer buffer, boolean isReRender, float partialTick,
                                        int packedLight, int packedOverlay, float red, float green, float blue, float alpha, CallbackInfo ci) {
-        
-        
+
+
         if (isRenderingCamo) return;
 
         Entity entity = getCurrentEntity();
@@ -50,7 +50,7 @@ public abstract class MixinGeoArmorRenderer<T extends net.minecraft.world.item.I
         if (stack.isEmpty() || !stack.hasTag()) {
              return;
         }
-        
+
         net.minecraft.nbt.CompoundTag tag = stack.getTag();
         if (!tag.contains("soundattract:CamoLayers", 9)) {
              return;
@@ -58,25 +58,25 @@ public abstract class MixinGeoArmorRenderer<T extends net.minecraft.world.item.I
 
         net.minecraft.nbt.ListTag list = tag.getList("soundattract:CamoLayers", 10);
         com.example.soundattract.util.CamoUtil.BlendedCamoData blended = com.example.soundattract.util.CamoUtil.getBlendedDataFromTag(list);
-        
+
         if (blended.color().isPresent()) {
             com.example.soundattract.camo.ArmorValidationTracker.markSlotValidated(living, getCurrentSlot());
 
             float strength = blended.strength() * 2.0f;
             if (strength > 0.05f) {
                 int color = blended.color().get();
-                
+
                 com.example.soundattract.camo.CamoLODUtil.LODResult lod = com.example.soundattract.camo.CamoLODUtil.getLOD(living);
                 ResourceLocation smudgeTex = com.example.soundattract.camo.CamoTextureGenerator.getOrCreateSmudge(
-                    blended.seed(), 
-                    color, 
-                    strength, 
+                    blended.seed(),
+                    color,
+                    strength,
                     lod.resolution(),
                     blended.erosion(),
                     blended.humidity(),
                     blended.temp()
                 );
-                
+
                 if (smudgeTex != null) {
                     RenderType camoType = com.example.soundattract.camo.CamoRenderTypes.camoOverlay(smudgeTex);
                     VertexConsumer camoBuffer = bufferSource.getBuffer(camoType);
@@ -84,17 +84,17 @@ public abstract class MixinGeoArmorRenderer<T extends net.minecraft.world.item.I
                     isRenderingCamo = true;
                     try {
                         this.updateAnimatedTextureFrame(animatable);
-                        
+
                         poseStack.pushPose();
                         poseStack.translate(0, 24 / 16f, 0);
                         poseStack.scale(-1, -1, 1);
-                        
+
                         java.util.List<software.bernie.geckolib.cache.object.GeoBone> bones = model.topLevelBones();
 
                         for (software.bernie.geckolib.cache.object.GeoBone group : bones) {
                             this.renderRecursively(poseStack, animatable, group, camoType, bufferSource, camoBuffer, true, partialTick, packedLight, OverlayTexture.NO_OVERLAY, 1.0f, 1.0f, 1.0f, 1.0f);
                         }
-                        
+
                         poseStack.popPose();
                     } finally {
                         isRenderingCamo = false;

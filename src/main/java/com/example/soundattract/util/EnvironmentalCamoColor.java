@@ -1,8 +1,12 @@
 package com.example.soundattract.util;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.quantified.QuantifiedCacheCompat;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.entity.LivingEntity;
@@ -11,20 +15,33 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.server.ServerLifecycleHooks;
+import net.minecraftforge.event.server.ServerStoppedEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+@Mod.EventBusSubscriber(modid = SoundAttractMod.MOD_ID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public final class EnvironmentalCamoColor {
     private record CacheEntry(Optional<Integer> color, long gameTime) {}
 
-    private static final ConcurrentHashMap<String, CacheEntry> LOCAL_CACHE = new ConcurrentHashMap<>();
+    private static final Cache<String, CacheEntry> LOCAL_CACHE = Caffeine.newBuilder()
+            .maximumSize(8192)
+            .expireAfterWrite(10, TimeUnit.MINUTES)
+            .build();
     private static volatile boolean viewerBackdropHealthy = true;
 
     private EnvironmentalCamoColor() {}
+
+    @SubscribeEvent
+    public static void onServerStopped(ServerStoppedEvent event) {
+        LOCAL_CACHE.invalidateAll();
+        viewerBackdropHealthy = true;
+    }
 
     public static EnvironmentalCamoSettings.SamplingMode parseMode(String raw) {
         return EnvironmentalCamoSettings.parseMode(raw);
@@ -83,18 +100,15 @@ public final class EnvironmentalCamoColor {
         }
 
         long now = level.getGameTime();
-        CacheEntry existing = LOCAL_CACHE.get(key);
+        CacheEntry existing = LOCAL_CACHE.getIfPresent(key);
         if (existing != null && (now - existing.gameTime()) <= ttl) {
             return existing.color();
         }
 
         Optional<Integer> computed = computeBackdropColor(target, looker, level);
         LOCAL_CACHE.put(key, new CacheEntry(computed, now));
-        if (LOCAL_CACHE.size() > 8192) {
-            LOCAL_CACHE.entrySet().removeIf(e -> (now - e.getValue().gameTime()) > ttl);
-            if (LOCAL_CACHE.size() > 8192) {
-                LOCAL_CACHE.clear();
-            }
+        if (LOCAL_CACHE.asMap().size() > 8192) {
+            LOCAL_CACHE.cleanUp();
         }
         return computed;
     }
@@ -116,14 +130,14 @@ public final class EnvironmentalCamoColor {
 
         int minSamples = Math.max(1, SoundAttractConfig.COMMON.envBackdropMinSamples.get());
         if (colors.size() < minSamples) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                 SoundAttractMod.LOGGER.info("[EnvBackdrop] Found {} backdrop samples, need {}.", colors.size(), minSamples);
             }
             return Optional.empty();
         }
 
         Optional<Integer> average = average(colors);
-        if (average.isPresent() && SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (average.isPresent() && DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
             SoundAttractMod.LOGGER.info("[EnvBackdrop] Backdrop color: 0x{} from {} samples.",
                     String.format("%06X", average.get()), colors.size());
         }
@@ -244,7 +258,7 @@ public final class EnvironmentalCamoColor {
     }
 
     private static void logFallback(String reason, double tps) {
-        if (SoundAttractConfig.COMMON != null && SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
             SoundAttractMod.LOGGER.info("[EnvBackdrop] Using average-area fallback: {} at {} TPS.", reason, String.format("%.2f", tps));
         }
     }

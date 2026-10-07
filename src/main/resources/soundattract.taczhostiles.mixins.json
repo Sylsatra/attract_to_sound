@@ -1,0 +1,1 @@
+{"required":false,"minVersion":"0.8","package":"com.example.soundattract.mixin.taczhostiles","plugin":"com.example.soundattract.mixin.taczhostiles.TaczHostilesMixinPlugin","compatibilityLevel":"JAVA_17","refmap":"soundattract.refmap.json","mixins":["TaczShootAttackMixin"]}

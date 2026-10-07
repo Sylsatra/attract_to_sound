@@ -1,11 +1,16 @@
 package com.example.soundattract.network;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.tracking.SoundTracker;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Supplier;
+import java.time.Duration;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.ResourceLocation;
@@ -29,6 +34,10 @@ public class SoundMessage {
 
     public static final ResourceLocation VOICE_CHAT_SOUND_ID = ResourceLocation.fromNamespaceAndPath(SoundAttractMod.MOD_ID, "voice_chat");
     public static final ResourceLocation POINT_BLANK_SOUND_ID = ResourceLocation.fromNamespaceAndPath("pointblank", "gun_action");
+    private static final Cache<String, Boolean> DROPPED_SOUND_LOG_CACHE = Caffeine.newBuilder()
+            .maximumSize(2048)
+            .expireAfterWrite(Duration.ofSeconds(5))
+            .build();
 
     private static final java.util.Set<String> KNOWN_ACTIONS = java.util.Set.of(
             "CRAWLING", "SNEAKING", "WALKING", "SPRINTING", "SPRINT_JUMPING");
@@ -42,7 +51,7 @@ public class SoundMessage {
         this.y = y;
         this.z = z;
         this.dimension = dimension;
-        this.sourcePlayerUUID = sourcePlayerUUID;
+        this.sourcePlayerUUID = sourcePlayerUUID == null ? Optional.empty() : sourcePlayerUUID;
         this.action = (action != null && KNOWN_ACTIONS.contains(action)) ? action : null;
         this.intensity01 = Float.isFinite(intensity01) ? Math.max(0f, Math.min(1f, intensity01)) : 0f;
         this.whispering = whispering;
@@ -81,11 +90,11 @@ public class SoundMessage {
         buf.writeFloat(msg.intensity01);
         buf.writeBoolean(msg.whispering);
         buf.writeBoolean(msg.animatorClass != null);
-        if (msg.animatorClass != null) buf.writeUtf(msg.animatorClass);
+        if (msg.animatorClass != null) buf.writeUtf(msg.animatorClass, 128);
         buf.writeBoolean(msg.taczType != null);
-        if (msg.taczType != null) buf.writeUtf(msg.taczType);
+        if (msg.taczType != null) buf.writeUtf(msg.taczType, 128);
         buf.writeBoolean(msg.pointBlankType != null);
-        if (msg.pointBlankType != null) buf.writeUtf(msg.pointBlankType);
+        if (msg.pointBlankType != null) buf.writeUtf(msg.pointBlankType, 128);
     }
 
     public static SoundMessage decode(FriendlyByteBuf buf) {
@@ -98,23 +107,32 @@ public class SoundMessage {
         String rawAction = buf.readBoolean() ? buf.readUtf(32) : null;
         float intensity01 = buf.readFloat();
         boolean whispering = buf.readBoolean();
-        String animatorClass = buf.readBoolean() ? buf.readUtf() : null;
-        String taczType = buf.readBoolean() ? buf.readUtf() : null;
-        String pointBlankType = buf.readBoolean() ? buf.readUtf() : null;
+        String animatorClass = buf.readBoolean() ? buf.readUtf(128) : null;
+        String taczType = buf.readBoolean() ? buf.readUtf(128) : null;
+        String pointBlankType = buf.readBoolean() ? buf.readUtf(128) : null;
         return new SoundMessage(soundId, x, y, z, dimension, sourcePlayerUUID,
                 rawAction, intensity01, whispering, animatorClass, taczType, pointBlankType);
     }
 
     public static void handle(SoundMessage msg, Supplier<NetworkEvent.Context> ctx) {
         try {
+            if (msg == null || msg.soundId == null || msg.dimension == null) {
+                if (ctx != null && ctx.get() != null) ctx.get().setPacketHandled(true);
+                return;
+            }
             ResourceLocation loc = msg.soundId;
             boolean isIntegration = (msg.taczType != null) || (msg.pointBlankType != null);
+            ServerPlayer preSender = (ctx != null && ctx.get() != null) ? ctx.get().getSender() : null;
+            if (preSender != null) {
+                com.example.soundattract.ai.LivingWallCoordinator.recordCombatThreat(preSender.serverLevel(), preSender);
+            }
             if (!SoundAttractConfig.SOUND_ID_WHITELIST_CACHE.isEmpty()
                     && (loc == null || !SoundAttractConfig.SOUND_ID_WHITELIST_CACHE.contains(loc))
                     && !msg.soundId.equals(VOICE_CHAT_SOUND_ID)
                     && !msg.soundId.equals(POINT_BLANK_SOUND_ID)
                     && !isIntegration) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_TRACKING)
+                        && DROPPED_SOUND_LOG_CACHE.asMap().putIfAbsent(msg.dimension + ":" + loc, Boolean.TRUE) == null) {
                     SoundAttractMod.LOGGER.info("[SoundMessage] Dropping sound {} because it is not in whitelist (dim={})", loc, msg.dimension);
                 }
                 if (ctx != null && ctx.get() != null) ctx.get().setPacketHandled(true);
@@ -147,6 +165,10 @@ public class SoundMessage {
                 String dimString = msg.dimension.toString();
                 int lifetime = SoundAttractConfig.COMMON.soundLifetimeTicks.get();
 
+                if (sender != null) {
+                    com.example.soundattract.ai.LivingWallCoordinator.recordCombatThreat(serverLevel, sender);
+                }
+
                 double range;
                 double weight;
                 String resolvedIdForAdd = null;
@@ -155,7 +177,7 @@ public class SoundMessage {
                     Integer r = SoundAttractConfig.PLAYER_ACTION_RANGES_CACHE.get(msg.action);
                     Double w = SoundAttractConfig.PLAYER_ACTION_WEIGHTS_CACHE.get(msg.action);
                     if (r == null || w == null) {
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_TRACKING)) {
                             SoundAttractMod.LOGGER.info("[SoundMessage] Unknown action {}, dropping", msg.action);
                         }
                         return;
@@ -181,7 +203,7 @@ public class SoundMessage {
                     SoundAttractConfig.SoundDefaultEntry def =
                             SoundAttractConfig.SOUND_DEFAULT_ENTRIES_CACHE.get(msg.soundId);
                     if (def == null) {
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_TRACKING)) {
                             SoundAttractMod.LOGGER.info("[SoundMessage] No default entry for {}, dropping", msg.soundId);
                         }
                         return;
@@ -192,7 +214,7 @@ public class SoundMessage {
 
                 range = Math.min(range, SoundAttractConfig.SERVER.maxClientSoundRange.get());
 
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_TRACKING)) {
                     SoundAttractMod.LOGGER.info(
                             "[SoundMessage] resolved soundId={} action={} whispering={} intensity01={} -> range={} weight={}",
                             msg.soundId, msg.action, msg.whispering, msg.intensity01, range, weight);
@@ -207,6 +229,9 @@ public class SoundMessage {
                     } else {
                         SoundTracker.addSound(null, pos, dimString, (int) range, weight, lifetime, msg.soundId.toString());
                     }
+                }
+                if (sender != null) {
+                    com.example.soundattract.ai.LivingWallCoordinator.recordCombatThreat(serverLevel, sender);
                 }
             };
 

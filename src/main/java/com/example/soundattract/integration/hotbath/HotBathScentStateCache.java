@@ -2,13 +2,15 @@ package com.example.soundattract.integration.hotbath;
 
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Player;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 public final class HotBathScentStateCache {
-    private static final Map<UUID, State> STATES = new ConcurrentHashMap<>();
+    private static final Cache<UUID, State> STATES = Caffeine.newBuilder()
+            .maximumSize(4096)
+            .build();
 
     private HotBathScentStateCache() {}
 
@@ -19,23 +21,24 @@ public final class HotBathScentStateCache {
     public static void update(UUID playerId, State state) {
         if (playerId == null) return;
         if (state == null) {
-            STATES.remove(playerId);
+            STATES.invalidate(playerId);
         } else {
             STATES.put(playerId, state);
         }
     }
 
     public static void remove(UUID playerId) {
-        if (playerId != null) STATES.remove(playerId);
+        if (playerId != null) STATES.invalidate(playerId);
     }
 
     public static State get(UUID playerId) {
         if (playerId == null) return State.DEFAULT;
-        return STATES.getOrDefault(playerId, State.DEFAULT);
+        State state = STATES.getIfPresent(playerId);
+        return state == null ? State.DEFAULT : state;
     }
 
     public static void clear() {
-        STATES.clear();
+        STATES.invalidateAll();
     }
 
     public static double scentMultiplier(Player player, long now) {

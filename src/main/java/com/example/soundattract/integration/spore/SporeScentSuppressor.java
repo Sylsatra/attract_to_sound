@@ -8,9 +8,6 @@ import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
-/**
- * Handles the logic for stealthy players suppressing Spore scent entities.
- */
 @Mod.EventBusSubscriber(modid = SoundAttractMod.MOD_ID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class SporeScentSuppressor {
 
@@ -23,7 +20,7 @@ public class SporeScentSuppressor {
         if (!IntegrationConfig.ENABLE_SCENT_BLOCK_SUPPRESSION.get()) return;
 
         Player player = event.player;
-        
+
         if (player.tickCount % 10 != 0) return;
 
         float camoStrength = CamoUtil.getCombinedCamoStrength(player);

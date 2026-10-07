@@ -1,5 +1,7 @@
 package com.example.soundattract.mixin;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.integration.pointblank.PointBlankIntegration;
@@ -37,7 +39,7 @@ public abstract class PointBlankGunItemMixin {
             !com.example.soundattract.config.SoundAttractConfig.SERVER.enablePointBlankIntegration.get()) {
             return;
         }
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.POINT_BLANK)) {
             SoundAttractMod.LOGGER.info("[PBMixin] hitScanTarget hooked for {} with item {}", player, itemStack);
         }
         if (player instanceof ServerPlayer serverPlayer) {
@@ -60,7 +62,7 @@ public abstract class PointBlankGunItemMixin {
             !com.example.soundattract.config.SoundAttractConfig.SERVER.enablePointBlankIntegration.get()) {
             return;
         }
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.POINT_BLANK)) {
             SoundAttractMod.LOGGER.info("[PBMixin] handleClientReloadRequest hooked for {} with item {}", player, itemStack);
         }
         PointBlankIntegration.onGunReload(player, itemStack);

@@ -14,9 +14,6 @@ import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.EnumSet;
 
-/**
- * AI goal for Proto to relentlessly creep its biomass toward a reported player sighting.
- */
 public class ProtoPredatoryCreepGoal extends Goal {
     private final Proto proto;
     private int creepTickTimer = 0;
@@ -30,7 +27,7 @@ public class ProtoPredatoryCreepGoal extends Goal {
     @Override
     public boolean canUse() {
         if (!IntegrationConfig.ENABLE_PROTO_PREDATORY_CREEP.get()) return false;
-        
+
         CompoundTag nbt = proto.getPersistentData();
         return nbt.contains("SoundAttract_HuntTarget") && proto.isAlive();
     }
@@ -56,13 +53,13 @@ public class ProtoPredatoryCreepGoal extends Goal {
         if (nodePos.equals(BlockPos.ZERO)) return;
 
         double distSqr = nodePos.distSqr(targetPos);
-        
+
         if (!huntAnnounced) {
             announceHunt(proto);
             huntAnnounced = true;
         }
 
-        if (distSqr < 144) { 
+        if (distSqr < 144) {
             nbt.remove("SoundAttract_HuntTarget");
             nbt.remove("SoundAttract_HuntStartTime");
             return;
@@ -97,7 +94,7 @@ public class ProtoPredatoryCreepGoal extends Goal {
             if (sound != null) {
                 proto.playSound(sound, 2.0F, 0.8F);
             }
-            
+
             BlockPos nodePos = proto.getEntityData().get(Proto.NODE);
             if (!nodePos.equals(BlockPos.ZERO)) {
                 String particleId = IntegrationConfig.PROTO_HUNT_BEGIN_PARTICLE.get();

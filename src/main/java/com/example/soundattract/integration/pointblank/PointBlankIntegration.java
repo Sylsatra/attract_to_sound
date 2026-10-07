@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.pointblank;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.network.SoundMessage;
 import com.example.soundattract.tracking.SoundTracker;
@@ -17,10 +19,10 @@ import java.util.Optional;
 public class PointBlankIntegration {
 
     public static void onGunShoot(ServerPlayer player, ItemStack gunStack) {
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.POINT_BLANK)) {
             SoundAttractMod.LOGGER.info("[PointBlankIntegration] onGunShoot called for player: {}", player.getName().getString());
         }
-        
+
         double flashRange = SoundAttractConfig.COMMON.gunshotBaseDetectionRange.get();
         double reduction = 0.0;
 
@@ -71,19 +73,19 @@ public class PointBlankIntegration {
 
         double weight = finalRange / 10.0;
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.POINT_BLANK)) {
             SoundAttractMod.LOGGER.info("[PointBlankIntegration] Shoot: Gun='{}', BaseRange={}, Reduction={}, FinalRange={}, Weight={}",
                     gunId, String.format("%.2f", finalRange + soundReduction), String.format("%.2f", soundReduction), String.format("%.2f", finalRange), String.format("%.2f", weight));
         }
 
         return new double[]{finalRange, weight};
     }
-    
+
     private static double[] calculateReloadRangeWeight(ItemStack gunStack) {
         double range = SoundAttractConfig.POINT_BLANK_RELOAD_RANGE_CACHE;
         double weight = SoundAttractConfig.POINT_BLANK_RELOAD_WEIGHT_CACHE;
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.POINT_BLANK)) {
             SoundAttractMod.LOGGER.info("[PointBlankIntegration] Reload: range={}, weight={}", range, weight);
         }
         return new double[]{range, weight};

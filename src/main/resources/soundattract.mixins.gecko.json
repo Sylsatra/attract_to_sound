@@ -4,13 +4,8 @@
     "plugin": "com.example.soundattract.mixin.GeckoMixinPlugin",
     "compatibilityLevel": "JAVA_17",
     "refmap": "soundattract.refmap.json",
-    "mixins": [
-        "MixinGeoArmorRenderer",
-        "MixinGeoEntityRenderer"
-    ],
     "client": [
-        "MixinGeoArmorRenderer",
-        "MixinGeoEntityRenderer"
+        "MixinGeoArmorRenderer"
     ],
     "injectors": {
         "defaultRequire": 1

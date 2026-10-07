@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.customnpcs;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.event.StealthDetectionEvents;
@@ -42,7 +44,7 @@ public final class CustomNpcsStealthTargetBridge {
 
             registerTargetListener(customNpcsBus, targetEventClass.asSubclass(Event.class));
             registered = true;
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                 SoundAttractMod.LOGGER.info("[CustomNPCs] Registered stealth target event bridge.");
             }
         } catch (ReflectiveOperationException | LinkageError e) {
@@ -75,7 +77,7 @@ public final class CustomNpcsStealthTargetBridge {
 
             if (!StealthDetectionEvents.canMobDetectLivingEntity(npc, target)) {
                 event.setCanceled(true);
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                     SoundAttractMod.LOGGER.info(
                             "[CustomNPCs] Canceled target event: {} cannot detect {} through stealth.",
                             npc.getName().getString(),
@@ -83,7 +85,7 @@ public final class CustomNpcsStealthTargetBridge {
                 }
             }
         } catch (ReflectiveOperationException | LinkageError e) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                 SoundAttractMod.LOGGER.warn("[CustomNPCs] Failed to evaluate stealth target event.", e);
             }
         }

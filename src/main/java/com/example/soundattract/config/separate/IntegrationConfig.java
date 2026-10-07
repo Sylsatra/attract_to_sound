@@ -9,6 +9,7 @@ public class IntegrationConfig {
     public static final ForgeConfigSpec SPEC;
 
     public static final ForgeConfigSpec.BooleanValue ENABLE_QUANTIFIED_INTEGRATION;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_WEATHER2_WIND_INTEGRATION;
     public static final ForgeConfigSpec.BooleanValue ENABLE_SMART_BRAIN_LIB_INTEGRATION;
     public static final ForgeConfigSpec.BooleanValue ENABLE_CUSTOM_NPCS_INTEGRATION;
     public static final ForgeConfigSpec.BooleanValue ENABLE_QUANTIFIED_CACHE_INTEGRATION;
@@ -48,14 +49,12 @@ public class IntegrationConfig {
     public static final ForgeConfigSpec.IntValue XRAY_MAX_RANGE;
     public static final ForgeConfigSpec.DoubleValue XRAY_CHANCE;
 
-
-
     public static final ForgeConfigSpec.BooleanValue ENABLE_RELENTLESS_CLIMBING;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> RELENTLESS_ELIGIBLE_MOBS;
     public static final ForgeConfigSpec.BooleanValue ZOMBIES_IGNORE_HEIGHT;
     public static final ForgeConfigSpec.BooleanValue ZOMBIES_CAN_STACK;
     public static final ForgeConfigSpec.DoubleValue ZOMBIE_FALL_DAMAGE_MULTIPLIER;
-    
+
     public static final ForgeConfigSpec.BooleanValue ENABLE_IMMERSIVE_MELODIES_INTEGRATION;
     public static final ForgeConfigSpec.IntValue IMMERSIVE_MELODIES_POLL_INTERVAL;
     public static final ForgeConfigSpec.DoubleValue IMMERSIVE_MELODIES_DEFAULT_RANGE;
@@ -93,6 +92,7 @@ public class IntegrationConfig {
     public static final ForgeConfigSpec.DoubleValue SOUND_RELAY_RANGE;
 
     public static final ForgeConfigSpec.BooleanValue ENABLE_CSGRENADES_INTEGRATION;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_TACZ_NPC_INTEGRATION;
     public static final ForgeConfigSpec.BooleanValue ENABLE_FLASHBANG_BLINDING;
     public static final ForgeConfigSpec.DoubleValue FLASHBANG_BLIND_RADIUS;
     public static final ForgeConfigSpec.IntValue FLASHBANG_BLIND_DURATION_TICKS;
@@ -120,6 +120,8 @@ public class IntegrationConfig {
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> HOTBATH_SPLASH_CAMO_WASH_RATES;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> HOTBATH_CUSTOM_FLUID_SCENT_MODIFIERS;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> HOTBATH_CUSTOM_FLUID_CAMO_WASH_RATES;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_SPOILED_FOOD_SCENT;
+    public static final ForgeConfigSpec.DoubleValue SPOILED_FOOD_ODOR_PER_ITEM;
     public static final ForgeConfigSpec.BooleanValue ENABLE_TOUGH_AS_NAILS_INTEGRATION;
     public static final ForgeConfigSpec.IntValue TOUGH_AS_NAILS_POLL_INTERVAL_TICKS;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> TOUGH_AS_NAILS_TEMPERATURE_SCENT_MULTIPLIERS;
@@ -139,9 +141,13 @@ public class IntegrationConfig {
         BUILDER.comment("Settings for other mod integrations").push("integration");
 
         ENABLE_QUANTIFIED_INTEGRATION = BUILDER.define("enableQuantifiedIntegration", true);
+        ENABLE_WEATHER2_WIND_INTEGRATION = BUILDER.comment("Use Weather2's wind field for wind scent and windshield calculations when Weather2 is installed.")
+                .define("enableWeather2WindIntegration", true);
         ENABLE_SMART_BRAIN_LIB_INTEGRATION = BUILDER.define("enableSmartBrainLibIntegration", true);
         ENABLE_CUSTOM_NPCS_INTEGRATION = BUILDER.define("enableCustomNpcsIntegration", true);
-        
+        ENABLE_TACZ_NPC_INTEGRATION = BUILDER.comment("Enable optional flashbang and smoke targeting behavior for TACZ NPCs when TACZ NPC is installed.")
+                .define("enableTaczNpcIntegration", true);
+
         BUILDER.push("quantified_cache");
         ENABLE_QUANTIFIED_CACHE_INTEGRATION = BUILDER.define("enableQuantifiedCacheIntegration", true);
         QUANTIFIED_CACHE_MEMORY_LIMIT_MB = BUILDER.defineInRange("quantifiedCacheMemoryLimitMB", 256, 0, 65536);
@@ -207,7 +213,7 @@ public class IntegrationConfig {
         ZOMBIES_CAN_STACK = BUILDER.define("zombiesCanStack", true);
         ZOMBIE_FALL_DAMAGE_MULTIPLIER = BUILDER.defineInRange("zombieFallDamageMultiplier", 0.5, 0.0, 10.0);
         BUILDER.pop();
-        
+
         BUILDER.push("immersive_melodies");
         ENABLE_IMMERSIVE_MELODIES_INTEGRATION = BUILDER.comment("Enable integration with Immersive Melodies: playing instruments attracts mobs.")
                 .define("enableImmersiveMelodiesIntegration", true);
@@ -270,7 +276,7 @@ public class IntegrationConfig {
                 .define("protoHuntBeginSound", "spore:proto_ambient");
         PROTO_HUNT_BEGIN_PARTICLE = BUILDER.comment("Particle played at the Proto's NODE when a hunt begins.")
                 .define("protoHuntBeginParticle", "minecraft:sculk_soul");
-        
+
         ENABLE_PROTO_NEURAL_INFLUENCE = BUILDER.comment("Neural-Net Influence: Loud sounds bias Proto toward heavy units; quiet sounds bias it toward scouts.")
                 .define("enableProtoNeuralInfluence", true);
         ENABLE_HARMONIC_FEAR = BUILDER.comment("Harmonic Fear: Hive Tumors panic if players make sound while standing on biomass.")
@@ -391,6 +397,13 @@ public class IntegrationConfig {
                 .defineList("hotBathCustomFluidScentModifiers", Arrays.asList(), obj -> obj instanceof String);
         HOTBATH_CUSTOM_FLUID_CAMO_WASH_RATES = BUILDER.comment("Custom HotBath datapack fluid camo wash rates. Format: 'fluid_id;skin_rate;armor_rate'.")
                 .defineList("hotBathCustomFluidCamoWashRates", Arrays.asList(), obj -> obj instanceof String);
+        BUILDER.pop();
+
+        BUILDER.comment("Spoiled food scent settings").push("spoiled");
+        ENABLE_SPOILED_FOOD_SCENT = BUILDER.comment("Add odor from Spoiled-tagged items based on their spoilage progress.")
+                .define("enableSpoiledFoodScent", true);
+        SPOILED_FOOD_ODOR_PER_ITEM = BUILDER.comment("Additional odor per item at full spoilage progress; scales linearly with the Spoiled timer.")
+                .defineInRange("spoiledFoodOdorPerItem", 1.0, 0.0, 100.0);
         BUILDER.pop();
 
         BUILDER.comment("ToughAsNails integration settings").push("tough_as_nails");

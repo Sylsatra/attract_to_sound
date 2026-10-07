@@ -42,25 +42,20 @@ public class PickUpAndThrowToSoundGoal extends Goal {
         if (this.mob.isVehicle()) return false;
         if (--this.cooldown > 0) return false;
 
-
         double chance = EnhancedAICompat.getPickUpAndThrowChance(this.mob.level());
         if (this.mob.getRandom().nextDouble() >= chance) return false;
 
-
         this.targetSound = SoundTracker.findNearestSound(this.mob, this.mob.level(), this.mob.blockPosition(), this.mob.getEyePosition());
         if (this.targetSound == null) return false;
-
 
         String canPickUpTagStr = SoundAttractConfig.COMMON.pickUpCanPickUpTag.get();
         if (canPickUpTagStr == null || canPickUpTagStr.isBlank()) return false;
         TagKey<EntityType<?>> canPickUpTag = TagKey.create(Registries.ENTITY_TYPE, ResourceLocation.parse(canPickUpTagStr));
         if (!this.mob.getType().is(canPickUpTag)) return false;
 
-
         int minDist = EnhancedAICompat.getPickUpMinDistanceToPickUp();
         double distToSound = Math.sqrt(this.mob.blockPosition().distSqr(this.targetSound.pos));
         if (distToSound < minDist) return false;
-
 
         String canBePickedUpTagStr = SoundAttractConfig.COMMON.pickUpCanBePickedUpTag.get();
         if (canBePickedUpTagStr == null || canBePickedUpTagStr.isBlank()) return false;

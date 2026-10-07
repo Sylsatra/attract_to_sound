@@ -1,9 +1,12 @@
 package com.example.soundattract.event;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.ai.AttractionGoal;
 import com.example.soundattract.ai.LeaderAttractionGoal;
 import com.example.soundattract.ai.FollowerEdgeRelayGoal;
+import com.example.soundattract.ai.LivingWallCoordinator;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.tracking.SoundTracker;
 import com.example.soundattract.util.ArrowInvestigationHelper;
@@ -13,6 +16,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.goal.WrappedGoal;
@@ -28,7 +32,10 @@ import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
 import net.minecraftforge.event.entity.EntityLeaveLevelEvent;
 import net.minecraftforge.event.entity.ProjectileImpactEvent;
+import net.minecraftforge.event.level.LevelEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import java.util.List;
 import java.util.Map;
@@ -46,10 +53,15 @@ public final class ArrowInvestigationEvents {
     private static final int MAX_TRACKED_ARROWS = 4096;
     private static final long MAX_ARROW_AGE_TICKS = 1200L;
 
-    public static final Map<Integer, ArrowState> ARROWS = new ConcurrentHashMap<>();
-    private static final Map<UUID, Long> COOLDOWNS = new ConcurrentHashMap<>();
+    public static final Map<ArrowKey, ArrowState> ARROWS = new ConcurrentHashMap<>();
+    private static final Cache<UUID, Long> COOLDOWNS = Caffeine.newBuilder()
+            .maximumSize(8192)
+            .expireAfterWrite(java.time.Duration.ofMinutes(10))
+            .build();
 
     public static final UUID DISPENSER_SENTINEL_UUID = UUID.fromString("00000000-0000-0000-0000-000000000001");
+
+    public record ArrowKey(ResourceLocation dimension, int entityId) {}
 
     @SubscribeEvent
     public void onEntityJoin(EntityJoinLevelEvent event) {
@@ -59,8 +71,10 @@ public final class ArrowInvestigationEvents {
         if (!(e instanceof Projectile projectile)) return;
         if (!isWatchedProjectile(projectile)) return;
         if (ARROWS.size() >= MAX_TRACKED_ARROWS) {
-            if (SoundAttractConfig.COMMON.debugLogging != null && SoundAttractConfig.COMMON.debugLogging.get()) {
-                SoundAttractMod.LOGGER.debug("[ArrowInvestigation] ARROWS cap reached; dropping new projectile {}", projectile.getId());
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.ARROW_INVESTIGATION)) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.ARROW_INVESTIGATION)) {
+                    SoundAttractMod.LOGGER.debug("[ArrowInvestigation] ARROWS cap reached; dropping new projectile {}", projectile.getId());
+                }
             }
             return;
         }
@@ -75,21 +89,31 @@ public final class ArrowInvestigationEvents {
             shooterUuid = DISPENSER_SENTINEL_UUID;
             isMob = false;
         }
-        ARROWS.put(projectile.getId(), new ArrowState(projectile.position(), now, shooterUuid, isMob));
+        ARROWS.put(new ArrowKey(projectile.level().dimension().location(), projectile.getId()),
+                new ArrowState(projectile.position(), now, shooterUuid, isMob));
     }
 
     @SubscribeEvent
     public void onEntityLeave(EntityLeaveLevelEvent event) {
         Entity e = event.getEntity();
         if (e != null) {
-            ARROWS.remove(e.getId());
+            if (e.level() != null) {
+                ARROWS.remove(new ArrowKey(e.level().dimension().location(), e.getId()));
+            }
         }
     }
 
     @SubscribeEvent
     public void onServerStopping(net.minecraftforge.event.server.ServerStoppingEvent event) {
         ARROWS.clear();
-        COOLDOWNS.clear();
+        COOLDOWNS.invalidateAll();
+    }
+
+    @SubscribeEvent
+    public void onLevelUnload(LevelEvent.Unload event) {
+        if (event == null || !(event.getLevel() instanceof ServerLevel level)) return;
+        ResourceLocation dimension = level.dimension().location();
+        ARROWS.keySet().removeIf(key -> key != null && dimension.equals(key.dimension()));
     }
 
     @SubscribeEvent
@@ -107,9 +131,12 @@ public final class ArrowInvestigationEvents {
         ARROWS.entrySet().removeIf(entry -> {
             ArrowState state = entry.getValue();
             if (state == null) return true;
+            ArrowKey key = entry.getKey();
+            if (key == null || !level.dimension().location().equals(key.dimension())) {
+                return false;
+            }
             if (now - state.spawnTick > MAX_ARROW_AGE_TICKS) return true;
-
-            Entity e = level.getEntity(entry.getKey());
+            Entity e = level.getEntity(key.entityId());
             if (!(e instanceof Projectile projectile)) return false;
             if (projectile.level() != level) return false;
             if (!projectile.isAlive()) {
@@ -123,7 +150,7 @@ public final class ArrowInvestigationEvents {
 
             Vec3 curr = projectile.position();
 
-            int arrowId = entry.getKey();
+            int arrowId = key.entityId();
             if ((arrowId + (int)now) % checkInterval != 0) {
                 state.prevPos = curr;
                 return false;
@@ -189,7 +216,7 @@ public final class ArrowInvestigationEvents {
             return false;
         });
 
-        COOLDOWNS.entrySet().removeIf(e -> e.getValue() == null || e.getValue() < now);
+        COOLDOWNS.asMap().entrySet().removeIf(e -> e.getValue() == null || e.getValue() < now);
     }
 
     @SubscribeEvent
@@ -209,14 +236,25 @@ public final class ArrowInvestigationEvents {
         double r = SoundAttractConfig.COMMON.arrowImpactRadius.get();
         AABB scan = AABB.ofSize(impact, 2 * r, 2 * r, 2 * r);
         List<Mob> mobs = level.getEntitiesOfClass(Mob.class, scan, m -> m.isAlive() && hasSoundPursuitGoal(m));
-        ArrowState state = ARROWS.get(projectile.getId());
+        ArrowState state = ARROWS.get(new ArrowKey(level.dimension().location(), projectile.getId()));
         Vec3 spawnPos = state != null ? state.spawnPos : projectile.position();
+        Entity owner = projectile.getOwner();
+        if (owner instanceof LivingEntity shooter && shooter.isAlive() && !shooter.isRemoved()) {
+            LivingWallCoordinator.recordCombatThreat(level, shooter);
+        }
         for (Mob mob : mobs) {
             dispatchInvestigation(level, projectile, spawnPos, mob, "arrow_impact");
         }
     }
 
     private void dispatchInvestigation(ServerLevel level, Projectile projectile, Vec3 spawnPos, Mob mob, String kind) {
+        if ("arrow_miss".equals(kind)) {
+            AwarenessServerEvents.recordNearMiss(mob);
+        }
+        Entity projectileOwner = projectile.getOwner();
+        if (projectileOwner instanceof LivingEntity shooter && shooter.isAlive() && !shooter.isRemoved()) {
+            LivingWallCoordinator.recordCombatThreat(level, shooter);
+        }
         if (SoundAttractConfig.COMMON.arrowInvestigationRespectCurrentTarget.get()) {
             if (mob.getTarget() != null) return;
             BlockPos existing = getMobSoundTargetPos(mob);
@@ -224,7 +262,7 @@ public final class ArrowInvestigationEvents {
         }
 
         long now = level.getGameTime();
-        Long cdEnd = COOLDOWNS.get(mob.getUUID());
+        Long cdEnd = COOLDOWNS.getIfPresent(mob.getUUID());
         if (cdEnd != null && cdEnd > now) return;
         int cooldown = SoundAttractConfig.COMMON.arrowInvestigationCooldownTicks.get();
         COOLDOWNS.put(mob.getUUID(), now + cooldown);
@@ -261,11 +299,13 @@ public final class ArrowInvestigationEvents {
             return;
         }
 
-        if (SoundAttractConfig.COMMON.debugLogging != null && SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.ARROW_INVESTIGATION)) {
             Entity owner = projectile.getOwner();
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.ARROW_INVESTIGATION)) {
             SoundAttractMod.LOGGER.debug("[ArrowInvestigation] {} -> mob={} at {} (kind={})",
                     owner != null ? owner.getName().getString() : "unknown",
                     mob.getName().getString(), target, kind);
+            }
         }
     }
 

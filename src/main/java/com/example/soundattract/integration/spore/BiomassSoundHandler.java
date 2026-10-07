@@ -8,15 +8,12 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.phys.AABB;
 import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.server.ServerStoppedEvent;
+import net.minecraftforge.event.level.LevelEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 import java.util.List;
 
-/**
- * Internal handler for Spore Biomass Sound System.
- * This class contains direct references to Spore mod classes and should only be 
- * registered or accessed when the Spore mod is loaded.
- */
 public class BiomassSoundHandler {
 
     @SubscribeEvent
@@ -27,16 +24,26 @@ public class BiomassSoundHandler {
         BiomassSoundSystem.processTick(serverLevel);
     }
 
-    /**
-     * Safely triggers a hive alert using Spore entities.
-     */
+    @SubscribeEvent
+    public static void onServerStopped(ServerStoppedEvent event) {
+        BiomassSoundSystem.clear();
+    }
+
+    @SubscribeEvent
+    public static void onLevelUnload(LevelEvent.Unload event) {
+        if (event != null && event.getLevel() instanceof ServerLevel serverLevel) {
+            BiomassSoundSystem.clearLevel(serverLevel);
+        }
+    }
+
+
     public static void triggerHiveAlert(ServerLevel level, BlockPos pos) {
         AABB area = new AABB(pos).inflate(64);
         List<Vigil> vigils = level.getEntitiesOfClass(Vigil.class, area);
-        
+
         for (Vigil vigil : vigils) {
             vigil.setTrigger(3);
-            vigil.setWaveSize(10); 
+            vigil.setWaveSize(10);
         }
 
         if (!vigils.isEmpty() || level.random.nextFloat() < 0.3f) {

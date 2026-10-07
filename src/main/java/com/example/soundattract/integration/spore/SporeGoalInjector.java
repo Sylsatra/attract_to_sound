@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.spore;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.config.separate.IntegrationConfig;
@@ -23,7 +25,7 @@ public class SporeGoalInjector {
         try {
             SporeGoalInjectorProxy.tryInject(entity);
         } catch (Throwable t) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SPORE)) {
                 SoundAttractMod.LOGGER.warn("[SporeGoalInjector] Failed to inject goals for entity {}: {}", entity, t.getMessage());
             }
         }

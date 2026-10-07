@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.tacz;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.tracking.SoundTracker;
 import com.example.soundattract.event.StealthDetectionEvents;
@@ -46,7 +48,7 @@ public class TaczIntegration {
             }
             double finalDetectionRange = Math.max(0, flashRange - reduction);
             StealthDetectionEvents.recordPlayerGunshot(player, finalDetectionRange);
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.TACZ)) {
                 SoundAttractMod.LOGGER.info(
                         "[TaczIntegration] Gunshot Flash: BaseRange={}, Muzzle='{}', Reduction={}, FinalRange={}",
                         String.format("%.2f", flashRange),
@@ -83,7 +85,7 @@ public class TaczIntegration {
         if (!(reloader instanceof Player player)) {
             return;
         }
-        
+
         double[] rangeAndWeight = calculateReloadRangeWeight(event.getGunItemStack());
         double range = rangeAndWeight[0];
         double weight = rangeAndWeight[1];
@@ -109,7 +111,7 @@ public class TaczIntegration {
 
             Pair<Double, Double> gunStats = SoundAttractConfig.TACZ_GUN_SHOOT_DB_CACHE.get(gunId);
 
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.TACZ)) {
                 SoundAttractMod.LOGGER.info("[TaczIntegration][DEBUG] gunId={}, statsInCache={}", gunId, gunStats);
             }
 
@@ -134,7 +136,7 @@ public class TaczIntegration {
 
         double weight = finalRange / 10.0;
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.TACZ)) {
             SoundAttractMod.LOGGER.info("[TaczIntegration] Shot: range={}, weight={}", finalRange, weight);
         }
 
@@ -145,7 +147,7 @@ public class TaczIntegration {
         double range = SoundAttractConfig.TACZ_RELOAD_RANGE_CACHE;
         double weight = SoundAttractConfig.TACZ_RELOAD_WEIGHT_CACHE;
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.TACZ)) {
             SoundAttractMod.LOGGER.info("[TaczIntegration] Reload: range={}, weight={}", range, weight);
         }
 

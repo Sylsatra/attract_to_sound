@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.voicechat;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -18,13 +20,13 @@ public final class PlasmoVoiceBootstrap {
             return;
         }
         try {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.VOICE_CHAT)) {
                 SoundAttractMod.LOGGER.info("[PlasmoVoiceBootstrap] Loading Plasmo Voice addon...");
             }
 
             PlasmoVoiceServer.getAddonsLoader().load(new PlasmoIntegration());
 
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.VOICE_CHAT)) {
                 SoundAttractMod.LOGGER.info("[PlasmoVoiceBootstrap] Plasmo Voice addon loaded.");
             }
         } catch (Throwable t) {

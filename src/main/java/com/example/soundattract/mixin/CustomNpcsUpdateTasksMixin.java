@@ -1,5 +1,7 @@
 package com.example.soundattract.mixin;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.event.SoundAttractionEvents;
 import com.example.soundattract.ai.AttractionGoal;
 import com.example.soundattract.ai.FollowerEdgeRelayGoal;
@@ -37,15 +39,14 @@ public abstract class CustomNpcsUpdateTasksMixin {
                 return;
             }
 
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                 SoundAttractMod.LOGGER.info("[CustomNPCs] updateTasks() completed, re-adding sound attraction goals for {}", mob.getName().getString());
             }
-
 
             addCustomNpcsGoalsAfterUpdate(mob);
 
         } catch (Throwable t) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                 SoundAttractMod.LOGGER.error("[CustomNPCs] Error in updateTasks mixin", t);
             }
         }
@@ -69,13 +70,13 @@ public abstract class CustomNpcsUpdateTasksMixin {
         if (smartEdge) {
             if (!hasFollowerEdgeRelayGoal) {
                 mob.goalSelector.addGoal(attractionPriority, new FollowerEdgeRelayGoal(mob, moveSpeed));
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                     SoundAttractMod.LOGGER.info("[CustomNPCs] Re-added FollowerEdgeRelayGoal to {}", mob.getName().getString());
                 }
             }
             if (!hasLeaderAttractionGoal) {
                 mob.goalSelector.addGoal(attractionPriority + 1, new LeaderAttractionGoal(mob, moveSpeed));
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                     SoundAttractMod.LOGGER.info("[CustomNPCs] Re-added LeaderAttractionGoal to {}", mob.getName().getString());
                 }
             }
@@ -86,7 +87,7 @@ public abstract class CustomNpcsUpdateTasksMixin {
                     public boolean canUse() {
                         boolean hasTarget = (mob.getTarget() != null && mob.getTarget().isAlive());
                         boolean result = (!hasTarget || isHighWeightOverrideActive()) && super.canUse();
-                        if (SoundAttractConfig.COMMON.debugLogging.get() && result) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS) && result) {
                             SoundAttractMod.LOGGER.info("[CustomNPCs] AttractionGoal.canUse() returning true for {}", mob.getName().getString());
                         }
                         return result;
@@ -96,13 +97,13 @@ public abstract class CustomNpcsUpdateTasksMixin {
                     public boolean canContinueToUse() {
                         boolean hasTarget = (mob.getTarget() != null && mob.getTarget().isAlive());
                         boolean result = (!hasTarget || isHighWeightOverrideActive()) && super.canContinueToUse();
-                        if (SoundAttractConfig.COMMON.debugLogging.get() && result) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS) && result) {
                             SoundAttractMod.LOGGER.info("[CustomNPCs] AttractionGoal.canContinueToUse() returning true for {}", mob.getName().getString());
                         }
                         return result;
                     }
                 });
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                     SoundAttractMod.LOGGER.info("[CustomNPCs] Re-added AttractionGoal to {}", mob.getName().getString());
                 }
             }
@@ -110,7 +111,7 @@ public abstract class CustomNpcsUpdateTasksMixin {
 
         if (!hasFollowLeaderGoal) {
             mob.goalSelector.addGoal(attractionPriority + 2, new FollowLeaderGoal(mob, moveSpeed));
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                 SoundAttractMod.LOGGER.info("[CustomNPCs] Re-added FollowLeaderGoal to {}", mob.getName().getString());
             }
         }

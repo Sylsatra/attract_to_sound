@@ -35,10 +35,10 @@ public class ArrowScentEvents {
         ArrowInvestigationEvents.ARROWS.entrySet().removeIf(entry -> {
             ArrowInvestigationEvents.ArrowState state = entry.getValue();
             if (state == null) return true;
+            ArrowInvestigationEvents.ArrowKey key = entry.getKey();
+            if (key == null || !level.dimension().location().equals(key.dimension())) return false;
             if (now - state.spawnTick > 1200L) return true;
-
-            Projectile projectile = (Projectile) level.getEntity(entry.getKey());
-            if (projectile == null || !projectile.isAlive()) return true;
+            if (!(level.getEntity(key.entityId()) instanceof Projectile projectile) || !projectile.isAlive()) return true;
 
             Vec3 curr = projectile.position();
             state.distanceSinceLastScent += state.prevPos.distanceTo(curr);
@@ -65,14 +65,14 @@ public class ArrowScentEvents {
             return false;
         });
 
-        ArrowInvestigationEvents.ARROWS.forEach((id, state) -> {
+        ArrowInvestigationEvents.ARROWS.forEach((key, state) -> {
             if (state == null) return;
+            if (key == null || !level.dimension().location().equals(key.dimension())) return;
             if (!state.isMobShooter) return;
             if (now - state.spawnTick < 20 || now - state.spawnTick > 200) return;
             if (state.notifiedMobIds == null || state.notifiedMobIds.isEmpty()) return;
 
-            Projectile projectile = (Projectile) level.getEntity(id);
-            if (projectile == null) return;
+            if (!(level.getEntity(key.entityId()) instanceof Projectile projectile)) return;
             Vec3 curr = projectile.position();
             BlockPos emissionPos = snapToGround(level, curr);
 

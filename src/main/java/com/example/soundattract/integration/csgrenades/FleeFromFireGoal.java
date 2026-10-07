@@ -35,7 +35,7 @@ public class FleeFromFireGoal extends Goal {
         }
 
         Vec3 firePos = CsGrenadesTracker.nearestActiveFire(
-                mob.position(),
+                mob.level(), mob.position(),
                 Integer.MAX_VALUE,
                 mob.level().getGameTime()
         );
@@ -68,7 +68,7 @@ public class FleeFromFireGoal extends Goal {
             return false;
         }
         Vec3 firePos = CsGrenadesTracker.nearestActiveFire(
-                mob.position(),
+                mob.level(), mob.position(),
                 Integer.MAX_VALUE,
                 mob.level().getGameTime()
         );

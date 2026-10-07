@@ -10,13 +10,6 @@ import net.minecraftforge.fml.ModList;
 
 import java.util.List;
 
-/**
- * Advanced Spore Integration: Proto Neural-Net Sound Reinforcement.
- * 
- * This goal allows the Proto to "learn" from sound. If a mob it summoned is near 
- * a high-weight sound, the Proto is 'praised' for that decision, reinforcing the 
- * weight of that troop type in its neural network.
- */
 public class ProtoNeuralSoundInfluenceGoal extends Goal {
     private final Proto proto;
     private int executionTimer = 0;
@@ -43,9 +36,9 @@ public class ProtoNeuralSoundInfluenceGoal extends Goal {
             maxWeight = Math.max(maxWeight, sound.weight);
         }
 
-        List<LivingEntity> nearbyEntities = proto.level().getEntitiesOfClass(LivingEntity.class, 
-                proto.getBoundingBox().inflate(64), 
-                e -> e.getPersistentData().contains("hivemind") && 
+        List<LivingEntity> nearbyEntities = proto.level().getEntitiesOfClass(LivingEntity.class,
+                proto.getBoundingBox().inflate(64),
+                e -> e.getPersistentData().contains("hivemind") &&
                      e.getPersistentData().getInt("hivemind") == proto.getId());
 
         if (nearbyEntities.isEmpty()) return;

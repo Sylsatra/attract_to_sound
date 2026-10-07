@@ -34,28 +34,28 @@ public class AttractionClientEvents {
         ResourceLocation soundLoc = event.getSound().getLocation();
         String path = soundLoc.getPath();
 
-        boolean isStepSound = path.endsWith(".step") || path.endsWith(".swim") || path.contains(".step."); 
-        
+        boolean isStepSound = path.endsWith(".step") || path.endsWith(".swim") || path.contains(".step.");
+
         if (!isStepSound) return;
 
         double soundX = event.getSound().getX();
         double soundY = event.getSound().getY();
         double soundZ = event.getSound().getZ();
 
-        if (player.position().distanceToSqr(soundX, soundY, soundZ) > 2.25) { 
+        if (player.position().distanceToSqr(soundX, soundY, soundZ) > 2.25) {
             return;
         }
 
         double checkRadius = SoundAttractConfig.SERVER.playerActionCheckRadius.get();
         net.minecraft.world.phys.AABB checkArea = player.getBoundingBox().inflate(checkRadius);
         java.util.List<net.minecraft.world.entity.Mob> nearbyMobs = player.level().getEntitiesOfClass(net.minecraft.world.entity.Mob.class, checkArea, m -> m.isAlive());
-        
+
         if (nearbyMobs.isEmpty()) {
             return;
         }
 
         String action = "WALKING";
-        
+
         if (player.isVisuallySwimming()) {
              action = "CRAWLING";
         } else if (player.isCrouching()) {
@@ -68,7 +68,7 @@ public class AttractionClientEvents {
              }
         } else {
             double speedSq = player.getDeltaMovement().horizontalDistanceSqr();
-            if (speedSq < 0.00001) return; 
+            if (speedSq < 0.00001) return;
             action = "WALKING";
         }
         ResourceLocation virtualSoundId = ResourceLocation.fromNamespaceAndPath("soundattract", "player_action." + action.toLowerCase(java.util.Locale.ROOT));

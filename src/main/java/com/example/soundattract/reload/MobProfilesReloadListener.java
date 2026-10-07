@@ -1,5 +1,7 @@
 package com.example.soundattract.reload;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.MobProfile2;
 import com.example.soundattract.config.SoundAttractConfig;
@@ -37,21 +39,17 @@ public class MobProfilesReloadListener extends SimpleJsonResourceReloadListener 
             ResourceLocation location = entry.getKey();
             JsonElement element = entry.getValue();
 
-
-
-
-
             MobProfile2.CODEC.parse(ops, element).resultOrPartial(error -> {
                 LOGGER.error("Failed to parse mob profile '{}': {}", location, error);
             }).ifPresent(profile -> {
                 profiles.add(profile.withId(location.toString()));
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_ATTRACTION)) {
                     LOGGER.info("Loaded mob profile: {}", location);
                 }
             });
         }
 
-        SoundAttractConfig.DP_MOB_PROFILES_CACHE = profiles;
+        SoundAttractConfig.DP_MOB_PROFILES_CACHE = List.copyOf(profiles);
 
         try {
             SoundAttractConfig.bakeConfig();

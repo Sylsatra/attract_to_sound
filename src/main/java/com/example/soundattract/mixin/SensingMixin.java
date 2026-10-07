@@ -1,5 +1,7 @@
 package com.example.soundattract.mixin;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.event.FovEvents;
 import com.example.soundattract.event.StealthDetectionEvents;
 import com.example.soundattract.config.SoundAttractConfig;
@@ -32,7 +34,7 @@ public abstract class SensingMixin {
             if (xrayRange > 0d) {
                 double distSq = this.mob.distanceToSqr(target);
                 if (distSq <= xrayRange * xrayRange) {
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                         com.example.soundattract.SoundAttractMod.LOGGER.info(
                             "[SensingMixin] {} can see {} through walls with X-ray (range: {}, distSq: {})",
                             this.mob.getName().getString(),

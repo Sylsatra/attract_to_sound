@@ -1,5 +1,7 @@
 package com.example.soundattract.raid;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.ai.MobGroupManager;
 import com.example.soundattract.config.SoundAttractConfig;
@@ -10,14 +12,22 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.MobSpawnType;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 public final class RaidReinforcementManager {
     private RaidReinforcementManager() {}
 
-    private static final Map<Mob, RaidSpawnState> STATES = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final int MAX_RUNTIME_REINFORCEMENTS = 65536;
+
+    private static final Cache<Mob, RaidSpawnState> STATES = Caffeine.newBuilder()
+            .weakKeys()
+            .maximumSize(8192)
+            .expireAfterAccess(10, TimeUnit.MINUTES)
+            .build();
 
     private static volatile Map<net.minecraft.resources.ResourceLocation, Integer> cachedCaps = null;
     private static volatile long cachedCapsTick = -1;
@@ -29,20 +39,28 @@ public final class RaidReinforcementManager {
     }
 
     public static void trySpawnReinforcement(ServerLevel level, Mob leader, BlockPos raidTarget) {
+        if (level == null || leader == null || raidTarget == null || leader.isRemoved() || !leader.isAlive()) return;
         try {
             if (!SoundAttractConfig.COMMON.enableRaidReinforcements.get()) return;
         } catch (Throwable ignored) { return; }
 
         long now = level.getGameTime();
-        RaidSpawnState state = STATES.computeIfAbsent(leader, k -> new RaidSpawnState());
+        RaidSpawnState state = STATES.get(leader, ignored -> new RaidSpawnState());
 
         int interval = 40;
-        try { interval = Math.max(1, SoundAttractConfig.COMMON.raidReinforcementInterval.get()); } catch (Throwable ignored) {}
+        try {
+            interval = Math.max(20, SoundAttractConfig.COMMON.raidReinforcementInterval.get());
+        } catch (Throwable ignored) {
+            interval = 20;
+        }
         if (now - state.lastSpawnTick < interval) return;
         state.lastSpawnTick = now;
 
         int maxTotal = 80;
-        try { maxTotal = Math.max(0, SoundAttractConfig.COMMON.raidMaxTotalMobs.get()); } catch (Throwable ignored) {}
+        try {
+            maxTotal = Math.max(0, Math.min(MAX_RUNTIME_REINFORCEMENTS,
+                    SoundAttractConfig.COMMON.raidMaxTotalMobs.get()));
+        } catch (Throwable ignored) {}
         if (state.totalSpawned >= maxTotal) return;
 
         double diffMult = 1.0;
@@ -81,25 +99,43 @@ public final class RaidReinforcementManager {
             spawned.finalizeSpawn(level, level.getCurrentDifficultyAt(spawnPos), MobSpawnType.EVENT, null, null);
             spawned.setPersistenceRequired();
             level.addFreshEntity(spawned);
-            
+
             com.example.soundattract.ai.RaidManager.registerPersistentRaidMob(leader, spawned);
 
             state.spawnedCounts.merge(type, 1, Integer::sum);
             state.totalSpawned++;
 
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.RAIDS)) {
                 SoundAttractMod.LOGGER.info("[RaidReinforcementManager] Spawned {} at {} for leader {} (total: {}/{})",
                         typeId, spawnPos, leader.getName().getString(), state.totalSpawned, maxTotal);
             }
         } catch (Throwable e) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.RAIDS)) {
                 SoundAttractMod.LOGGER.warn("[RaidReinforcementManager] Failed to spawn reinforcement: {}", e.getMessage());
             }
         }
     }
 
     public static void clearState(Mob leader) {
-        STATES.remove(leader);
+        if (leader != null) STATES.invalidate(leader);
+    }
+
+
+    public static void clearAll() {
+        STATES.invalidateAll();
+        cachedCaps = null;
+        cachedCapsTick = -1L;
+    }
+
+
+    public static void clearLevel(ServerLevel level) {
+        if (level == null) {
+            return;
+        }
+        STATES.asMap().entrySet().removeIf(entry -> {
+                Mob leader = entry.getKey();
+                return leader == null || leader.level() == level;
+        });
     }
 
     private static BlockPos findSpawnPos(ServerLevel level, BlockPos near) {

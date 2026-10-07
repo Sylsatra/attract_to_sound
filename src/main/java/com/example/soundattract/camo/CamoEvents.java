@@ -20,7 +20,6 @@ public class CamoEvents {
         Player player = event.player;
         player.getCapability(CamouflageCapability.INSTANCE).ifPresent(camo -> {
 
-
             StealthDetectionEvents.StealthPerfTier tier = StealthDetectionEvents.getPerfTier(player.level());
             camo.tickDegradation(player, player.level(), tier);
         });

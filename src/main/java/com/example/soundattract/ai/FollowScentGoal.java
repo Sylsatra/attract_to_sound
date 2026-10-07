@@ -1,10 +1,13 @@
 package com.example.soundattract.ai;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.scents.ScentManager;
 import com.example.soundattract.scents.ScentNode;
 import com.example.soundattract.scents.ScentSourceType;
+import com.example.soundattract.pathfinding.HazardClassifier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.server.level.ServerPlayer;
@@ -29,11 +32,11 @@ public class FollowScentGoal extends Goal {
     private Vec3 targetPos;
     private int ambushTimer;
     private boolean isAmbushing;
-    
+
     private BlockPos lastPos = null;
     private int stuckTicks = 0;
     private BlockBreakerPosGoal blockBreakerGoal = null;
-    
+
     private long pathfindingCooldownTo;
     private static long lastScanTick = -1;
     private static int scansThisTick = 0;
@@ -44,14 +47,23 @@ public class FollowScentGoal extends Goal {
         this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
     }
 
+    public boolean isFollowingScent() {
+        return targetPos != null && !isAmbushing;
+    }
+
+    public Vec3 getTargetPosition() {
+        return targetPos;
+    }
+
     @Override
     public boolean canUse() {
+        if (LivingWallCoordinator.isControlled(mob)) return false;
         if (!SoundAttractConfig.COMMON.enableScentSystem.get()) return false;
         if (scentManager == null) return false;
-        
+
         long currentTime = mob.level().getGameTime();
         if (currentTime < pathfindingCooldownTo) return false;
-        
+
         if (SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) {
             net.minecraft.world.entity.Mob leader = com.example.soundattract.ai.MobGroupManager.getLeader(mob);
             if (leader != null && leader != mob) {
@@ -65,7 +77,7 @@ public class FollowScentGoal extends Goal {
         if (mob.getRandom().nextInt(10) != 0) return false;
 
         if (mob.getTarget() != null && mob.getTarget().isAlive()) return false;
-        
+
         if (currentTime != lastScanTick) {
             lastScanTick = currentTime;
             scansThisTick = 0;
@@ -84,11 +96,12 @@ public class FollowScentGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
+        if (LivingWallCoordinator.isControlled(mob)) return false;
         if (mob.getTarget() != null && mob.getTarget().isAlive()) return false;
-        
+
         if (isAmbushing && ambushTimer <= 0) return false;
 
-        return targetPos != null && mob.getNavigation().getPath() != null && !mob.getNavigation().isDone(); 
+        return targetPos != null && mob.getNavigation().getPath() != null && !mob.getNavigation().isDone();
     }
 
     @Override
@@ -96,11 +109,14 @@ public class FollowScentGoal extends Goal {
         this.ambushTimer = SoundAttractConfig.COMMON.scentAmbushDurationTicks.get();
         this.stuckTicks = 0;
         this.lastPos = null;
-        moveToTarget();
+        if (!moveToTarget()) {
+            this.targetPos = null;
+        }
     }
 
     @Override
     public void tick() {
+        if (LivingWallCoordinator.isControlled(mob)) return;
         if (targetPos == null) return;
 
         if (this.blockBreakerGoal != null && this.mob.goalSelector.getRunningGoals().anyMatch(g -> g.getGoal() == this.blockBreakerGoal)) {
@@ -108,7 +124,9 @@ public class FollowScentGoal extends Goal {
                 BlockBreakerManager.scheduleRemove(this.mob, this.blockBreakerGoal);
                 this.blockBreakerGoal = null;
                 stuckTicks = 0;
-                moveToTarget();
+                if (!moveToTarget()) {
+                    this.targetPos = null;
+                }
             } else {
                 lastPos = mob.blockPosition();
             }
@@ -129,13 +147,15 @@ public class FollowScentGoal extends Goal {
                 if (!findScentTrail()) {
                     startAmbush();
                 } else {
-                    moveToTarget();
+                    if (!moveToTarget()) {
+                        this.targetPos = null;
+                    }
                 }
             } else if (stuckTicks > 60) {
                 handleStuckMob();
             }
         }
-        
+
         if (isAmbushing) {
             ambushTimer--;
         }
@@ -143,13 +163,13 @@ public class FollowScentGoal extends Goal {
 
     private void handleStuckMob() {
         if (SoundAttractConfig.COMMON.enableBlockBreaking.get() && this.blockBreakerGoal == null) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
                 SoundAttractMod.LOGGER.info("[FollowScentGoal] Mob {} is stuck moving to scent. Deploying BlockBreakerPosGoal.", mob.getName().getString());
             }
             double timeMultiplier = SoundAttractConfig.COMMON.blockBreakingTimeMultiplier.get();
             boolean toolOnly = SoundAttractConfig.COMMON.blockBreakingToolOnly.get();
             boolean properTool = SoundAttractConfig.COMMON.blockBreakingProperToolOnly.get();
-            
+
             BlockPos dest = BlockPos.containing(targetPos);
             BlockBreakerPosGoal newGoal = new BlockBreakerPosGoal(this.mob, dest, timeMultiplier, toolOnly, properTool, properTool);
             BlockBreakerManager.scheduleAdd(this.mob, newGoal, 1);
@@ -160,13 +180,13 @@ public class FollowScentGoal extends Goal {
         if (stuckTicks > 200) {
             ScentNode freshestNode = getFreshestNodeForTarget();
             if (freshestNode != null && freshestNode.getPosition().distanceToSqr(mob.position()) < 400.0) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
                     SoundAttractMod.LOGGER.info("[FollowScentGoal] Mob {} stuck for >200 ticks near freshest node. Triggering ambush from outside.", mob.getName().getString());
                 }
                 startAmbush();
                 this.targetPos = null;
             } else {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
                     SoundAttractMod.LOGGER.info("[FollowScentGoal] Mob {} stuck for >200 ticks mid-trail. Canceling scent tracking.", mob.getName().getString());
                 }
                 this.targetPos = null;
@@ -184,7 +204,7 @@ public class FollowScentGoal extends Goal {
         List<ScentNode> nodes = scentManager.getNodesInArea(chunkPos);
         long currentTime = mob.level().getGameTime();
         long maxDuration = SoundAttractConfig.COMMON.scentNodeDurationTicks.get();
-        
+
         return nodes.stream()
             .filter(n -> n.getOwnerUUID().equals(targetScentOwner))
             .filter(n -> (currentTime - n.getTimestamp()) <= maxDuration)
@@ -223,7 +243,7 @@ public class FollowScentGoal extends Goal {
                     net.minecraft.world.entity.Mob leader = MobGroupManager.getLeader(mob);
                     if (leader != null && !RaidManager.isRaidTicking(leader) && !RaidManager.isRaidAdvancing(leader)) {
                         RaidManager.scheduleRaid(leader, raidTarget, now);
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
                             SoundAttractMod.LOGGER.info("[FollowScentGoal] Edge mob {} triggered scent raid for leader {} at {}",
                                     mob.getName().getString(), leader.getName().getString(), raidTarget);
                         }
@@ -233,7 +253,7 @@ public class FollowScentGoal extends Goal {
                 net.minecraft.world.entity.Mob leader = MobGroupManager.getNearestLeader(mob);
                 if (leader != null && !RaidManager.isRaidTicking(leader) && !RaidManager.isRaidAdvancing(leader)) {
                     RaidManager.scheduleRaid(leader, raidTarget, now);
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
                         SoundAttractMod.LOGGER.info("[FollowScentGoal] Mob {} triggered scent raid via nearest leader {} at {}",
                                 mob.getName().getString(), leader.getName().getString(), raidTarget);
                     }
@@ -242,15 +262,14 @@ public class FollowScentGoal extends Goal {
         } catch (Throwable ignored) {}
     }
 
-    private void moveToTarget() {
+    private boolean moveToTarget() {
         isAmbushing = false;
-        Path path = mob.getNavigation().createPath(BlockPos.containing(targetPos), 1);
-        if (path != null) {
-            mob.getNavigation().moveTo(path, 1.0);
-        } else {
-            this.pathfindingCooldownTo = mob.level().getGameTime() + 40;
-            this.targetPos = null;
+        HazardClassifier.markPursuer(mob);
+        boolean moved = com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, targetPos, 1.0);
+        if (!moved) {
+            this.pathfindingCooldownTo = mob.level().getGameTime() + 10;
         }
+        return moved;
     }
 
     private boolean findScentTrail() {
@@ -264,20 +283,17 @@ public class FollowScentGoal extends Goal {
         long currentTime = mob.level().getGameTime();
         long maxDuration = SoundAttractConfig.COMMON.scentNodeDurationTicks.get();
 
-
         if (targetScentOwner == null) {
-
 
             ScentNode freshestNode = nodes.stream()
                 .filter(n -> (currentTime - n.getTimestamp()) <= maxDuration)
                 .filter(n -> n.getOwnerUUID() != null)
                 .max(Comparator.comparingDouble(n -> n.getTimestamp() * getSourceTypeWeightMultiplier(n.getSourceType())))
                 .orElse(null);
-            
+
             if (freshestNode == null) return false;
-            
+
             this.targetScentOwner = freshestNode.getOwnerUUID();
-            
 
 
             ScentNode startNode = nodes.stream()
@@ -286,20 +302,17 @@ public class FollowScentGoal extends Goal {
                 .filter(n -> (currentTime - n.getTimestamp()) <= maxDuration)
                 .min(Comparator.comparingDouble(n -> n.getPosition().distanceToSqr(mob.position())))
                 .orElse(freshestNode);
-                
+
             this.targetPos = startNode.getPosition();
             this.lastScentTime = startNode.getTimestamp();
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
-                SoundAttractMod.LOGGER.info("[FollowScentGoal] Mob {} acquired INITIAL scent trail for owner {} at {}.", 
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
+                SoundAttractMod.LOGGER.info("[FollowScentGoal] Mob {} acquired INITIAL scent trail for owner {} at {}.",
                     mob.getName().getString(), targetScentOwner, targetPos);
             }
             return true;
         } else {
 
 
-
-
-            
             ScentNode nextNode = nodes.stream()
                 .filter(n -> n.getOwnerUUID() != null)
                 .filter(n -> n.getOwnerUUID().equals(targetScentOwner))
@@ -309,8 +322,8 @@ public class FollowScentGoal extends Goal {
                 .orElse(null);
 
             if (nextNode != null) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
-                    SoundAttractMod.LOGGER.info("[FollowScentGoal] Mob {} found NEXT scent node at {} (time: {}).", 
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
+                    SoundAttractMod.LOGGER.info("[FollowScentGoal] Mob {} found NEXT scent node at {} (time: {}).",
                         mob.getName().getString(), nextNode.getPosition(), nextNode.getTimestamp());
                 }
                 this.targetPos = nextNode.getPosition();
@@ -326,6 +339,7 @@ public class FollowScentGoal extends Goal {
         if (type == null) return 1.0;
         return switch (type) {
             case PLAYER_WALK -> 1.0;
+            case PLAYER_WIND -> 1.1;
             case ARROW_PATH, ARROW_ORIGIN -> 0.8;
             case MOB_PROJECTILE_PATH, MOB_PROJECTILE_ORIGIN -> 0.6;
         };

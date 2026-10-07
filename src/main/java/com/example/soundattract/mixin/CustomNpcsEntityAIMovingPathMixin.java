@@ -1,5 +1,7 @@
 package com.example.soundattract.mixin;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.event.SoundAttractionEvents;
 import com.example.soundattract.ai.AttractionGoal;
 import com.example.soundattract.config.SoundAttractConfig;
@@ -107,8 +109,8 @@ public abstract class CustomNpcsEntityAIMovingPathMixin extends Goal {
                     mob.getEyePosition()
                 );
                 result = sr != null;
-                if (result && SoundAttractConfig.COMMON.debugLogging.get()) {
-                    com.example.soundattract.SoundAttractMod.LOGGER.info("[CustomNPCs] Interrupting Return To Start for {} due to sound at {}", 
+                if (result && DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
+                    com.example.soundattract.SoundAttractMod.LOGGER.info("[CustomNPCs] Interrupting Return To Start for {} due to sound at {}",
                         mob.getName().getString(), sr != null ? sr.pos : "unknown");
                 }
             } catch (Throwable ignored) {
@@ -145,7 +147,7 @@ public abstract class CustomNpcsEntityAIMovingPathMixin extends Goal {
     private void soundattract$canUse(CallbackInfoReturnable<Boolean> cir) {
         Mob mob = soundattract$getNpcMob(this);
         if (!soundattract$isEligible(mob)) return;
-        
+
         if (soundattract$shouldYieldToSound(mob)) {
             try {
                 mob.getNavigation().stop();
@@ -162,7 +164,7 @@ public abstract class CustomNpcsEntityAIMovingPathMixin extends Goal {
     private void soundattract$canContinue(CallbackInfoReturnable<Boolean> cir) {
         Mob mob = soundattract$getNpcMob(this);
         if (!soundattract$isEligible(mob)) return;
-        
+
         if (soundattract$shouldYieldToSound(mob)) {
             try {
                 mob.getNavigation().stop();

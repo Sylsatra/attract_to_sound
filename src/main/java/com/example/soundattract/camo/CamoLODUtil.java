@@ -16,9 +16,7 @@ public class CamoLODUtil {
 
     public static record LODResult(boolean shouldRender, int resolution) {}
 
-    /**
-     * Calculates if an entity should render its camouflage and at what resolution.
-     */
+
     public static LODResult getLOD(LivingEntity entity) {
         if (entity == null || entity.level() == null || !entity.level().isClientSide) {
             return new LODResult(false, 16);
@@ -33,9 +31,9 @@ public class CamoLODUtil {
 
         net.minecraft.client.Camera camera = mc.gameRenderer.getMainCamera();
         Vec3 cameraPos = camera.getPosition();
-        
+
         double distSq = entity.distanceToSqr(cameraPos);
-        
+
         if (distSq > 64 * 64) {
             return new LODResult(false, 16);
         }
@@ -53,14 +51,14 @@ public class CamoLODUtil {
 
         int baseRes = StealthConfig.CAMO_TEXTURE_RESOLUTION.get();
         double dist = Math.sqrt(distSq);
-        
+
         int resolution = baseRes;
         if (dist > 32) {
             resolution = baseRes / 4;
         } else if (dist > 16) {
             resolution = baseRes / 2;
         }
-        
+
         resolution = Math.max(32, resolution);
 
         return new LODResult(true, resolution);
@@ -69,16 +67,16 @@ public class CamoLODUtil {
     private static boolean isWithinCameraView(net.minecraft.client.Camera camera, LivingEntity target, double horizontalFovDegrees) {
         Vec3 cameraPos = camera.getPosition();
         Vec3 lookVector = Vec3.directionFromRotation(camera.getXRot(), camera.getYRot());
-        
+
         Vec3 toTargetVector = target.position().add(0, target.getEyeHeight() / 2.0, 0)
                 .subtract(cameraPos);
-        
+
         if (toTargetVector.lengthSqr() < 0.01) return true;
         toTargetVector = toTargetVector.normalize();
 
         double dot = lookVector.dot(toTargetVector);
         double angle = Math.toDegrees(Math.acos(Math.max(-1.0, Math.min(1.0, dot))));
-        
+
         return angle <= horizontalFovDegrees / 1.5;
     }
 }

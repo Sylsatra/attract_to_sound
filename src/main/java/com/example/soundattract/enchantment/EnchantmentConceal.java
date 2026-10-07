@@ -13,7 +13,7 @@ public class EnchantmentConceal extends Enchantment {
 
     @Override
     public int getMinCost(int pEnchantmentLevel) {
-        return 25; 
+        return 25;
     }
 
     @Override

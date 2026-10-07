@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.vanilla;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import java.util.Optional;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
@@ -16,7 +18,7 @@ public class VanillaIntegrationEvents {
     public static void onPlayerTick(TickEvent.PlayerTickEvent event) {
         if (event.phase != TickEvent.Phase.END || event.player.level().isClientSide) return;
 
-        if (!didLogInit && com.example.soundattract.config.SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (!didLogInit && DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.VANILLA)) {
             didLogInit = true;
             com.example.soundattract.SoundAttractMod.LOGGER.info("[VanillaIntegration] PlayerTick handler active on server");
         }
@@ -67,7 +69,7 @@ public class VanillaIntegrationEvents {
         net.minecraft.resources.ResourceLocation baseId = net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(com.example.soundattract.SoundAttractMod.MOD_ID, "virtual");
         if (!com.example.soundattract.config.SoundAttractConfig.SOUND_ID_WHITELIST_CACHE.isEmpty()
             && (baseId == null || !com.example.soundattract.config.SoundAttractConfig.SOUND_ID_WHITELIST_CACHE.contains(baseId))) {
-            if (com.example.soundattract.config.SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.VANILLA)) {
                 com.example.soundattract.SoundAttractMod.LOGGER.info(
                     "[VanillaIntegration] Skipping virtual sound because {} is not in whitelist (whitelistSize={})",
                     baseId,
@@ -82,7 +84,7 @@ public class VanillaIntegrationEvents {
         String meta = (uuid != null && uuid.isPresent() ? uuid.get().toString() : "unknown")
             + "/" + (animatorClass != null && !animatorClass.isEmpty() ? animatorClass : "unknown");
         String soundIdToUse = com.example.soundattract.tracking.SoundTracker.buildIntegrationSoundId(baseId, meta);
-        if (com.example.soundattract.config.SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.VANILLA)) {
             com.example.soundattract.SoundAttractMod.LOGGER.info("[VanillaIntegration] addSound: soundId={} | range={} | weight={} | pos=({}, {}, {}) | dim={}", soundIdToUse, range, weight, x, y, z, dim);
         }
         com.example.soundattract.tracking.SoundTracker.addSound(null, pos, dimString, range, weight, lifetime, soundIdToUse);

@@ -1,15 +1,18 @@
 package com.example.soundattract.integration.toughasnails;
 
 import com.example.soundattract.config.SoundAttractConfig;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 public final class ToughAsNailsStateCache {
     public record State(double scentMultiplier, double soundMultiplier, long updatedAt) {}
 
-    private static final ConcurrentHashMap<UUID, State> STATES = new ConcurrentHashMap<>();
+    private static final Cache<UUID, State> STATES = Caffeine.newBuilder()
+            .maximumSize(4096)
+            .build();
 
     private ToughAsNailsStateCache() {}
 
@@ -30,17 +33,17 @@ public final class ToughAsNailsStateCache {
 
     public static void remove(UUID playerId) {
         if (playerId != null) {
-            STATES.remove(playerId);
+        STATES.invalidate(playerId);
         }
     }
 
     public static void clear() {
-        STATES.clear();
+        STATES.invalidateAll();
     }
 
     private static State state(ServerPlayer player, long now) {
         if (player == null) return null;
-        State state = STATES.get(player.getUUID());
+        State state = STATES.getIfPresent(player.getUUID());
         if (state == null) return null;
         if ((now - state.updatedAt()) > staleTicks()) return null;
         return state;

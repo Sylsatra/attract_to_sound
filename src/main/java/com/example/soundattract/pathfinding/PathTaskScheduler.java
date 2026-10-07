@@ -1,28 +1,34 @@
 package com.example.soundattract.pathfinding;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.config.SoundAttractConfig;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import com.example.soundattract.config.SoundAttractConfig;
-import com.google.common.cache.CacheBuilder;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import java.util.concurrent.TimeUnit;
 
 public final class PathTaskScheduler {
-    private static Map<ResourceKey<Level>, TickBudget> budgets = new ConcurrentHashMap<>();
+    private static final int MAX_RUNTIME_GLOBAL_CACHE_SIZE = 65536;
+    private static volatile Map<ResourceKey<Level>, TickBudget> budgets = Caffeine.newBuilder()
+        .expireAfterWrite(10, TimeUnit.MINUTES)
+        .maximumSize(64)
+        .<ResourceKey<Level>, TickBudget>build()
+        .asMap();
 
     public static void reinitializeCaches() {
-        int max = SoundAttractConfig.COMMON.globalCacheMaxSize.get();
-        int mins = SoundAttractConfig.COMMON.globalCacheExpireMins.get();
+        int max = Math.min(MAX_RUNTIME_GLOBAL_CACHE_SIZE,
+                Math.max(100, SoundAttractConfig.COMMON.globalCacheMaxSize.get()));
+        int mins = Math.max(1, SoundAttractConfig.COMMON.globalCacheExpireMins.get());
 
         Map<ResourceKey<Level>, TickBudget> oldObj = budgets;
-        budgets = CacheBuilder.newBuilder().expireAfterWrite(mins, TimeUnit.MINUTES).maximumSize(max).concurrencyLevel(4).<ResourceKey<Level>, TickBudget>build().asMap();
+        budgets = Caffeine.newBuilder().expireAfterWrite(mins, TimeUnit.MINUTES).maximumSize(max).<ResourceKey<Level>, TickBudget>build().asMap();
         budgets.putAll(oldObj);
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
-            com.example.soundattract.SoundAttractMod.LOGGER.info("[PathTaskScheduler] Initialized Guava internal memory caches (max {}, {} mins)", max, mins);
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.PATHFINDING)) {
+            com.example.soundattract.SoundAttractMod.LOGGER.info("[PathTaskScheduler] Initialized Caffeine memory caches (max {}, {} mins)", max, mins);
         }
     }
 

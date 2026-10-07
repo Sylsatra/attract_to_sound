@@ -16,19 +16,19 @@ public class ScentConfig {
     public static final ForgeConfigSpec.DoubleValue SCENT_PARTICLE_RENDER_DISTANCE;
     public static final ForgeConfigSpec.IntValue SCENT_NODE_DURATION_TICKS;
     public static final ForgeConfigSpec.DoubleValue SCENT_CREATION_INTERVAL_BLOCKS;
-    
+
     public static final ForgeConfigSpec.DoubleValue TEMP_HEAVY_DECAY_THRESHOLD;
     public static final ForgeConfigSpec.DoubleValue TEMP_FREEZE_THRESHOLD;
     public static final ForgeConfigSpec.DoubleValue HUMIDITY_PRESERVE_THRESHOLD;
     public static final ForgeConfigSpec.DoubleValue RAIN_DECAY_MULTIPLIER;
     public static final ForgeConfigSpec.BooleanValue WATER_STOPS_SCENT;
-    
+
     public static final ForgeConfigSpec.IntValue SCENT_AMBUSH_DURATION_TICKS;
     public static final ForgeConfigSpec.IntValue SCENT_UPDATE_INTERVAL;
     public static final ForgeConfigSpec.DoubleValue SCENT_STRENGTH_DECAY;
     public static final ForgeConfigSpec.DoubleValue SCENT_DETECTION_RADIUS;
     public static final ForgeConfigSpec.BooleanValue RAIN_WASHES_SCENTS;
-    
+
     public static final ForgeConfigSpec.IntValue SCENT_SCAN_BUDGET_PER_TICK;
 
     public static final ForgeConfigSpec.BooleanValue ENABLE_ARROW_SCENT_TRAIL;
@@ -42,6 +42,26 @@ public class ScentConfig {
     public static final ForgeConfigSpec.DoubleValue SCENT_VS_SOUND_HYBRID_MULTIPLIER;
     public static final ForgeConfigSpec.IntValue SCENT_QUERY_CACHE_TTL_TICKS;
     public static final ForgeConfigSpec.IntValue SCENT_QUERY_CACHE_MAX_ENTRIES;
+    public static final ForgeConfigSpec.IntValue PLAYER_ODOR_SCAN_INTERVAL_TICKS;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> PLAYER_ODOR_ITEM_VALUES;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_WIND_SCENT;
+    public static final ForgeConfigSpec.DoubleValue WIND_SCENT_ACTIVATION_THRESHOLD;
+    public static final ForgeConfigSpec.DoubleValue WIND_SCENT_DEACTIVATION_THRESHOLD;
+    public static final ForgeConfigSpec.IntValue WIND_SCENT_UPDATE_INTERVAL_TICKS;
+    public static final ForgeConfigSpec.IntValue WIND_SCENT_MAXIMUM_DISTANCE;
+    public static final ForgeConfigSpec.IntValue WIND_SCENT_MAXIMUM_PARCELS;
+    public static final ForgeConfigSpec.DoubleValue WINDSHIELD_SCENT_REDUCTION;
+    public static final ForgeConfigSpec.DoubleValue WIND_SCENT_SPEED_SCALE;
+    public static final ForgeConfigSpec.BooleanValue WIND_SCENT_RAIN_DECAY;
+    public static final ForgeConfigSpec.DoubleValue WIND_SCENT_SPREAD_FACTOR;
+    public static final ForgeConfigSpec.DoubleValue WIND_SCENT_BARRIER_LEAKAGE;
+    public static final ForgeConfigSpec.IntValue WINDSHIELD_SCAN_DISTANCE;
+    public static final ForgeConfigSpec.DoubleValue WINDSHIELD_MINIMUM_WIND_SPEED;
+    public static final ForgeConfigSpec.DoubleValue WINDSHIELD_ACTIVATION_THRESHOLD;
+    public static final ForgeConfigSpec.DoubleValue WINDSHIELD_DEACTIVATION_THRESHOLD;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_WIND_SCENT_PARTICLES;
+    public static final ForgeConfigSpec.IntValue WIND_SCENT_PARTICLE_INTERVAL_TICKS;
+    public static final ForgeConfigSpec.IntValue WIND_SCENT_PARTICLE_MAX_PER_VIEWER;
 
     static {
         BUILDER.comment("Sound Attract Mod - Scent System Configuration").push("scent_system");
@@ -125,6 +145,54 @@ public class ScentConfig {
         SCENT_QUERY_CACHE_MAX_ENTRIES = BUILDER
                 .comment("Maximum mobs tracked in the scent-query cache (memory cap).")
                 .defineInRange("scentQueryCacheMaxEntries", 4096, 128, 65536);
+        BUILDER.pop();
+
+        BUILDER.push("player_odor");
+        PLAYER_ODOR_SCAN_INTERVAL_TICKS = BUILDER.comment("Ticks between player inventory odor scans.")
+                .defineInRange("scanIntervalTicks", 1200, 20, 12000);
+        PLAYER_ODOR_ITEM_VALUES = BUILDER.comment("Base food-item odor values in the form namespace:item=value; Spoiled adds a separate spoilage-progress bonus.")
+                .defineList("itemValues", Arrays.asList(
+                        "minecraft:rotten_flesh=0.25",
+                        "minecraft:beef=0.1",
+                        "minecraft:porkchop=0.1",
+                        "minecraft:chicken=0.1",
+                        "minecraft:mutton=0.1",
+                        "minecraft:rabbit=0.1",
+                        "minecraft:cod=0.05",
+                        "minecraft:salmon=0.05"
+                ), obj -> obj instanceof String && ((String) obj).contains("="));
+        BUILDER.pop();
+
+        BUILDER.push("wind_scent");
+        ENABLE_WIND_SCENT = BUILDER.define("enableWindScent", true);
+        WIND_SCENT_ACTIVATION_THRESHOLD = BUILDER.defineInRange("activationThreshold", 0.80, 0.50, 1.0);
+        WIND_SCENT_DEACTIVATION_THRESHOLD = BUILDER.defineInRange("deactivationThreshold", 0.65, 0.0, 0.95);
+        WIND_SCENT_UPDATE_INTERVAL_TICKS = BUILDER.defineInRange("updateIntervalTicks", 30, 1, 100);
+        WIND_SCENT_MAXIMUM_DISTANCE = BUILDER.defineInRange("maximumDistance", 32, 4, 128);
+        WIND_SCENT_MAXIMUM_PARCELS = BUILDER.defineInRange("maximumParcels", 16, 1, 64);
+        WINDSHIELD_SCENT_REDUCTION = BUILDER.defineInRange("windshieldScentReduction", 0.90, 0.0, 1.0);
+        WIND_SCENT_SPEED_SCALE = BUILDER.comment("Scale Weather2's wind speed into blocks traveled per scent update.")
+                .defineInRange("windSpeedScale", 2.0, 0.0, 4.0);
+        WIND_SCENT_RAIN_DECAY = BUILDER.comment("Apply the generic rain decay multiplier to wind scent; rain effects can vary by odorant.")
+                .define("rainDecay", true);
+        WIND_SCENT_SPREAD_FACTOR = BUILDER.comment("Controls lateral scent spread as a fraction of wind movement; the per-update spread is capped at half a block.")
+                .defineInRange("spreadFactor", 0.2, 0.0, 1.0);
+        WIND_SCENT_BARRIER_LEAKAGE = BUILDER.comment("Fraction of scent strength that leaks around a solid obstruction.")
+                .defineInRange("barrierLeakage", 0.35, 0.0, 1.0);
+        WINDSHIELD_SCAN_DISTANCE = BUILDER.comment("Maximum upwind distance in blocks used to detect a windshield.")
+                .defineInRange("windshieldScanDistance", 4, 1, 16);
+        WINDSHIELD_MINIMUM_WIND_SPEED = BUILDER.comment("Minimum Weather2 wind speed for windshield protection to activate.")
+                .defineInRange("windshieldMinimumWindSpeed", 0.1, 0.0, 1.0);
+        WINDSHIELD_ACTIVATION_THRESHOLD = BUILDER.comment("Windward block coverage needed to activate the windshield indicator.")
+                .defineInRange("windshieldActivationThreshold", 0.34, 0.0, 1.0);
+        WINDSHIELD_DEACTIVATION_THRESHOLD = BUILDER.comment("Windward block coverage below which an active windshield indicator turns off; keep below windshieldActivationThreshold to avoid flicker.")
+                .defineInRange("windshieldDeactivationThreshold", 0.25, 0.0, 1.0);
+        ENABLE_WIND_SCENT_PARTICLES = BUILDER.comment("Render wind-scent wisps for players whose profile enables showWindScent.")
+                .define("enableWindScentParticles", true);
+        WIND_SCENT_PARTICLE_INTERVAL_TICKS = BUILDER.comment("Ticks between wind-scent wisp bursts; higher values reduce particle and packet work.")
+                .defineInRange("windScentParticleIntervalTicks", 20, 5, 100);
+        WIND_SCENT_PARTICLE_MAX_PER_VIEWER = BUILDER.comment("Maximum wind-scent wisps sent to each viewer per burst.")
+                .defineInRange("windScentParticleMaxPerViewer", 32, 1, 128);
         BUILDER.pop();
 
         BUILDER.pop();

@@ -14,16 +14,13 @@ public class ScentBiomeModifier {
 
         float weatherMod = 1.0f;
         if (level.isRainingAt(pos)) {
-            weatherMod /= (float) SoundAttractConfig.COMMON.rainDecayMultiplier.get().doubleValue(); 
+            weatherMod /= (float) SoundAttractConfig.COMMON.rainDecayMultiplier.get().doubleValue();
         }
 
         Biome biome = level.getBiome(pos).value();
-        
 
 
 
-
-        
         float biomeMod = 1.0f;
         float temp = biome.getBaseTemperature();
         float humidity = biome.getModifiedClimateSettings().downfall();
@@ -33,14 +30,14 @@ public class ScentBiomeModifier {
         double humidThresh = SoundAttractConfig.COMMON.humidityPreserveThreshold.get();
 
         if (temp > hotThresh) {
-            biomeMod *= 0.5f; 
+            biomeMod *= 0.5f;
         } else if (temp < coldThresh) {
             biomeMod *= 1.5f;
         }
 
         if (humidity > humidThresh) {
             biomeMod *= 1.3f;
-        } else if (humidity < 0.2f && temp > 0.5f) { 
+        } else if (humidity < 0.2f && temp > 0.5f) {
              biomeMod *= 0.8f;
         }
 

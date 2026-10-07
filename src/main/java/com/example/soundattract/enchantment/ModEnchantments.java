@@ -17,7 +17,7 @@ public class ModEnchantments {
             ENCHANTMENTS.register("conceal",
                     () -> new EnchantmentConceal(
                             net.minecraft.world.item.enchantment.Enchantment.Rarity.VERY_RARE,
-                            EnchantmentCategory.BREAKABLE, 
+                            EnchantmentCategory.BREAKABLE,
                             new EquipmentSlot[]{
                                     EquipmentSlot.MAINHAND, EquipmentSlot.OFFHAND,
                                     EquipmentSlot.HEAD, EquipmentSlot.CHEST,

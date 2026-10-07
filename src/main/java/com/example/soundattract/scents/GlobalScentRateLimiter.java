@@ -1,22 +1,25 @@
 package com.example.soundattract.scents;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.CacheLoader;
-import com.google.common.cache.LoadingCache;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 public class GlobalScentRateLimiter {
+    private static final int MAX_TRACKED_SHOOTERS = 8192;
 
-    private static LoadingCache<UUID, Integer> perShooterCounter = buildCache(60);
+    private static Cache<UUID, Integer> perShooterCounter = buildCache(60);
 
-    private static LoadingCache<UUID, Integer> buildCache(int minutes) {
-        return CacheBuilder.newBuilder()
+    private static Cache<UUID, Integer> buildCache(int minutes) {
+        return Caffeine.newBuilder()
+                .maximumSize(MAX_TRACKED_SHOOTERS)
                 .expireAfterWrite(minutes, TimeUnit.MINUTES)
-                .build(CacheLoader.from(k -> 0));
+                .build();
     }
 
     public static synchronized boolean tryConsume(UUID shooterUuid) {
@@ -26,9 +29,9 @@ public class GlobalScentRateLimiter {
         int limit = SoundAttractConfig.COMMON.arrowScentRateLimitPerShooterPerMinute.get();
         if (limit <= 0) return true;
 
-        int current = perShooterCounter.getUnchecked(shooterUuid);
+        int current = perShooterCounter.get(shooterUuid, ignored -> 0);
         if (current >= limit) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
                 SoundAttractMod.LOGGER.info("[GlobalScentRateLimiter] Shooter {} hit rate limit ({}).", shooterUuid, limit);
             }
             return false;

@@ -1,45 +1,85 @@
 package com.example.soundattract.pathfinding;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.ai.MobGroupManager;
+import com.example.soundattract.config.SoundAttractConfig;
+import org.admany.quantified.api.compute.QuantifiedCompute;
+import org.admany.quantified.api.compute.QuantifiedCompute.Complexity;
+import org.admany.quantified.api.compute.QuantifiedCompute.WorkloadKind;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.event.server.ServerStoppedEvent;
+import net.minecraftforge.event.server.ServerStartingEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
 
 import java.util.*;
-import java.util.concurrent.*;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Set;
 
+@Mod.EventBusSubscriber(modid = SoundAttractMod.MOD_ID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class FlowFieldManager {
 
     private static final Map<String, FlowField> FIELDS = new ConcurrentHashMap<>();
-    private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(1, r -> {
-        Thread t = new Thread(r, "SA-FlowField-Worker");
-        t.setDaemon(true);
-        return t;
-    });
-
     private static final int FIELD_RADIUS = 32;
     private static final int MAX_NODES = 2000;
     private static final long CACHE_TTL_MS = 2000;
     private static final int MAX_FIELDS = 16;
+    private static final Set<CompletableFuture<?>> IN_FLIGHT = ConcurrentHashMap.newKeySet();
+    private static final java.util.concurrent.atomic.AtomicLong LIFECYCLE_GENERATION =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static volatile boolean acceptingWork = true;
+
+    @SubscribeEvent
+    public static void onServerStarting(ServerStartingEvent event) {
+        Set<CompletableFuture<?>> toCancel;
+        synchronized (FIELDS) {
+            acceptingWork = true;
+            LIFECYCLE_GENERATION.incrementAndGet();
+            FIELDS.clear();
+            toCancel = Set.copyOf(IN_FLIGHT);
+            IN_FLIGHT.clear();
+        }
+        for (CompletableFuture<?> future : toCancel) {
+            future.cancel(false);
+        }
+    }
+
+    @SubscribeEvent
+    public static void onServerStopped(ServerStoppedEvent event) {
+        Set<CompletableFuture<?>> toCancel;
+        synchronized (FIELDS) {
+            acceptingWork = false;
+            LIFECYCLE_GENERATION.incrementAndGet();
+            FIELDS.clear();
+            toCancel = Set.copyOf(IN_FLIGHT);
+            IN_FLIGHT.clear();
+        }
+        for (CompletableFuture<?> future : toCancel) {
+            future.cancel(false);
+        }
+        HazardClassifier.clear();
+    }
 
     public static Vec3 getNextStep(Mob mob, Vec3 target) {
-        if (mob == null || target == null) return null;
+        if (!acceptingWork || mob == null || target == null) return null;
+        HazardClassifier.markPursuer(mob);
 
         Mob leader = MobGroupManager.getLeader(mob);
         int groupId = leader != null ? leader.getId() : mob.getId();
-        String key = getKey(groupId, target);
+        String key = getKey(mob, groupId, target);
         FlowField field = FIELDS.get(key);
 
         long now = System.currentTimeMillis();
-
-        if (FIELDS.size() > MAX_FIELDS) {
-            FIELDS.entrySet().removeIf(e -> e.getValue().isExpired(now));
-        }
 
         if (field == null || field.isExpired(now) || field.isTargetMoved(target)) {
             if (field == null || !field.generating.get()) {
@@ -51,31 +91,126 @@ public class FlowFieldManager {
         return field.getVector(mob.blockPosition());
     }
 
-    private static String getKey(int groupId, Vec3 target) {
+    private static String getKey(Mob mob, int groupId, Vec3 target) {
         BlockPos p = new BlockPos((int) target.x, (int) target.y, (int) target.z);
-        return groupId + "_" + p.getX() + "_" + p.getY() + "_" + p.getZ();
+        String dimension = mobDimension(mob);
+        return dimension + "_" + groupId + "_" + p.getX() + "_" + p.getY() + "_" + p.getZ();
+    }
+
+    private static String mobDimension(Mob mob) {
+        try {
+            return mob.level().dimension().location().toString();
+        } catch (RuntimeException ignored) {
+            return "unknown";
+        }
     }
 
     private static void triggerGeneration(String key, Mob mob, Vec3 target, long now) {
-        FlowField existing = FIELDS.get(key);
-        if (existing != null && existing.generating.get()) return;
+        FlowField field;
+        long generation;
+        synchronized (FIELDS) {
+            if (!acceptingWork) return;
+            generation = LIFECYCLE_GENERATION.get();
+            FlowField existing = FIELDS.get(key);
+            if (existing != null && existing.generating.get()) return;
 
-        FlowField field = (existing != null) ? existing : new FlowField(target, now);
-        FIELDS.put(key, field);
+            if (existing == null && FIELDS.size() >= MAX_FIELDS) {
+                FIELDS.entrySet().removeIf(e -> e.getValue().isExpired(now));
+                if (FIELDS.size() >= MAX_FIELDS) {
+                    FIELDS.entrySet().stream()
+                            .min(Comparator.comparingLong(e -> e.getValue().created))
+                            .map(Map.Entry::getKey)
+                            .ifPresent(FIELDS::remove);
+                }
+            }
 
-        if (field.generating.getAndSet(true)) return;
+
+
+
+            field = new FlowField(target, now);
+            field.generating.set(true);
+            FIELDS.put(key, field);
+        }
 
         Level level = mob.level();
+        if (level == null) {
+            FIELDS.remove(key, field);
+            field.generating.set(false);
+            return;
+        }
         BlockPos startNode = new BlockPos((int) target.x, (int) target.y, (int) target.z);
 
-        Map<Long, Boolean> walkabilitySnapshot = snapshotWalkability(level, mob, startNode);
+        Map<Long, Boolean> walkabilitySnapshot;
+        try {
+            walkabilitySnapshot = snapshotWalkability(level, mob, startNode);
+        } catch (RuntimeException ex) {
+            FIELDS.remove(key, field);
+            field.generating.set(false);
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.PATHFINDING)) {
+                SoundAttractMod.LOGGER.debug("[FlowField] Snapshot rejected for {}", key, ex);
+            }
+            return;
+        }
 
-        EXECUTOR.submit(() -> {
+        CompletableFuture<Map<BlockPos, Vec3>> future;
+        try {
+            synchronized (FIELDS) {
+                if (!acceptingWork || generation != LIFECYCLE_GENERATION.get() || FIELDS.get(key) != field) {
+                    FIELDS.remove(key, field);
+                    field.generating.set(false);
+                    return;
+                }
+            }
+            QuantifiedCompute.Builder<Map<BlockPos, Vec3>> builder = QuantifiedCompute.<Map<BlockPos, Vec3>>builder(
+                        SoundAttractMod.MOD_ID, "flow_field", System.nanoTime())
+                    .cpuFallback(() -> generateFlowField(walkabilitySnapshot, startNode))
+                    .dataSizeBytes(Math.max(4096L, walkabilitySnapshot.size() * 9L))
+                    .parallelUnits(1)
+                    .complexity(Complexity.COMPLEX)
+                    .kind(WorkloadKind.SPATIAL_ANALYSIS)
+                    .cpuOnly()
+                    .allowMainThreadRerouting(false);
             try {
-                Map<BlockPos, Vec3> vectors = generateFlowField(walkabilitySnapshot, startNode);
-                field.update(vectors, System.currentTimeMillis());
-            } catch (Exception e) {
+                Integer budget = SoundAttractConfig.COMMON.workerTaskBudgetMs.get();
+                if (budget != null) {
+                    builder.timeout(Duration.ofMillis(Math.max(5L, budget.longValue())));
+                }
+            } catch (Throwable ignored) {
+
+            }
+            future = builder.submit();
+        } catch (RuntimeException ex) {
+            FIELDS.remove(key, field);
+            field.generating.set(false);
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.PATHFINDING)) {
+                SoundAttractMod.LOGGER.debug("[FlowField] Quantified rejected field {}", key, ex);
+            }
+            return;
+        }
+        if (future == null) {
+            FIELDS.remove(key, field);
+            field.generating.set(false);
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.PATHFINDING)) {
+                SoundAttractMod.LOGGER.debug("[FlowField] Quantified returned no future for {}", key);
+            }
+            return;
+        }
+        synchronized (FIELDS) {
+            if (!acceptingWork || generation != LIFECYCLE_GENERATION.get() || FIELDS.get(key) != field) {
+                future.cancel(false);
+                field.generating.set(false);
+                return;
+            }
+            IN_FLIGHT.add(future);
+        }
+        future.whenComplete((vectors, throwable) -> {
+            try {
+                if (throwable == null && vectors != null && acceptingWork
+                        && generation == LIFECYCLE_GENERATION.get() && FIELDS.get(key) == field) {
+                    field.update(vectors, System.currentTimeMillis());
+                }
             } finally {
+                IN_FLIGHT.remove(future);
                 field.generating.set(false);
             }
         });

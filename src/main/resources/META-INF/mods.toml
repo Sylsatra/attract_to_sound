@@ -9,6 +9,9 @@ license="${mod_license}"
   config = "soundattract.customnpcs.mixins.json"
 [[mixins]]
   type = "CONFIG"
+  config = "soundattract.pointblank.mixins.json"
+[[mixins]]
+  type = "CONFIG"
   config = "soundattract.tacznpcs.mixins.json"
 [[mixins]]
   type = "CONFIG"
@@ -16,6 +19,9 @@ license="${mod_license}"
 [[mixins]]
   type = "CONFIG"
   config = "soundattract.hotbath.mixins.json"
+[[mixins]]
+  type = "CONFIG"
+  config = "soundattract.taczhostiles.mixins.json"
 [[mods]]
 modId="${mod_id}" 
 version="${mod_version}" 
@@ -84,8 +90,15 @@ Also camouflage is a thing.
 
 [[dependencies.soundattract]]
     modId="quantified"
+    mandatory=true
+    versionRange="[2.0.0,3.0.0)"
+    ordering="AFTER"
+    side="BOTH"
+
+[[dependencies.soundattract]]
+    modId="weather2"
     mandatory=false
-    versionRange="[2.0.0,)"
+    versionRange="[0,)"
     ordering="AFTER"
     side="BOTH"
 

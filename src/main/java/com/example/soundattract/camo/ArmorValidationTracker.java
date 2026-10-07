@@ -9,12 +9,8 @@ import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.Map;
 
-/**
- * Tracks which armor slots have been successfully rendered by the vanilla mixin.
- * Used to detect incompatible modded armor (which bypasses the mixin) and strip its camo NBT.
- */
 public class ArmorValidationTracker {
-    
+
     private static final Map<LivingEntity, Set<EquipmentSlot>> VALIDATED_SLOTS = Collections.synchronizedMap(new WeakHashMap<>());
 
     public static void markSlotValidated(LivingEntity entity, EquipmentSlot slot) {
@@ -27,7 +23,7 @@ public class ArmorValidationTracker {
         Set<EquipmentSlot> slots = VALIDATED_SLOTS.get(entity);
         return slots != null && slots.contains(slot);
     }
-    
+
     public static void clearForEntity(LivingEntity entity) {
         VALIDATED_SLOTS.remove(entity);
     }

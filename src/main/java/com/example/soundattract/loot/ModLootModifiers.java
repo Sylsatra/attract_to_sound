@@ -21,7 +21,6 @@ public class ModLootModifiers {
     public static final RegistryObject<Codec<EnchantRandomToolModifier>> ENCHANT_RANDOM_TOOL =
             LOOT_MODIFIER_SERIALIZERS.register("enchant_random_tool", EnchantRandomToolModifier.CODEC);
 
-
     public static void register(IEventBus eventBus) {
         LOOT_MODIFIER_SERIALIZERS.register(eventBus);
     }

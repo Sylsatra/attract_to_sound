@@ -1,5 +1,7 @@
 package com.example.soundattract.reload;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.google.gson.Gson;
@@ -113,7 +115,7 @@ public class PointBlankGunsReloadListener extends SimpleJsonResourceReloadListen
         try {
             SoundAttractConfig.bakeConfig();
         } catch (Throwable t) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.POINT_BLANK)) {
                 SoundAttractMod.LOGGER.warn("[PointBlankGunsReloadListener] Failed to re-bake config after datapack reload", t);
             }
         }

@@ -2,11 +2,12 @@ package com.example.soundattract.pathfinding;
 
 import com.example.soundattract.ai.MobGroupManager;
 import com.example.soundattract.config.SoundAttractConfig;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.phys.Vec3;
 
-import java.util.Map;
-import java.util.WeakHashMap;
+import java.util.concurrent.TimeUnit;
 
 public final class NavLimiter {
     private static final class State {
@@ -14,14 +15,21 @@ public final class NavLimiter {
         Vec3 lastDest;
     }
 
-    private static final Map<Mob, State> STATE = java.util.Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Cache<Mob, State> STATE = Caffeine.newBuilder()
+            .weakKeys()
+            .maximumSize(8192)
+            .expireAfterAccess(2, TimeUnit.MINUTES)
+            .build();
 
     private static final class TeamBudget {
         long lastTick;
         int used;
     }
 
-    private static final Map<Long, TeamBudget> TEAM_BUDGET = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Cache<Long, TeamBudget> TEAM_BUDGET = Caffeine.newBuilder()
+            .maximumSize(4096)
+            .expireAfterAccess(30, TimeUnit.SECONDS)
+            .build();
 
     private NavLimiter() {}
 
@@ -38,30 +46,34 @@ public final class NavLimiter {
         try { limit = Math.max(0, SoundAttractConfig.COMMON.moveToTeamBudgetPerTick.get()); } catch (Throwable ignored) {}
         if (limit <= 0) return true;
 
-        if (TEAM_BUDGET.size() > 64) {
-            TEAM_BUDGET.entrySet().removeIf(e -> Math.abs(nowTick - e.getValue().lastTick) > 200);
-        }
-
         long k = teamBudgetKey(mob);
-        TeamBudget b = TEAM_BUDGET.computeIfAbsent(k, kk -> new TeamBudget());
-        if (b.lastTick != nowTick) {
-            b.lastTick = nowTick;
-            b.used = 0;
+        TeamBudget b = TEAM_BUDGET.asMap().computeIfAbsent(k, kk -> new TeamBudget());
+        synchronized (b) {
+            if (b.lastTick != nowTick) {
+                b.lastTick = nowTick;
+                b.used = 0;
+            }
+            if (b.used >= limit) {
+                PFStats.moveToDroppedCooldown++;
+                return false;
+            }
+            b.used++;
         }
-        if (b.used >= limit) {
-            PFStats.moveToDroppedCooldown++;
-            return false;
-        }
-        b.used++;
         return true;
+    }
+
+    public static void clear() {
+        STATE.invalidateAll();
+        TEAM_BUDGET.invalidateAll();
+        NodeRouter.clear();
     }
 
     public static boolean maybeMoveTo(Mob mob, double x, double y, double z, double speed) {
         if (mob == null || mob.level() == null) return false;
-        State s = STATE.computeIfAbsent(mob, m -> new State());
+        State s = STATE.get(mob, ignored -> new State());
         long now = mob.level().getGameTime();
-
         if (!tryConsumeTeamMoveBudget(mob, now)) {
+            PFStats.moveToDroppedCooldown++;
             return false;
         }
         int baseCooldown = 5;
@@ -70,7 +82,6 @@ public final class NavLimiter {
             baseCooldown = Math.max(0, SoundAttractConfig.COMMON.moveToCooldownTicks.get());
             baseMinDelta = Math.max(0.0, SoundAttractConfig.COMMON.moveToMinDelta.get());
         } catch (Throwable ignored) {}
-
         Vec3 desired = new Vec3(x, y, z);
         double dist;
         try { dist = mob.position().distanceTo(desired); } catch (Throwable t) { dist = Double.MAX_VALUE; }
@@ -83,7 +94,6 @@ public final class NavLimiter {
             cooldown = Math.min(cooldown, 5);
             minDelta = Math.min(minDelta, 0.50);
         }
-
         boolean sameRecentDestination = s.lastDest != null && s.lastDest.distanceToSqr(desired) < (minDelta * minDelta);
         if (sameRecentDestination) {
             boolean navigationDone = false;
@@ -97,53 +107,8 @@ public final class NavLimiter {
             PFStats.moveToDroppedCooldown++;
             return false;
         }
-
-        if (dist < 16.0) {
-            boolean walkable = NodeRouter.isWalkable(mob, desired);
-            if (walkable) {
-                net.minecraft.world.phys.HitResult res = mob.level().clip(new net.minecraft.world.level.ClipContext(
-                        mob.position().add(0, 0.5, 0),
-                        desired.add(0, 0.5, 0),
-                        net.minecraft.world.level.ClipContext.Block.COLLIDER,
-                        net.minecraft.world.level.ClipContext.Fluid.NONE,
-                        mob
-                ));
-                if (res == null || res.getType() == net.minecraft.world.phys.HitResult.Type.MISS) {
-                    mob.getMoveControl().setWantedPosition(x, y, z, speed);
-                    if (mob.horizontalCollision && mob.onGround()) mob.getJumpControl().jump();
-                    s.lastMoveTick = now;
-                    s.lastDest = desired;
-                    PFStats.moveToIssued++;
-                    return true;
-                }
-            }
-        }
-
-        Vec3 waypoint = NodeRouter.getWaypoint(mob, desired);
-        boolean ok;
-        try {
-            ok = mob.getNavigation().moveTo(waypoint.x, waypoint.y, waypoint.z, speed);
-        } catch (Throwable t) {
-            ok = false;
-        }
-        if (!ok) {
-            try {
-                PFStats.moveToFallbackAttempted++;
-                double vx = waypoint.x - mob.getX();
-                double vz = waypoint.z - mob.getZ();
-                double len = Math.sqrt(vx * vx + vz * vz);
-                if (len < 1e-3) len = 1.0;
-                double nx = -vz / len;
-                double nz = vx / len;
-                double off = 0.75;
-                boolean altOk = mob.getNavigation().moveTo(waypoint.x + nx * off, waypoint.y, waypoint.z + nz * off, speed)
-                        || mob.getNavigation().moveTo(waypoint.x - nx * off, waypoint.y, waypoint.z - nz * off, speed);
-                if (altOk) {
-                    ok = true;
-                    PFStats.moveToFallbackSucceeded++;
-                }
-            } catch (Throwable ignored) {}
-        }
+        Vec3 desiredWaypoint = NodeRouter.getWaypoint(mob, desired);
+        boolean ok = PursuitMoveExecutor.issueVanillaMove(mob, desiredWaypoint, speed);
         if (ok) {
             s.lastMoveTick = now;
             s.lastDest = desired;

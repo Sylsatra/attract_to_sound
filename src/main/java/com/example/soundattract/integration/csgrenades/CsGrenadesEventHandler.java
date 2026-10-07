@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.csgrenades;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.event.FovEvents;
@@ -15,30 +17,56 @@ import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
 import net.minecraftforge.event.entity.EntityLeaveLevelEvent;
 import net.minecraftforge.event.server.ServerStoppedEvent;
+import net.minecraftforge.event.level.LevelEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
 import java.lang.reflect.Method;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
+import java.util.concurrent.TimeUnit;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 @Mod.EventBusSubscriber(modid = SoundAttractMod.MOD_ID)
 public class CsGrenadesEventHandler {
 
     private static final Object LOCK = new Object();
-    private static long lastScanTick = -1;
-    private static final Map<Mob, Long> FLEE_COOLDOWNS = new WeakHashMap<>();
-    private static final Set<UUID> PROCESSED_FLASHBANGS = new HashSet<>();
-    private static final Set<Entity> TRACKED_GRENADES = java.util.Collections.newSetFromMap(new WeakHashMap<>());
+    private static final Map<net.minecraft.resources.ResourceLocation, Long> LAST_SCAN_TICKS = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Cache<Mob, Long> FLEE_COOLDOWNS = Caffeine.newBuilder()
+            .weakKeys()
+            .maximumSize(8192)
+            .expireAfterAccess(10, TimeUnit.MINUTES)
+            .build();
+    private static final Cache<UUID, Boolean> PROCESSED_FLASHBANGS = Caffeine.newBuilder()
+            .maximumSize(8192)
+            .expireAfterWrite(10, TimeUnit.MINUTES)
+            .build();
+    private static final Set<Entity> TRACKED_GRENADES = java.util.Collections.synchronizedSet(
+            java.util.Collections.newSetFromMap(new WeakHashMap<>()));
+
+    static List<Entity> trackedGrenadesSnapshot(net.minecraft.world.level.Level level) {
+        if (level == null) return java.util.Collections.emptyList();
+        synchronized (TRACKED_GRENADES) {
+            List<Entity> snapshot = new ArrayList<>(TRACKED_GRENADES.size());
+            for (Entity entity : TRACKED_GRENADES) {
+                if (entity != null && entity.level() == level && entity.isAlive()) {
+                    snapshot.add(entity);
+                }
+            }
+            return snapshot;
+        }
+    }
 
     private static Class<?> GRENADE_ENTITY_CLASS;
     private static Method GET_GRENADE_TYPE_METHOD;
-    private static java.lang.reflect.Field ENTITY_DATA_FIELD;
-    private static Method GET_IS_EXPLODED_ACCESSOR_METHOD;
+    private static Method GET_IS_ACTIVATED_ACCESSOR_METHOD;
     private static boolean FLASHBANG_REFLECTION_INITIALIZED = false;
     private static boolean FLASHBANG_REFLECTION_FAILED = false;
 
@@ -49,45 +77,33 @@ public class CsGrenadesEventHandler {
         try {
             GRENADE_ENTITY_CLASS = Class.forName("club.pisquad.minecraft.csgrenades.entity.CounterStrikeGrenadeEntity");
             GET_GRENADE_TYPE_METHOD = GRENADE_ENTITY_CLASS.getMethod("getGrenadeType");
-            for (java.lang.reflect.Field field : Entity.class.getDeclaredFields()) {
-                if (field.getType().getName().contains("SynchedEntityData")) {
-                    ENTITY_DATA_FIELD = field;
-                    ENTITY_DATA_FIELD.setAccessible(true);
-                    SoundAttractMod.LOGGER.debug("[CSGrenades] Found entityData field: {} (type: {})", field.getName(), field.getType().getName());
-                    break;
-                }
-            }
-            if (ENTITY_DATA_FIELD == null) {
-                throw new NoSuchFieldException("Could not find SynchedEntityData field in Entity class");
-            }
-            Object companion = GRENADE_ENTITY_CLASS.getField("Companion").get(null);
-            GET_IS_EXPLODED_ACCESSOR_METHOD = companion.getClass().getMethod("isExplodedAccessor");
+            GET_IS_ACTIVATED_ACCESSOR_METHOD = GRENADE_ENTITY_CLASS.getMethod("access$isActivatedAccessor$cp");
             FLASHBANG_REFLECTION_INITIALIZED = true;
-            SoundAttractMod.LOGGER.debug("[CSGrenades] Flashbang reflection initialized successfully");
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                SoundAttractMod.LOGGER.debug("[CSGrenades] Flashbang reflection initialized successfully");
+            }
         } catch (Exception e) {
             FLASHBANG_REFLECTION_FAILED = true;
             SoundAttractMod.LOGGER.warn("[CSGrenades] Failed to initialize flashbang reflection: {} - will not retry", e.getMessage());
         }
     }
 
-    private static boolean isGrenadeExploded(Entity grenade) {
+    private static boolean isGrenadeActivated(Entity grenade) {
         if (!FLASHBANG_REFLECTION_INITIALIZED) {
             return false;
         }
         try {
-            Object companion = GRENADE_ENTITY_CLASS.getField("Companion").get(null);
-            Object accessor = GET_IS_EXPLODED_ACCESSOR_METHOD.invoke(companion);
-            Object entityData = ENTITY_DATA_FIELD.get(grenade);
-            Method getMethod = entityData.getClass().getMethod("get", EntityDataAccessor.class);
-            Object isExploded = getMethod.invoke(entityData, accessor);
-            return Boolean.TRUE.equals(isExploded);
+            Object accessor = GET_IS_ACTIVATED_ACCESSOR_METHOD.invoke(null);
+            return Boolean.TRUE.equals(grenade.getEntityData().get((EntityDataAccessor<Boolean>) accessor));
         } catch (Exception e) {
             return false;
         }
     }
 
     public static void registerGrenadeEvent(Object eventBus) {
-        SoundAttractMod.LOGGER.debug("[CSGrenades] Event-based registration skipped - using tick-based scanning instead");
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+            SoundAttractMod.LOGGER.debug("[CSGrenades] Event-based registration skipped - using tick-based scanning instead");
+        }
     }
 
     private static void processExplodedFlashbang(Entity grenade, ServerLevel level) {
@@ -107,7 +123,9 @@ public class CsGrenadesEventHandler {
         int scanned = 0;
         int blinded = 0;
         var mobsInRange = level.getEntitiesOfClass(Mob.class, grenade.getBoundingBox().inflate(radius));
-        SoundAttractMod.LOGGER.debug("[CSGrenades] Processing flashbang - found {} mobs in radius {}", mobsInRange.size(), radius);
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+            SoundAttractMod.LOGGER.debug("[CSGrenades] Processing flashbang - found {} mobs in radius {}", mobsInRange.size(), radius);
+        }
         for (Mob mob : mobsInRange) {
             if (scanned++ >= mobBudget) {
                 break;
@@ -133,10 +151,14 @@ public class CsGrenadesEventHandler {
             long duration = (long) (baseDuration * factor);
             FlashbangEffect.blind(mob, duration, currentTick);
             blinded++;
-            SoundAttractMod.LOGGER.debug("[CSGrenades] Blinded mob {} for {} ticks", mob.getUUID(), duration);
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                SoundAttractMod.LOGGER.debug("[CSGrenades] Blinded mob {} for {} ticks", mob.getUUID(), duration);
+            }
         }
         if (blinded > 0) {
-            SoundAttractMod.LOGGER.debug("[CSGrenades] Flashbang blinded {} mobs", blinded);
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                SoundAttractMod.LOGGER.debug("[CSGrenades] Flashbang blinded {} mobs", blinded);
+            }
         }
     }
 
@@ -149,8 +171,23 @@ public class CsGrenadesEventHandler {
             return;
         }
 
-        for (Entity grenade : new HashSet<>(TRACKED_GRENADES)) {
-            if (!grenade.isAlive() || grenade.level() != level) {
+        Set<Entity> trackedSnapshot;
+        synchronized (TRACKED_GRENADES) {
+            trackedSnapshot = new HashSet<>(TRACKED_GRENADES);
+        }
+        for (Entity grenade : trackedSnapshot) {
+            if (grenade == null) {
+                TRACKED_GRENADES.remove(grenade);
+                continue;
+            }
+            if (isGrenadeActivated(grenade)) {
+                UUID id = grenade.getUUID();
+                if (PROCESSED_FLASHBANGS.asMap().putIfAbsent(id, Boolean.TRUE) == null
+                        && "FlashBangEntity".equals(grenade.getClass().getSimpleName())) {
+                    processExplodedFlashbang(grenade, level);
+                }
+                TRACKED_GRENADES.remove(grenade);
+            } else if (!grenade.isAlive()) {
                 TRACKED_GRENADES.remove(grenade);
             }
         }
@@ -175,11 +212,13 @@ public class CsGrenadesEventHandler {
         int scanInterval = SoundAttractConfig.COMMON.csgrenadesTrackerScanIntervalTicks.get();
 
         synchronized (LOCK) {
+            net.minecraft.resources.ResourceLocation dimension = level.dimension().location();
+            long lastScanTick = LAST_SCAN_TICKS.getOrDefault(dimension, -1L);
             if (currentTick - lastScanTick >= scanInterval) {
                 int smokeMaxAge = SoundAttractConfig.COMMON.smokeLifetimeMaxTicks.get();
                 CsGrenadesTracker.scanAndRebuild(level, currentTick, smokeMaxAge);
                 FlashbangEffect.cleanup(currentTick);
-                lastScanTick = currentTick;
+                LAST_SCAN_TICKS.put(dimension, currentTick);
             }
         }
 
@@ -195,12 +234,16 @@ public class CsGrenadesEventHandler {
         Entity entity = event.getEntity();
 
         ensureFlashbangReflection();
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
         SoundAttractMod.LOGGER.debug("[CSGrenades] Entity joined: {} (class: {}, isGrenadeClass={})",
                 entity.getUUID(), entity.getClass().getName(),
                 GRENADE_ENTITY_CLASS != null && GRENADE_ENTITY_CLASS.isInstance(entity));
+        }
         if (GRENADE_ENTITY_CLASS != null && GRENADE_ENTITY_CLASS.isInstance(entity)) {
             TRACKED_GRENADES.add(entity);
-            SoundAttractMod.LOGGER.debug("[CSGrenades] Tracking grenade entity: {} (type={})", entity.getUUID(), entity.getType().getDescriptionId());
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                SoundAttractMod.LOGGER.debug("[CSGrenades] Tracking grenade entity: {} (type={})", entity.getUUID(), entity.getType().getDescriptionId());
+            }
             return;
         }
 
@@ -235,7 +278,7 @@ public class CsGrenadesEventHandler {
         Entity entity = event.getEntity();
         TRACKED_GRENADES.remove(entity);
         if (entity instanceof Mob mob) {
-            FLEE_COOLDOWNS.remove(mob);
+            FLEE_COOLDOWNS.invalidate(mob);
         }
 
         if (!CsGrenadesCompat.isLoaded()) {
@@ -251,8 +294,12 @@ public class CsGrenadesEventHandler {
         if (!(event.getLevel() instanceof ServerLevel sLevel)) {
             return;
         }
+        ensureFlashbangReflection();
+        if (!isGrenadeActivated(entity)) {
+            return;
+        }
         UUID id = entity.getUUID();
-        if (!PROCESSED_FLASHBANGS.add(id)) {
+        if (PROCESSED_FLASHBANGS.asMap().putIfAbsent(id, Boolean.TRUE) != null) {
             return;
         }
         processExplodedFlashbang(entity, sLevel);
@@ -262,13 +309,28 @@ public class CsGrenadesEventHandler {
     public static void onServerStopped(ServerStoppedEvent event) {
         CsGrenadesTracker.clear();
         FlashbangEffect.clear();
-        FLEE_COOLDOWNS.clear();
-        PROCESSED_FLASHBANGS.clear();
+        FLEE_COOLDOWNS.invalidateAll();
+        PROCESSED_FLASHBANGS.invalidateAll();
         TRACKED_GRENADES.clear();
+        LAST_SCAN_TICKS.clear();
+    }
+
+    @SubscribeEvent
+    public static void onLevelUnload(LevelEvent.Unload event) {
+        if (event != null && event.getLevel() instanceof ServerLevel level) {
+            LAST_SCAN_TICKS.remove(level.dimension().location());
+            CsGrenadesTracker.clearLevel(level);
+            synchronized (TRACKED_GRENADES) {
+                TRACKED_GRENADES.removeIf(entity -> entity == null || entity.level() == level);
+            }
+        }
     }
 
     public static boolean isOnFleeCooldown(Mob mob, long currentTick) {
-        Long cooldown = FLEE_COOLDOWNS.get(mob);
+        if (mob == null) {
+            return false;
+        }
+        Long cooldown = FLEE_COOLDOWNS.getIfPresent(mob);
         if (cooldown == null) {
             return false;
         }
@@ -277,16 +339,13 @@ public class CsGrenadesEventHandler {
 
     public static void setFleeCooldown(Mob mob, long currentTick) {
         int cooldownTicks = SoundAttractConfig.COMMON.fireFleeCooldownTicks.get();
-        FLEE_COOLDOWNS.put(mob, currentTick + cooldownTicks);
+        if (mob != null) {
+            FLEE_COOLDOWNS.put(mob, currentTick + cooldownTicks);
+        }
     }
 
     private static void cleanupFleeCooldowns(long currentTick) {
-        Iterator<Map.Entry<Mob, Long>> it = FLEE_COOLDOWNS.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<Mob, Long> e = it.next();
-            if (currentTick >= e.getValue()) {
-                it.remove();
-            }
-        }
+        FLEE_COOLDOWNS.asMap().entrySet().removeIf(entry ->
+                entry.getKey() == null || entry.getValue() == null || currentTick >= entry.getValue());
     }
 }

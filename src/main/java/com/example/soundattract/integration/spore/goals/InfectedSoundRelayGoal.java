@@ -11,10 +11,6 @@ import net.minecraft.world.phys.AABB;
 import java.util.EnumSet;
 import java.util.List;
 
-/**
- * Propagates sound positions to nearby linked Infected entities.
- * Leverages Spore's built-in searchPos and SearchAreaGoal.
- */
 public class InfectedSoundRelayGoal extends net.minecraft.world.entity.ai.goal.Goal {
     private final Infected mob;
     private int relayTimer = 0;
@@ -31,7 +27,7 @@ public class InfectedSoundRelayGoal extends net.minecraft.world.entity.ai.goal.G
 
     @Override
     public void tick() {
-        if (++relayTimer < 20) return; 
+        if (++relayTimer < 20) return;
         relayTimer = 0;
 
         BlockPos targetSound = findCurrentSoundTarget();
@@ -47,7 +43,7 @@ public class InfectedSoundRelayGoal extends net.minecraft.world.entity.ai.goal.G
     private void relayToNearby(BlockPos pos) {
         double range = com.example.soundattract.config.separate.IntegrationConfig.SOUND_RELAY_RANGE.get();
         AABB area = mob.getBoundingBox().inflate(range);
-        List<Infected> nearby = mob.level().getEntitiesOfClass(Infected.class, area, 
+        List<Infected> nearby = mob.level().getEntitiesOfClass(Infected.class, area,
             e -> e != mob && e.getLinked() && e.getSearchPos() == null && e.getTarget() == null);
 
         for (Infected other : nearby) {

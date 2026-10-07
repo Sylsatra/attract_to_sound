@@ -29,8 +29,8 @@ public class MoveToScentBehaviour<E extends PathfinderMob> extends ExtendedBehav
 
     public MoveToScentBehaviour() {
         runFor(e -> 100);
-        startCondition(e -> e != null 
-            && !e.isVehicle() 
+        startCondition(e -> e != null
+            && !e.isVehicle()
             && !e.isSleeping()
             && (!SoundAttractConfig.COMMON.enableStealthMechanics.get() || !StealthDetectionEvents.shouldSuppressTargeting(e)));
     }
@@ -52,9 +52,7 @@ public class MoveToScentBehaviour<E extends PathfinderMob> extends ExtendedBehav
             return false;
         }
 
-
         if (entity.distanceToSqr(Vec3.atCenterOf(pos)) <= 2.0 * 2.0) {
-
 
         }
 
@@ -69,7 +67,7 @@ public class MoveToScentBehaviour<E extends PathfinderMob> extends ExtendedBehav
         if (pos == null) return;
 
         float speed = (float) SoundAttractConfig.COMMON.mobMoveSpeed.get().doubleValue();
-        
+
         BrainUtils.setMemory(entity, MemoryModuleType.LOOK_TARGET, new BlockPosTracker(pos));
         BrainUtils.setMemory(entity, MemoryModuleType.WALK_TARGET, new WalkTarget(Vec3.atCenterOf(pos), speed, 1));
     }

@@ -1,5 +1,7 @@
 package com.example.soundattract.reload;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.PlayerProfile2;
 import com.example.soundattract.config.SoundAttractConfig;
@@ -38,20 +40,17 @@ public class PlayerProfilesReloadListener extends SimpleJsonResourceReloadListen
             JsonElement element = entry.getValue();
 
 
-
-
-            
             PlayerProfile2.CODEC.parse(ops, element).resultOrPartial(error -> {
                 LOGGER.error("Failed to parse player profile '{}': {}", location, error);
             }).ifPresent(profile -> {
                 profiles.add(profile.withId(location.toString()));
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     LOGGER.info("Loaded player profile: {}", location);
                 }
             });
         }
 
-        SoundAttractConfig.DP_PLAYER_PROFILES_CACHE = profiles;
+        SoundAttractConfig.DP_PLAYER_PROFILES_CACHE = List.copyOf(profiles);
 
         try {
             SoundAttractConfig.bakeConfig();

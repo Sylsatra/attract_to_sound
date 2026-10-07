@@ -16,7 +16,7 @@ public class GeckoMixinPlugin implements IMixinConfigPlugin {
         try {
             boolean geckolibPresent = LoadingModList.get().getModFileById("geckolib") != null;
             org.apache.logging.log4j.LogManager.getLogger().info("[SoundAttract] Checking for 'geckolib': " + geckolibPresent);
-            
+
             if (!geckolibPresent) {
                  org.apache.logging.log4j.LogManager.getLogger().info("[SoundAttract] Available Mods: " + LoadingModList.get().getMods().stream().map(net.minecraftforge.forgespi.language.IModInfo::getModId).collect(java.util.stream.Collectors.joining(", ")));
             }

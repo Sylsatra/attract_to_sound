@@ -30,7 +30,7 @@ public abstract class EnchantRandomlyModifier extends LootModifier {
 
         if (!potentialTargets.isEmpty()) {
             ItemStack toEnchant = potentialTargets.get(context.getRandom().nextInt(potentialTargets.size()));
-            toEnchant.enchant(this.enchantment, 1); 
+            toEnchant.enchant(this.enchantment, 1);
         }
 
         return generatedLoot;

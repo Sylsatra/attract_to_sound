@@ -144,6 +144,23 @@ public class SoundAttractConfig {
         return SERVER_SPEC != null && SERVER_SPEC.isLoaded();
     }
 
+    public static boolean commonConfigsReady() {
+        return isLoaded(GeneralConfig.SPEC)
+                && isLoaded(StealthConfig.SPEC)
+                && isLoaded(GunsConfig.SPEC)
+                && isLoaded(VoiceConfig.SPEC)
+                && isLoaded(IntegrationConfig.SPEC)
+                && isLoaded(ScentConfig.SPEC)
+                && isLoaded(PerformanceConfig.SPEC)
+                && isLoaded(RaidConfig.SPEC)
+                && isLoaded(LivingWallConfig.SPEC)
+                && isLoaded(PathfindingConfig.SPEC);
+    }
+
+    private static boolean isLoaded(ForgeConfigSpec spec) {
+        return spec != null && spec.isLoaded();
+    }
+
     public static boolean shouldHideWornGearWhileInvisible() {
         try {
             if (serverReady()) {
@@ -159,7 +176,7 @@ public class SoundAttractConfig {
     public static void migrateCommonToServerIfNeeded() {
         if (serverMigrationDone) return;
         if (!serverReady()) return;
-        if (COMMON_SPEC == null || !COMMON_SPEC.isLoaded()) return;
+        if (!commonConfigsReady()) return;
 
         int migrated = 0;
         migrated += migrateBool("enablePlayerActionSounds",
@@ -297,11 +314,10 @@ public class SoundAttractConfig {
     public static final Map<ResourceLocation, Double> DP_POINT_BLANK_ATTACHMENT_REDUCTION_CACHE = new ConcurrentHashMap<>();
     public static final Map<ResourceLocation, Double> DP_POINT_BLANK_MUZZLE_FLASH_REDUCTION_CACHE = new ConcurrentHashMap<>();
 
-
-    public static List<com.example.soundattract.config.MobProfile2> SPECIAL_MOB_PROFILES_CACHE = new ArrayList<>();
-    public static List<com.example.soundattract.config.PlayerProfile2> SPECIAL_PLAYER_PROFILES_CACHE = new ArrayList<>();
-    public static List<com.example.soundattract.config.MobProfile2> DP_MOB_PROFILES_CACHE = new ArrayList<>();
-    public static List<com.example.soundattract.config.PlayerProfile2> DP_PLAYER_PROFILES_CACHE = new ArrayList<>();
+    public static volatile List<com.example.soundattract.config.MobProfile2> SPECIAL_MOB_PROFILES_CACHE = List.of();
+    public static volatile List<com.example.soundattract.config.PlayerProfile2> SPECIAL_PLAYER_PROFILES_CACHE = List.of();
+    public static volatile List<com.example.soundattract.config.MobProfile2> DP_MOB_PROFILES_CACHE = List.of();
+    public static volatile List<com.example.soundattract.config.PlayerProfile2> DP_PLAYER_PROFILES_CACHE = List.of();
     public static final Map<ResourceLocation, Integer> customArmorColors = new ConcurrentHashMap<>();
     public static final Map<ResourceLocation, Integer> DP_CUSTOM_ARMOR_COLORS = new ConcurrentHashMap<>();
 
@@ -310,42 +326,43 @@ public class SoundAttractConfig {
     public static final Set<String> STEALTH_BYPASS_MOD_NAMESPACES_CACHE = ConcurrentHashMap.newKeySet();
     public static final Set<String> FLEE_FROM_FIRE_ELIGIBLE_SET = ConcurrentHashMap.newKeySet();
 
-    public static boolean PLAYER_ACTION_SOUNDS_ENABLED_CACHE = true;
-    public static final Map<String, Integer> PLAYER_ACTION_RANGES_CACHE = new HashMap<>();
-    public static final Map<String, Double> PLAYER_ACTION_WEIGHTS_CACHE = new HashMap<>();
-
-
+    public static volatile boolean PLAYER_ACTION_SOUNDS_ENABLED_CACHE = true;
+    public static volatile Map<String, Integer> PLAYER_ACTION_RANGES_CACHE = Map.of();
+    public static volatile Map<String, Double> PLAYER_ACTION_WEIGHTS_CACHE = Map.of();
 
     public static void parseAndCachePlayerActionConfig() {
         if (!serverReady()) return;
         PLAYER_ACTION_SOUNDS_ENABLED_CACHE = SERVER.enablePlayerActionSounds.get();
-        PLAYER_ACTION_RANGES_CACHE.clear();
-        PLAYER_ACTION_WEIGHTS_CACHE.clear();
-        
+        Map<String, Integer> rangesSnapshot = new HashMap<>();
+        Map<String, Double> weightsSnapshot = new HashMap<>();
+
         List<? extends String> ranges = SERVER.playerActionRanges.get();
         if (ranges != null) {
             for (String entry : ranges) {
                 String[] parts = entry.split(";");
                 if (parts.length == 2) {
                     try {
-                        PLAYER_ACTION_RANGES_CACHE.put(parts[0].trim(), Integer.parseInt(parts[1].trim()));
+                        rangesSnapshot.put(parts[0].trim(), Integer.parseInt(parts[1].trim()));
                     } catch (Exception e) {}
                 }
             }
         }
-        
+
         List<? extends String> weights = SERVER.playerActionWeights.get();
         if (weights != null) {
             for (String entry : weights) {
                 String[] parts = entry.split(";");
                 if (parts.length == 2) {
                     try {
-                        PLAYER_ACTION_WEIGHTS_CACHE.put(parts[0].trim(), Double.parseDouble(parts[1].trim()));
+                        weightsSnapshot.put(parts[0].trim(), Double.parseDouble(parts[1].trim()));
                     } catch (Exception e) {}
                 }
             }
         }
-        
+
+        PLAYER_ACTION_RANGES_CACHE = Map.copyOf(rangesSnapshot);
+        PLAYER_ACTION_WEIGHTS_CACHE = Map.copyOf(weightsSnapshot);
+
 
         SOUND_ID_WHITELIST_CACHE.add(ResourceLocation.tryParse("soundattract:player_action.crawling"));
         SOUND_ID_WHITELIST_CACHE.add(ResourceLocation.tryParse("soundattract:player_action.sneaking"));
@@ -358,7 +375,7 @@ public class SoundAttractConfig {
     public static void parseAndCacheCustomArmorColors() {
         customArmorColors.clear();
         if (COMMON == null || COMMON.customArmorColors == null) {
-            if (COMMON != null && COMMON.debugLogging != null && COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                 SoundAttractMod.LOGGER.info("SoundAttractConfig: COMMON or customArmorColors is null, skipping custom armor color parsing.");
             }
             return;
@@ -366,13 +383,13 @@ public class SoundAttractConfig {
 
         List<? extends String> configList = COMMON.customArmorColors.get();
         if (configList == null || configList.isEmpty()) {
-            if (COMMON != null && COMMON.debugLogging != null && COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                 SoundAttractMod.LOGGER.info("SoundAttractConfig: No custom armor colors defined in config.");
             }
             return;
         }
 
-        if (COMMON != null && COMMON.debugLogging != null && COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
             SoundAttractMod.LOGGER.info("SoundAttractConfig: Parsing {} custom armor color entries...", configList.size());
         }
 
@@ -396,7 +413,7 @@ public class SoundAttractConfig {
                     }
                     int color = Integer.parseInt(colorHex.substring(1), 16);
                     customArmorColors.put(loc, color);
-                    if (COMMON != null && COMMON.debugLogging != null && COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                         SoundAttractMod.LOGGER.info("SoundAttractConfig: Added custom armor color: {} -> #{}", itemId, Integer.toHexString(color).toUpperCase(java.util.Locale.ROOT));
                     }
                 } catch (NumberFormatException e) {
@@ -413,7 +430,6 @@ public class SoundAttractConfig {
         String priority = COMMON != null && COMMON.datapackPriority != null ? COMMON.datapackPriority.get() : "datapack_over_config";
 
         boolean datapackOverConfig = "datapack_over_config".equalsIgnoreCase(priority);
-        
 
 
         if (enableDataDriven && !DP_CUSTOM_ARMOR_COLORS.isEmpty()) {
@@ -427,7 +443,7 @@ public class SoundAttractConfig {
             }
         }
 
-        if (COMMON != null && COMMON.debugLogging != null && COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
             SoundAttractMod.LOGGER.info("SoundAttractConfig: Loaded {} entries into customArmorColors (after datapack merge).", customArmorColors.size());
         }
     }
@@ -435,7 +451,7 @@ public class SoundAttractConfig {
     public static void parseAndCacheNonBlockingVisionAllowList() {
         NON_BLOCKING_VISION_ALLOW_CACHE.clear();
         if (COMMON == null || COMMON.nonBlockingVisionAllowList == null) {
-            if (COMMON != null && COMMON.debugLogging != null && COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                 SoundAttractMod.LOGGER.info("SoundAttractConfig: COMMON or nonBlockingVisionAllowList is null, skipping parsing.");
             }
             return;
@@ -462,7 +478,7 @@ public class SoundAttractConfig {
             }
         }
 
-        if (COMMON != null && COMMON.debugLogging != null && COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
             SoundAttractMod.LOGGER.info("SoundAttractConfig: Loaded {} entries into NON_BLOCKING_VISION_ALLOW_CACHE.", NON_BLOCKING_VISION_ALLOW_CACHE.size());
         }
     }
@@ -484,7 +500,6 @@ public class SoundAttractConfig {
 
     public static class Common {
 
-        public final ForgeConfigSpec.BooleanValue debugLogging = GeneralConfig.DEBUG_LOGGING;
         public final ForgeConfigSpec.BooleanValue enableDataDriven = GeneralConfig.ENABLE_DATA_DRIVEN;
         public final ForgeConfigSpec.ConfigValue<String> datapackPriority = GeneralConfig.DATAPACK_PRIORITY;
         public final ForgeConfigSpec.BooleanValue enablePlayerActionSounds = GeneralConfig.ENABLE_PLAYER_ACTION_SOUNDS;
@@ -567,19 +582,38 @@ public class SoundAttractConfig {
         public final ForgeConfigSpec.BooleanValue quantifiedSoundScoreSliceCachePersistent = IntegrationConfig.QUANTIFIED_SOUND_SCORE_SLICE_CACHE_PERSISTENT;
         public final ForgeConfigSpec.IntValue quantifiedSoundScoreSliceCacheTtlTicks = IntegrationConfig.QUANTIFIED_SOUND_SCORE_SLICE_CACHE_TTL_TICKS;
         public final ForgeConfigSpec.IntValue quantifiedSoundScoreSliceCacheMaxEntries = IntegrationConfig.QUANTIFIED_SOUND_SCORE_SLICE_CACHE_MAX_ENTRIES;
+        public final ForgeConfigSpec.IntValue playerOdorScanIntervalTicks = ScentConfig.PLAYER_ODOR_SCAN_INTERVAL_TICKS;
+        public final ForgeConfigSpec.ConfigValue<List<? extends String>> playerOdorItemValues = ScentConfig.PLAYER_ODOR_ITEM_VALUES;
+        public final ForgeConfigSpec.BooleanValue enableWindScent = ScentConfig.ENABLE_WIND_SCENT;
+        public final ForgeConfigSpec.DoubleValue windScentActivationThreshold = ScentConfig.WIND_SCENT_ACTIVATION_THRESHOLD;
+        public final ForgeConfigSpec.DoubleValue windScentDeactivationThreshold = ScentConfig.WIND_SCENT_DEACTIVATION_THRESHOLD;
+        public final ForgeConfigSpec.IntValue windScentUpdateIntervalTicks = ScentConfig.WIND_SCENT_UPDATE_INTERVAL_TICKS;
+        public final ForgeConfigSpec.IntValue windScentMaximumDistance = ScentConfig.WIND_SCENT_MAXIMUM_DISTANCE;
+        public final ForgeConfigSpec.IntValue windScentMaximumParcels = ScentConfig.WIND_SCENT_MAXIMUM_PARCELS;
+        public final ForgeConfigSpec.DoubleValue windshieldScentReduction = ScentConfig.WINDSHIELD_SCENT_REDUCTION;
+        public final ForgeConfigSpec.DoubleValue windScentSpeedScale = ScentConfig.WIND_SCENT_SPEED_SCALE;
+        public final ForgeConfigSpec.BooleanValue windScentRainDecay = ScentConfig.WIND_SCENT_RAIN_DECAY;
+        public final ForgeConfigSpec.DoubleValue windScentSpreadFactor = ScentConfig.WIND_SCENT_SPREAD_FACTOR;
+        public final ForgeConfigSpec.DoubleValue windScentBarrierLeakage = ScentConfig.WIND_SCENT_BARRIER_LEAKAGE;
+        public final ForgeConfigSpec.IntValue windshieldScanDistance = ScentConfig.WINDSHIELD_SCAN_DISTANCE;
+        public final ForgeConfigSpec.DoubleValue windshieldMinimumWindSpeed = ScentConfig.WINDSHIELD_MINIMUM_WIND_SPEED;
+        public final ForgeConfigSpec.DoubleValue windshieldActivationThreshold = ScentConfig.WINDSHIELD_ACTIVATION_THRESHOLD;
+        public final ForgeConfigSpec.DoubleValue windshieldDeactivationThreshold = ScentConfig.WINDSHIELD_DEACTIVATION_THRESHOLD;
+        public final ForgeConfigSpec.BooleanValue enableWindScentParticles = ScentConfig.ENABLE_WIND_SCENT_PARTICLES;
+        public final ForgeConfigSpec.IntValue windScentParticleIntervalTicks = ScentConfig.WIND_SCENT_PARTICLE_INTERVAL_TICKS;
+        public final ForgeConfigSpec.IntValue windScentParticleMaxPerViewer = ScentConfig.WIND_SCENT_PARTICLE_MAX_PER_VIEWER;
+        public final ForgeConfigSpec.BooleanValue enableWeather2WindIntegration = IntegrationConfig.ENABLE_WEATHER2_WIND_INTEGRATION;
 
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> attractedEntities = GeneralConfig.ATTRACTED_ENTITIES;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> stealthBypassMobIds = GeneralConfig.STEALTH_BYPASS_MOB_IDS;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> stealthBypassModNamespaces = GeneralConfig.STEALTH_BYPASS_MOD_NAMESPACES;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> mobBlacklist = GeneralConfig.MOB_BLACKLIST;
 
-
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> specialMobProfilesRaw = GeneralConfig.SPECIAL_MOB_PROFILES;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> specialPlayerProfilesRaw = GeneralConfig.SPECIAL_PLAYER_PROFILES;
 
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> soundIdWhitelist = GeneralConfig.SOUND_ID_WHITELIST;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> rawSoundDefaults = GeneralConfig.SOUND_DEFAULTS;
-
 
         public final ForgeConfigSpec.BooleanValue enableBlockMuffling = GeneralConfig.ENABLE_BLOCK_MUFFLING;
         public final ForgeConfigSpec.IntValue maxMufflingBlocksToCheck = PerformanceConfig.MAX_MUFFLING_BLOCKS_TO_CHECK;
@@ -725,6 +759,7 @@ public class SoundAttractConfig {
         public final ForgeConfigSpec.DoubleValue xrayChance = IntegrationConfig.XRAY_CHANCE;
 
         public final ForgeConfigSpec.BooleanValue enableCsgrenadesIntegration = IntegrationConfig.ENABLE_CSGRENADES_INTEGRATION;
+        public final ForgeConfigSpec.BooleanValue enableTaczNpcIntegration = IntegrationConfig.ENABLE_TACZ_NPC_INTEGRATION;
         public final ForgeConfigSpec.BooleanValue enableFlashbangBlinding = IntegrationConfig.ENABLE_FLASHBANG_BLINDING;
         public final ForgeConfigSpec.DoubleValue flashbangBlindRadius = IntegrationConfig.FLASHBANG_BLIND_RADIUS;
         public final ForgeConfigSpec.IntValue flashbangBlindDurationTicks = IntegrationConfig.FLASHBANG_BLIND_DURATION_TICKS;
@@ -751,6 +786,8 @@ public class SoundAttractConfig {
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> hotBathSplashCamoWashRates = IntegrationConfig.HOTBATH_SPLASH_CAMO_WASH_RATES;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> hotBathCustomFluidScentModifiers = IntegrationConfig.HOTBATH_CUSTOM_FLUID_SCENT_MODIFIERS;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> hotBathCustomFluidCamoWashRates = IntegrationConfig.HOTBATH_CUSTOM_FLUID_CAMO_WASH_RATES;
+        public final ForgeConfigSpec.BooleanValue enableSpoiledFoodScent = IntegrationConfig.ENABLE_SPOILED_FOOD_SCENT;
+        public final ForgeConfigSpec.DoubleValue spoiledFoodOdorPerItem = IntegrationConfig.SPOILED_FOOD_ODOR_PER_ITEM;
         public final ForgeConfigSpec.BooleanValue enableToughAsNailsIntegration = IntegrationConfig.ENABLE_TOUGH_AS_NAILS_INTEGRATION;
         public final ForgeConfigSpec.IntValue toughAsNailsPollIntervalTicks = IntegrationConfig.TOUGH_AS_NAILS_POLL_INTERVAL_TICKS;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> toughAsNailsTemperatureScentMultipliers = IntegrationConfig.TOUGH_AS_NAILS_TEMPERATURE_SCENT_MULTIPLIERS;
@@ -859,10 +896,6 @@ public class SoundAttractConfig {
 
         public Common(ForgeConfigSpec.Builder builder) {
 
-
-
-
-
         }
 
     }
@@ -922,6 +955,9 @@ public class SoundAttractConfig {
     }
 
     public static void bakeConfig() {
+        if (!commonConfigsReady()) {
+            return;
+        }
         if (COMMON.configSchemaVersion.get() < 12) {
             SoundAttractMod.LOGGER.info("Config migration: Sound muffling factors updated to new defaults (Schema v12).");
             COMMON.mufflingFactorWool.set(0.75);
@@ -933,10 +969,10 @@ public class SoundAttractConfig {
 
         if (COMMON.configSchemaVersion.get() < 13) {
             SoundAttractMod.LOGGER.info("Config migration: Updating attracted entities to include new Spore support (Schema v13).");
-            
+
             List<String> currentEntities = new ArrayList<>(COMMON.attractedEntities.get());
             List<? extends String> defaultEntities = GeneralConfig.ATTRACTED_ENTITIES.getDefault();
-            
+
             int addedCount = 0;
             for (String entityId : defaultEntities) {
                 if (!currentEntities.contains(entityId)) {
@@ -944,21 +980,21 @@ public class SoundAttractConfig {
                     addedCount++;
                 }
             }
-            
+
             if (addedCount > 0) {
                 COMMON.attractedEntities.set(currentEntities);
                 SoundAttractMod.LOGGER.info("Added {} new default entities to the attracted list.", addedCount);
             }
-            
+
             COMMON.configSchemaVersion.set(13);
         }
 
         if (COMMON.configSchemaVersion.get() < 14) {
             SoundAttractMod.LOGGER.info("Config migration: Updating sound whitelist to include new Spore sounds (Schema v14).");
-            
+
             List<String> currentWhitelist = new ArrayList<>(COMMON.soundIdWhitelist.get());
             List<? extends String> defaultWhitelist = GeneralConfig.SOUND_ID_WHITELIST.getDefault();
-            
+
             int addedCount = 0;
             for (String soundId : defaultWhitelist) {
                 if (!currentWhitelist.contains(soundId)) {
@@ -966,12 +1002,12 @@ public class SoundAttractConfig {
                     addedCount++;
                 }
             }
-            
+
             if (addedCount > 0) {
                 COMMON.soundIdWhitelist.set(currentWhitelist);
                 SoundAttractMod.LOGGER.info("Added {} new default sounds to the whitelist.", addedCount);
             }
-            
+
             COMMON.configSchemaVersion.set(14);
         }
 
@@ -1064,6 +1100,26 @@ public class SoundAttractConfig {
             saveConfigSpec(GeneralConfig.SPEC, "general");
         }
 
+        if (COMMON.configSchemaVersion.get() < 19) {
+            List<String> previousOdorDefaults = List.of(
+                    "minecraft:rotten_flesh=1.0",
+                    "minecraft:beef=1.0",
+                    "minecraft:porkchop=1.0",
+                    "minecraft:chicken=1.0",
+                    "minecraft:mutton=1.0",
+                    "minecraft:rabbit=1.0",
+                    "minecraft:cod=0.5",
+                    "minecraft:salmon=0.5");
+            List<String> configuredOdorValues = new ArrayList<>(COMMON.playerOdorItemValues.get());
+            if (configuredOdorValues.equals(previousOdorDefaults)) {
+                COMMON.playerOdorItemValues.set(new ArrayList<>(COMMON.playerOdorItemValues.getDefault()));
+                saveConfigSpec(ScentConfig.SPEC, "scent");
+                SoundAttractMod.LOGGER.info("Config migration: Reduced default food odor values (Schema v19).");
+            }
+            COMMON.configSchemaVersion.set(19);
+            saveConfigSpec(GeneralConfig.SPEC, "general");
+        }
+
         ensureToughAsNailsArmorColorConfigEntries();
 
         SOUND_ID_WHITELIST_CACHE.clear();
@@ -1113,8 +1169,10 @@ public class SoundAttractConfig {
                 net.minecraft.world.entity.EntityType<?> type =
                         net.minecraftforge.registries.ForgeRegistries.ENTITY_TYPES.getValue(loc);
                 if (type == null) {
-                    if (COMMON.debugLogging != null && COMMON.debugLogging.get()) {
-                        SoundAttractMod.LOGGER.debug("investigateProjectileIds: unknown entity type '{}'", idStr);
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.ARROW_INVESTIGATION)) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.ARROW_INVESTIGATION)) {
+                            SoundAttractMod.LOGGER.debug("investigateProjectileIds: unknown entity type '{}'", idStr);
+                        }
                     }
                     continue;
                 }
@@ -1392,7 +1450,7 @@ public class SoundAttractConfig {
 
                 String mobIdString = parts[1].trim();
                 net.minecraft.advancements.critereon.EntityPredicate.Builder predicateBuilder = net.minecraft.advancements.critereon.EntityPredicate.Builder.entity();
-                
+
                 if (!mobIdString.isEmpty() && !mobIdString.equals("*")) {
                     mobId = net.minecraft.resources.ResourceLocation.tryParse(mobIdString);
                     if (mobId != null) {
@@ -1453,7 +1511,7 @@ public class SoundAttractConfig {
                         }
                     }
                 }
-                
+
 
                 com.example.soundattract.config.MobProfile2 profile = new com.example.soundattract.config.MobProfile2(
                     profileName,
@@ -1464,7 +1522,7 @@ public class SoundAttractConfig {
                 );
 
                 tmpMobProfiles.add(profile);
-                if (COMMON != null && COMMON.debugLogging != null && COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_ATTRACTION)) {
                     SoundAttractMod.LOGGER.info("Successfully parsed and cached LEGACY mob profile: {}", profileName);
                 }
             }
@@ -1481,9 +1539,9 @@ public class SoundAttractConfig {
                 merged.addAll(tmpMobProfiles);
                 merged.addAll(DP_MOB_PROFILES_CACHE);
             }
-            SPECIAL_MOB_PROFILES_CACHE = merged;
+            SPECIAL_MOB_PROFILES_CACHE = List.copyOf(merged);
         } else {
-            SPECIAL_MOB_PROFILES_CACHE = tmpMobProfiles;
+            SPECIAL_MOB_PROFILES_CACHE = List.copyOf(tmpMobProfiles);
         }
 
         List<com.example.soundattract.config.PlayerProfile2> tmpPlayerProfiles = new ArrayList<>();
@@ -1506,7 +1564,7 @@ public class SoundAttractConfig {
                 String nbtMatcherString = parts[1].trim();
                 java.util.Map<PlayerStance, Double> detectionOverrides = new java.util.HashMap<>();
                 net.minecraft.advancements.critereon.EntityPredicate.Builder predicateBuilder = net.minecraft.advancements.critereon.EntityPredicate.Builder.entity();
-                
+
                 if (!nbtMatcherString.isEmpty()) {
                      try {
                         net.minecraft.nbt.CompoundTag nbtMatcher = net.minecraft.nbt.TagParser.parseTag(nbtMatcherString);
@@ -1542,7 +1600,7 @@ public class SoundAttractConfig {
                     java.util.Optional.of(com.example.soundattract.config.ScentVisibilityConfig.DEFAULT)
                 );
                 tmpPlayerProfiles.add(profile);
-                if (COMMON != null && COMMON.debugLogging != null && COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info("Successfully parsed and cached LEGACY player profile: {}", profileName);
                 }
             }
@@ -1555,9 +1613,9 @@ public class SoundAttractConfig {
                 mergedPlayers.addAll(tmpPlayerProfiles);
                 mergedPlayers.addAll(DP_PLAYER_PROFILES_CACHE);
             }
-            SPECIAL_PLAYER_PROFILES_CACHE = mergedPlayers;
+            SPECIAL_PLAYER_PROFILES_CACHE = List.copyOf(mergedPlayers);
         } else {
-            SPECIAL_PLAYER_PROFILES_CACHE = tmpPlayerProfiles;
+            SPECIAL_PLAYER_PROFILES_CACHE = List.copyOf(tmpPlayerProfiles);
         }
 
         parseAndCachePlayerActionConfig();
@@ -1568,7 +1626,7 @@ public class SoundAttractConfig {
         com.example.soundattract.event.ScentEvents.reinitializeCaches();
         com.example.soundattract.pathfinding.PathTaskScheduler.reinitializeCaches();
 
-        if (COMMON != null && COMMON.debugLogging != null && COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.DATAPACK_RELOAD)) {
             SoundAttractMod.LOGGER.info(
                     "SoundAttractConfig: Baked config. {} special mob profiles loaded. {} special player profiles loaded. {} sound defaults. {} whitelist.",
                     SPECIAL_MOB_PROFILES_CACHE.size(),
@@ -1599,7 +1657,7 @@ public class SoundAttractConfig {
         }
 
         if (QuantifiedCacheCompat.isUsable()) {
-            long staggerTicks = Math.abs(mob.getUUID().getLeastSignificantBits() % 20); 
+            long staggerTicks = Math.abs(mob.getUUID().getLeastSignificantBits() % 20);
             String key = new StringBuilder(96)
                 .append(mob.getUUID().toString()).append('|')
                 .append(SPECIAL_MOB_PROFILES_CACHE.size())

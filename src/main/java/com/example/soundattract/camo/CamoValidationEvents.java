@@ -18,7 +18,7 @@ public class CamoValidationEvents {
     @SubscribeEvent
     public static void onRenderLivingPost(RenderLivingEvent.Post<?, ?> event) {
         if (!(event.getEntity() instanceof Player player)) return;
-        
+
         if (player != Minecraft.getInstance().player) return;
 
         for (EquipmentSlot slot : EquipmentSlot.values()) {
@@ -28,11 +28,11 @@ public class CamoValidationEvents {
             if (stack.isEmpty()) continue;
 
             if (stack.hasTag() && (stack.getTag().contains("soundattract:CamoLayers") || stack.getTag().contains("soundattract:CamoStrength"))) {
-                
+
                 if (!ArmorValidationTracker.wasSlotValidated(player, slot)) {
-                    
+
                     SoundAttractNetwork.INSTANCE.sendToServer(new PacketCamoRemoval(slot));
-                    
+
                     stack.getTag().remove("soundattract:CamoLayers");
                     stack.getTag().remove("soundattract:CamoStrength");
                     stack.getTag().remove("soundattract:CamoColor");

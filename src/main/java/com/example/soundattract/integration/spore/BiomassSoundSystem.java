@@ -2,53 +2,64 @@ package com.example.soundattract.integration.spore;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.fml.ModList;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
-/**
- * Advanced Spore Integration: Deluge of Sound (Biomass Sound Pressure System).
- * 
- * This system tracks 'Sound Pressure' (accumulated weight) in regions of the biomass.
- * High sound pressure triggers a 'Hive Alert', summoning reinforcements and alerting Vigil entities.
- * 
- * Safety: Uses ConcurrentHashMap for thread safety and periodic cleanup for memory management.
- * Non-mandatory: Logic is guarded by ModList checks and Spore-specific implementation is 
- * delegated to BiomassSoundHandler to avoid NoClassDefFoundError.
- */
 public class BiomassSoundSystem {
     private static final double ALERT_THRESHOLD = 500.0;
-    
-    private static final Map<BlockPos, Double> pressureMap = new ConcurrentHashMap<>();
+    private static final int MAX_PRESSURE_REGIONS = 8192;
+
+    private record PressureKey(ResourceLocation dimension, BlockPos region) {}
+
+    private static final Cache<PressureKey, Double> pressureMap = Caffeine.newBuilder()
+            .maximumSize(MAX_PRESSURE_REGIONS)
+            .expireAfterAccess(10, TimeUnit.MINUTES)
+            .build();
     private static int cleanupTimer = 0;
 
-    /**
-     * Called by BiomassSoundHandler only if Spore is loaded.
-     */
+
     public static void processTick(ServerLevel level) {
+        if (level == null) {
+            return;
+        }
         cleanupTimer++;
-        if (cleanupTimer >= 100) { 
+        if (cleanupTimer >= 100) {
             cleanupTimer = 0;
-            pressureMap.replaceAll((pos, weight) -> weight * 0.8);
-            pressureMap.values().removeIf(weight -> weight < 1.0);
+            pressureMap.asMap().replaceAll((pos, weight) -> weight * 0.8);
+            pressureMap.asMap().values().removeIf(weight -> weight < 1.0);
         }
     }
 
-    /**
-     * Records sound weight in a specific area and checks for Hive Alerts.
-     */
+
     public static void recordBiomassSound(ServerLevel level, BlockPos pos, double weight) {
-        if (!ModList.get().isLoaded("spore")) return;
+        if (level == null || pos == null || !Double.isFinite(weight)
+                || !ModList.get().isLoaded("spore")) return;
 
         BlockPos region = new BlockPos((pos.getX() >> 4) << 4, (pos.getY() >> 4) << 4, (pos.getZ() >> 4) << 4);
-        
-        double currentPressure = pressureMap.merge(region, weight, Double::sum);
+        PressureKey key = new PressureKey(level.dimension().location(), region);
+        double currentPressure = pressureMap.asMap().merge(key, weight, Double::sum);
 
         if (currentPressure > ALERT_THRESHOLD) {
             triggerHiveAlert(level, pos);
-            pressureMap.put(region, 0.0); 
+            pressureMap.put(key, 0.0);
         }
+    }
+
+    public static void clearLevel(ServerLevel level) {
+        if (level == null) {
+            return;
+        }
+        ResourceLocation dimension = level.dimension().location();
+        pressureMap.asMap().keySet().removeIf(key -> key != null && dimension.equals(key.dimension()));
+    }
+
+    public static void clear() {
+        pressureMap.invalidateAll();
+        cleanupTimer = 0;
     }
 
     private static void triggerHiveAlert(ServerLevel level, BlockPos pos) {

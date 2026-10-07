@@ -1,10 +1,12 @@
 package com.example.soundattract.integration.csgrenades;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.resources.ResourceLocation;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -12,14 +14,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 public class CsGrenadesTracker {
 
-    private static final Map<UUID, SmokeEntry> ACTIVE_SMOKE = new ConcurrentHashMap<>();
-    private static final Map<UUID, FireEntry> ACTIVE_FIRE = new ConcurrentHashMap<>();
-    private static volatile List<SmokeEntry> SMOKE_SNAPSHOT = new CopyOnWriteArrayList<>();
-    private static volatile List<FireEntry> FIRE_SNAPSHOT = new CopyOnWriteArrayList<>();
+    private record GrenadeKey(ResourceLocation dimension, UUID entityId) {}
+
+    private static final Map<GrenadeKey, SmokeEntry> ACTIVE_SMOKE = new ConcurrentHashMap<>();
+    private static final Map<GrenadeKey, FireEntry> ACTIVE_FIRE = new ConcurrentHashMap<>();
+
+
+    private static final Map<ResourceLocation, List<SmokeEntry>> SMOKE_SNAPSHOTS = new ConcurrentHashMap<>();
+    private static final Map<ResourceLocation, List<FireEntry>> FIRE_SNAPSHOTS = new ConcurrentHashMap<>();
 
     private static Method GET_GRENADE_TYPE_METHOD;
     private static Class<?> GRENADE_ENTITY_CLASS;
@@ -49,7 +54,7 @@ public class CsGrenadesTracker {
 
     @SuppressWarnings("unchecked")
     public static void scanAndRebuild(Level level, long currentTick, int smokeMaxAgeTicks) {
-        if (!CsGrenadesCompat.isLoaded()) {
+        if (level == null || !CsGrenadesCompat.isLoaded()) {
             return;
         }
         ensureReflection();
@@ -58,8 +63,8 @@ public class CsGrenadesTracker {
             return;
         }
 
-        ACTIVE_SMOKE.clear();
-        ACTIVE_FIRE.clear();
+        ACTIVE_FIRE.keySet().removeIf(key -> key != null && level.dimension().location().equals(key.dimension()));
+        ACTIVE_SMOKE.keySet().removeIf(key -> key != null && level.dimension().location().equals(key.dimension()));
 
         try {
             if (THROWABLE_ITEM_PROJECTILE_CLASS == null) {
@@ -71,25 +76,37 @@ public class CsGrenadesTracker {
             List<Entity> grenades = new ArrayList<>();
             java.util.Set<String> foundClasses = new java.util.HashSet<>();
             int throwableCount = 0;
-            for (Entity entity : level.getEntitiesOfClass(Entity.class, new AABB(-30000000, -30000000, -30000000, 30000000, 30000000, 30000000))) {
+            for (Entity entity : CsGrenadesEventHandler.trackedGrenadesSnapshot(level)) {
                 String className = entity.getClass().getName();
                 foundClasses.add(className);
                 if (className.contains("grenade") || className.contains("Grenade") ||
                     className.contains("csgrenade") || className.contains("pisquad")) {
-                    SoundAttractMod.LOGGER.debug("[CSGrenades] Found potential grenade: {} alive={}", className, entity.isAlive());
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                        SoundAttractMod.LOGGER.debug("[CSGrenades] Found potential grenade: {} alive={}", className, entity.isAlive());
+                    }
                 }
                 if (THROWABLE_ITEM_PROJECTILE_CLASS != null && THROWABLE_ITEM_PROJECTILE_CLASS.isInstance(entity)) {
                     throwableCount++;
                 }
                 if (GRENADE_ENTITY_CLASS.isInstance(entity) && entity.isAlive()) {
                     grenades.add(entity);
-                    SoundAttractMod.LOGGER.debug("[CSGrenades] Found grenade entity: {} type={}", className, entity.getType().getDescriptionId());
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                        SoundAttractMod.LOGGER.debug("[CSGrenades] Found grenade entity: {} type={}", className, entity.getType().getDescriptionId());
+                    }
                 }
             }
-            SoundAttractMod.LOGGER.debug("[CSGrenades] All entity classes in level: {}", foundClasses);
-            SoundAttractMod.LOGGER.debug("[CSGrenades] ThrowableItemProjectile count: {}", throwableCount);
-            SoundAttractMod.LOGGER.debug("[CSGrenades] GRENADE_ENTITY_CLASS = {}", GRENADE_ENTITY_CLASS != null ? GRENADE_ENTITY_CLASS.getName() : "null");
-            SoundAttractMod.LOGGER.debug("[CSGrenades] Tracker scan found {} grenades in level", grenades.size());
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                SoundAttractMod.LOGGER.debug("[CSGrenades] All entity classes in level: {}", foundClasses);
+            }
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                SoundAttractMod.LOGGER.debug("[CSGrenades] ThrowableItemProjectile count: {}", throwableCount);
+            }
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                SoundAttractMod.LOGGER.debug("[CSGrenades] GRENADE_ENTITY_CLASS = {}", GRENADE_ENTITY_CLASS != null ? GRENADE_ENTITY_CLASS.getName() : "null");
+            }
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                SoundAttractMod.LOGGER.debug("[CSGrenades] Tracker scan found {} grenades in level", grenades.size());
+            }
 
             for (Entity entity : grenades) {
                 UUID id = entity.getUUID();
@@ -99,18 +116,26 @@ public class CsGrenadesTracker {
                 switch (simpleName) {
                     case "SmokeGrenadeEntity" -> {
                         double smokeRadius = com.example.soundattract.config.SoundAttractConfig.COMMON.smokeCloudRadius.get();
-                        ACTIVE_SMOKE.put(id, new SmokeEntry(center, smokeRadius, currentTick));
-                        SoundAttractMod.LOGGER.debug("[CSGrenades] Tracker: smoke grenade at {} (radius {})", center, String.format("%.2f", smokeRadius));
+                        ACTIVE_SMOKE.put(new GrenadeKey(level.dimension().location(), id),
+                                new SmokeEntry(center, smokeRadius, currentTick));
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                            SoundAttractMod.LOGGER.debug("[CSGrenades] Tracker: smoke grenade at {} (radius {})", center, String.format("%.2f", smokeRadius));
+                        }
                     }
                     case "MolotovEntity", "IncendiaryEntity" -> {
                         double dangerRadius = com.example.soundattract.config.SoundAttractConfig.COMMON.fireFleeDangerRadius.get();
-                        ACTIVE_FIRE.put(id, new FireEntry(center, dangerRadius, currentTick));
-                        SoundAttractMod.LOGGER.debug("[CSGrenades] Tracker: fire grenade at {} (radius {})", center, String.format("%.2f", dangerRadius));
+                        ACTIVE_FIRE.put(new GrenadeKey(level.dimension().location(), id),
+                                new FireEntry(center, dangerRadius, currentTick));
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                            SoundAttractMod.LOGGER.debug("[CSGrenades] Tracker: fire grenade at {} (radius {})", center, String.format("%.2f", dangerRadius));
+                        }
                     }
                     case "FlashBangEntity", "HEGrenadeEntity", "DecoyGrenadeEntity" -> {
                     }
                     default -> {
-                        SoundAttractMod.LOGGER.debug("[CSGrenades] Tracker: unhandled grenade subclass '{}'", simpleName);
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                            SoundAttractMod.LOGGER.debug("[CSGrenades] Tracker: unhandled grenade subclass '{}'", simpleName);
+                        }
                     }
                 }
             }
@@ -118,35 +143,44 @@ public class CsGrenadesTracker {
             SoundAttractMod.LOGGER.warn("[CSGrenades] Error scanning CS Grenades: {}", e.getMessage(), e);
         }
 
-        SMOKE_SNAPSHOT = new CopyOnWriteArrayList<>(ACTIVE_SMOKE.values());
-        FIRE_SNAPSHOT = new CopyOnWriteArrayList<>(ACTIVE_FIRE.values());
-        SoundAttractMod.LOGGER.debug("[CSGrenades] Tracker scan complete: {} smoke, {} fire entries", SMOKE_SNAPSHOT.size(), FIRE_SNAPSHOT.size());
+        ResourceLocation dimension = level.dimension().location();
+        SMOKE_SNAPSHOTS.put(dimension, ACTIVE_SMOKE.entrySet().stream()
+                .filter(entry -> entry.getKey() != null && dimension.equals(entry.getKey().dimension()))
+                .map(Map.Entry::getValue).toList());
+        FIRE_SNAPSHOTS.put(dimension, ACTIVE_FIRE.entrySet().stream()
+                .filter(entry -> entry.getKey() != null && dimension.equals(entry.getKey().dimension()))
+                .map(Map.Entry::getValue).toList());
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+        SoundAttractMod.LOGGER.debug("[CSGrenades] Tracker scan complete: {} smoke, {} fire entries",
+                SMOKE_SNAPSHOTS.get(dimension).size(), FIRE_SNAPSHOTS.get(dimension).size());
+        }
     }
 
-    public static boolean smokeBlocksRay(Vec3 from, Vec3 to, int smokeMaxAgeTicks, long currentTick) {
-        if (SMOKE_SNAPSHOT.isEmpty()) {
+    public static boolean smokeBlocksRay(Level level, Vec3 from, Vec3 to, int smokeMaxAgeTicks, long currentTick) {
+        List<SmokeEntry> snapshot = level == null ? List.of() : SMOKE_SNAPSHOTS.getOrDefault(level.dimension().location(), List.of());
+        if (from == null || to == null || snapshot.isEmpty()) {
             return false;
         }
         double smokeRadius = com.example.soundattract.config.SoundAttractConfig.COMMON.smokeCloudRadius.get();
-        for (SmokeEntry smoke : SMOKE_SNAPSHOT) {
+        for (SmokeEntry smoke : snapshot) {
             if ((currentTick - smoke.tickCreated) > smokeMaxAgeTicks) {
                 continue;
             }
             if (SmokeLosSuppression.blocksRay(from, to, smoke.center, smokeRadius)) {
-                SoundAttractMod.LOGGER.debug("[CSGrenades] Smoke blocked LOS: from {} to {}", from, to);
                 return true;
             }
         }
         return false;
     }
 
-    public static Vec3 nearestActiveFire(Vec3 mobPos, int fireMaxAgeTicks, long currentTick) {
-        if (FIRE_SNAPSHOT.isEmpty()) {
+    public static Vec3 nearestActiveFire(Level level, Vec3 mobPos, int fireMaxAgeTicks, long currentTick) {
+        List<FireEntry> snapshot = level == null ? List.of() : FIRE_SNAPSHOTS.getOrDefault(level.dimension().location(), List.of());
+        if (mobPos == null || snapshot.isEmpty()) {
             return null;
         }
         Vec3 nearest = null;
         double nearestDistSq = Double.MAX_VALUE;
-        for (FireEntry fire : FIRE_SNAPSHOT) {
+        for (FireEntry fire : snapshot) {
             if ((currentTick - fire.tickCreated) > fireMaxAgeTicks) {
                 continue;
             }
@@ -162,7 +196,18 @@ public class CsGrenadesTracker {
     public static void clear() {
         ACTIVE_SMOKE.clear();
         ACTIVE_FIRE.clear();
-        SMOKE_SNAPSHOT = new CopyOnWriteArrayList<>();
-        FIRE_SNAPSHOT = new CopyOnWriteArrayList<>();
+        SMOKE_SNAPSHOTS.clear();
+        FIRE_SNAPSHOTS.clear();
+    }
+
+    public static void clearLevel(Level level) {
+        if (level == null) {
+            return;
+        }
+        ResourceLocation dimension = level.dimension().location();
+        ACTIVE_SMOKE.keySet().removeIf(key -> key != null && dimension.equals(key.dimension()));
+        ACTIVE_FIRE.keySet().removeIf(key -> key != null && dimension.equals(key.dimension()));
+        SMOKE_SNAPSHOTS.remove(dimension);
+        FIRE_SNAPSHOTS.remove(dimension);
     }
 }

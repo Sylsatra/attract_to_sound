@@ -7,7 +7,6 @@ public class GunsConfig {
     public static final ForgeConfigSpec.Builder BUILDER = new ForgeConfigSpec.Builder();
     public static final ForgeConfigSpec SPEC;
 
-
     public static final ForgeConfigSpec.BooleanValue ENABLE_TACZ_INTEGRATION;
     public static final ForgeConfigSpec.DoubleValue TACZ_RELOAD_RANGE;
     public static final ForgeConfigSpec.DoubleValue TACZ_RELOAD_WEIGHT;
@@ -21,7 +20,6 @@ public class GunsConfig {
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> TACZ_MUZZLE_FLASH_REDUCTIONS;
     public static final ForgeConfigSpec.DoubleValue TACZ_ATTACHMENT_FLASH_REDUCTION_DEFAULT;
 
-
     public static final ForgeConfigSpec.BooleanValue ENABLE_POINT_BLANK_INTEGRATION;
     public static final ForgeConfigSpec.DoubleValue POINT_BLANK_RELOAD_RANGE;
     public static final ForgeConfigSpec.DoubleValue POINT_BLANK_RELOAD_WEIGHT;
@@ -31,7 +29,6 @@ public class GunsConfig {
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> POINT_BLANK_ATTACHMENT_SOUND_REDUCTIONS;
     public static final ForgeConfigSpec.DoubleValue POINT_BLANK_ATTACHMENT_REDUCTION_DEFAULT;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> POINT_BLANK_MUZZLE_FLASH_REDUCTIONS;
-
 
     static {
         BUILDER.comment("Sound Attract Mod - Guns Configuration").push("guns");
@@ -86,12 +83,12 @@ public class GunsConfig {
                         "tacz:deagle_golden_long_barrel;20.0"
                 ), obj -> obj instanceof String && ((String) obj).contains(";"));
         TACZ_ATTACHMENT_REDUCTION_DEFAULT = BUILDER.defineInRange("taczAttachmentReductionDefault", 20.0, -300.0, 300.0);
-        
+
         GUNSHOT_BASE_DETECTION_RANGE = BUILDER.comment("Base visual detection range when gunshot occurs.")
                 .defineInRange("gunshotBaseDetectionRange", 128.0, 16.0, 512.0);
         GUNSHOT_DETECTION_DURATION_TICKS = BUILDER.comment("Duration of increased detection from gunshot (ticks).")
                 .defineInRange("gunshotDetectionDurationTicks", 60, 1, 200);
-        
+
         TACZ_MUZZLE_FLASH_REDUCTIONS = BUILDER.comment("Tacz attachment VISUAL FLASH reduction. Positive values decrease detection distance, negative values increase it. Format: 'modid:item;reduction'")
                 .defineList("taczMuzzleFlashReductions", java.util.Arrays.asList(
                         "tacz:muzzle_silencer_mirage;100.0",

@@ -6,7 +6,6 @@ import net.minecraft.resources.ResourceLocation;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class CamoMaterialRegistry {
 
@@ -19,12 +18,12 @@ public class CamoMaterialRegistry {
     }
     public record CategoryRules(float minTemp, float maxTemp, boolean waterSensitive) {}
 
-    private static final Map<ResourceLocation, CamoMaterialEntry> MATERIALS = new ConcurrentHashMap<>();
-    private static final Map<String, CategoryRules> CATEGORIES = new ConcurrentHashMap<>();
+    private static volatile Map<ResourceLocation, CamoMaterialEntry> MATERIALS = Map.of();
+    private static volatile Map<String, CategoryRules> CATEGORIES = Map.of();
 
     public static void parseConfig() {
-        MATERIALS.clear();
-        CATEGORIES.clear();
+        Map<ResourceLocation, CamoMaterialEntry> materials = new HashMap<>();
+        Map<String, CategoryRules> categories = new HashMap<>();
 
         List<? extends String> materialLines = StealthConfig.CAMOUFLAGE_MATERIALS.get();
         for (String line : materialLines) {
@@ -38,7 +37,7 @@ public class CamoMaterialRegistry {
 
                     if (id != null && hex.startsWith("#") && hex.length() == 7) {
                         int color = Integer.parseInt(hex.substring(1), 16);
-                        MATERIALS.put(id, new CamoMaterialEntry(color, category, blocksScent));
+                        materials.put(id, new CamoMaterialEntry(color, category, blocksScent));
                     }
                 }
             } catch (Exception e) {
@@ -59,12 +58,15 @@ public class CamoMaterialRegistry {
                     float minTemp = Float.parseFloat(temps[0]);
                     float maxTemp = Float.parseFloat(temps[1]);
 
-                    CATEGORIES.put(category, new CategoryRules(minTemp, maxTemp, waterSensitive));
+                    categories.put(category, new CategoryRules(minTemp, maxTemp, waterSensitive));
                 }
             } catch (Exception e) {
                 SoundAttractMod.LOGGER.warn("[CamoRegistry] Failed to parse category line: {}", line);
             }
         }
+
+        MATERIALS = Map.copyOf(materials);
+        CATEGORIES = Map.copyOf(categories);
     }
 
     public static CamoMaterialEntry getMaterial(ResourceLocation id) {

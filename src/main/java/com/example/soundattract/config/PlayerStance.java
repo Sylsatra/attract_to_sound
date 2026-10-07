@@ -14,7 +14,7 @@ public enum PlayerStance implements net.minecraft.util.StringRepresentable {
 
     private final String configName;
 
-    private static final Map<String, PlayerStance> NAME_TO_STANCE_MAP = 
+    private static final Map<String, PlayerStance> NAME_TO_STANCE_MAP =
         Arrays.stream(values()).collect(Collectors.toMap(PlayerStance::getConfigName, Function.identity()));
 
     PlayerStance(String configName) {
@@ -26,7 +26,7 @@ public enum PlayerStance implements net.minecraft.util.StringRepresentable {
     }
 
     public static final net.minecraft.util.StringRepresentable.EnumCodec<PlayerStance> CODEC = net.minecraft.util.StringRepresentable.fromEnum(PlayerStance::values);
-    
+
     @Override
     public String getSerializedName() {
         return configName;

@@ -31,7 +31,7 @@ public abstract class ItemStackMixin {
                     } else {
                         System.err.println("[ItemStackMixin @RETURN] CRITICAL: ModEnchantments.CONCEAL RegistryObject is null!");
                     }
-                } else { 
+                } else {
                     if (SoundAttractMod.LOGGER != null) {
                         SoundAttractMod.LOGGER.warn("[ItemStackMixin @RETURN] ModEnchantments.CONCEAL is not present. This might be a loading order issue or registration failure.");
                     } else {

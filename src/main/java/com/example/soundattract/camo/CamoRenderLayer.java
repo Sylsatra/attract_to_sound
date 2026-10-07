@@ -42,7 +42,6 @@ public class CamoRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
             ResourceLocation skinTex = player.getSkinTextureLocation();
             PlayerModel<AbstractClientPlayer> model = this.getParentModel();
 
-
             float upperStrength = 0;
             for (CamoLayer layer : camo.getLayers()) {
                 upperStrength += layer.upperDurability();
@@ -53,7 +52,7 @@ public class CamoRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
                 ResourceLocation upperSmudge = CamoTextureGenerator.getOrCreateMaskedSmudge(seed, color, upperStrength, skinTex, lod.resolution(), erosion, humidity, temp);
                 if (upperSmudge != null) {
                     VertexConsumer upperConsumer = buffer.getBuffer(CamoRenderTypes.camoOverlay(upperSmudge));
-                    
+
                     boolean lLegVis = model.leftLeg.visible;
                     boolean rLegVis = model.rightLeg.visible;
                     boolean lPantsVis = model.leftPants.visible;
@@ -63,16 +62,15 @@ public class CamoRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
                     model.rightLeg.visible = false;
                     model.leftPants.visible = false;
                     model.rightPants.visible = false;
-    
+
                     model.renderToBuffer(poseStack, upperConsumer, packedLight, OverlayTexture.pack(0, 10), 1.0f, 1.0f, 1.0f, 1.0f);
-                    
+
                     model.leftLeg.visible = lLegVis;
                     model.rightLeg.visible = rLegVis;
                     model.leftPants.visible = lPantsVis;
                     model.rightPants.visible = rPantsVis;
                 }
             }
-
 
             float lowerStrength = 0;
             for (CamoLayer layer : camo.getLayers()) {
@@ -84,7 +82,7 @@ public class CamoRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
                 ResourceLocation lowerSmudge = CamoTextureGenerator.getOrCreateMaskedSmudge(seed, color, lowerStrength, skinTex, lod.resolution(), erosion, humidity, temp);
                 if (lowerSmudge != null) {
                     VertexConsumer lowerConsumer = buffer.getBuffer(CamoRenderTypes.camoOverlay(lowerSmudge));
-    
+
 
                     boolean headVisible = model.head.visible;
                     boolean hatVisible = model.hat.visible;
@@ -94,7 +92,7 @@ public class CamoRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
                     boolean rightArmVisible = model.rightArm.visible;
                     boolean leftSleeveVisible = model.leftSleeve.visible;
                     boolean rightSleeveVisible = model.rightSleeve.visible;
-    
+
                     model.head.visible = false;
                     model.hat.visible = false;
                     model.body.visible = false;
@@ -103,9 +101,9 @@ public class CamoRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
                     model.rightArm.visible = false;
                     model.leftSleeve.visible = false;
                     model.rightSleeve.visible = false;
-    
+
                     model.renderToBuffer(poseStack, lowerConsumer, packedLight, OverlayTexture.pack(0, 10), 1.0f, 1.0f, 1.0f, 1.0f);
-    
+
 
                     model.head.visible = headVisible;
                     model.hat.visible = hatVisible;

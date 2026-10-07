@@ -1,15 +1,21 @@
 package com.example.soundattract.los;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.event.FovEvents;
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.async.AsyncManager;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.tracking.SoundTracker;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -21,6 +27,7 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.Level;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.AABB;
@@ -30,13 +37,18 @@ import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.server.ServerStoppedEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
 @Mod.EventBusSubscriber(modid = SoundAttractMod.MOD_ID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public final class OptimizedLOS {
 
+
+    private static final int MAX_BATCH_BUDGET_PER_TICK = 4096;
+
     private static final double TIE_EPS = 1.0e-12;
+    private static final int MAX_BATCH_QUEUE = 4096;
 
     private static final AtomicInteger DEBUG_CANSEE_CALLS = new AtomicInteger(0);
     private static final AtomicInteger DEBUG_HASLOS_CALLS = new AtomicInteger(0);
@@ -49,7 +61,10 @@ public final class OptimizedLOS {
     private record LosPairEntry(boolean result, long gameTime) {
     }
 
-    private static final ConcurrentHashMap<LosPairKey, LosPairEntry> LOS_PAIR_CACHE = new ConcurrentHashMap<>();
+    private static final Cache<LosPairKey, LosPairEntry> LOS_PAIR_CACHE = Caffeine.newBuilder()
+            .maximumSize(65536)
+            .expireAfterWrite(10, java.util.concurrent.TimeUnit.SECONDS)
+            .build();
 
     private record LosRequest(Level level, Mob looker, Entity target, LosPairKey key) {
     }
@@ -57,8 +72,34 @@ public final class OptimizedLOS {
     private static final Queue<LosRequest> LOS_QUEUE = new ConcurrentLinkedQueue<>();
     private static final ConcurrentHashMap<LosPairKey, CompletableFuture<Boolean>> LOS_IN_FLIGHT = new ConcurrentHashMap<>();
     private static final AtomicInteger LOS_QUEUE_SIZE = new AtomicInteger(0);
+    private static final java.util.concurrent.atomic.AtomicBoolean ACCEPTING_REQUESTS = new java.util.concurrent.atomic.AtomicBoolean(true);
+    private static volatile MinecraftServer activeServer;
+    private static volatile MinecraftServer stoppedServer;
 
     private OptimizedLOS() {
+    }
+
+    @SubscribeEvent
+    public static void onServerStopped(ServerStoppedEvent event) {
+
+
+
+        List<CompletableFuture<Boolean>> pending;
+        synchronized (LOS_QUEUE) {
+            ACCEPTING_REQUESTS.set(false);
+            stoppedServer = event == null ? activeServer : event.getServer();
+            activeServer = null;
+            LOS_QUEUE.clear();
+            LOS_QUEUE_SIZE.set(0);
+            pending = new ArrayList<>(LOS_IN_FLIGHT.values());
+            LOS_IN_FLIGHT.clear();
+        }
+        for (CompletableFuture<Boolean> future : pending) {
+            if (future != null) {
+                future.complete(false);
+            }
+        }
+        LOS_PAIR_CACHE.invalidateAll();
     }
 
     public static boolean canSee(Mob looker, Entity target) {
@@ -85,7 +126,7 @@ public final class OptimizedLOS {
 
         boolean debug = false;
         try {
-            debug = SoundAttractConfig.COMMON.debugLogging.get();
+            debug = DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.PATHFINDING);
         } catch (Throwable ignored) {
         }
         if (debug) {
@@ -98,7 +139,7 @@ public final class OptimizedLOS {
                             Integer.valueOf(DEBUG_CANSEE_CALLS.get()),
                             Boolean.valueOf(enableOptimized),
                             Boolean.valueOf(enablePairCache),
-                            Integer.valueOf(LOS_PAIR_CACHE.size()),
+                            Integer.valueOf(LOS_PAIR_CACHE.asMap().size()),
                             Integer.valueOf(LOS_QUEUE_SIZE.get()),
                             Integer.valueOf(LOS_IN_FLIGHT.size()));
                 }
@@ -108,7 +149,7 @@ public final class OptimizedLOS {
         LosPairKey key = new LosPairKey(dim, looker.getId(), target.getId());
 
         if (enablePairCache) {
-            LosPairEntry existing = LOS_PAIR_CACHE.get(key);
+            LosPairEntry existing = LOS_PAIR_CACHE.getIfPresent(key);
             if (existing != null && (now - existing.gameTime()) <= 1L) {
                 return existing.result();
             }
@@ -133,11 +174,11 @@ public final class OptimizedLOS {
         if (enablePairCache) {
             LOS_PAIR_CACHE.put(key, new LosPairEntry(result, now));
             int maxEntries = Math.max(512, pairCacheMax);
-            if (LOS_PAIR_CACHE.size() > maxEntries) {
-                LOS_PAIR_CACHE.entrySet().removeIf(e -> (now - e.getValue().gameTime()) > 1L);
-                if (LOS_PAIR_CACHE.size() > maxEntries) {
-                    int toRemove = LOS_PAIR_CACHE.size() - maxEntries;
-                    java.util.Iterator<java.util.Map.Entry<LosPairKey, LosPairEntry>> it = LOS_PAIR_CACHE.entrySet().iterator();
+            if (LOS_PAIR_CACHE.asMap().size() > maxEntries) {
+                LOS_PAIR_CACHE.asMap().entrySet().removeIf(e -> (now - e.getValue().gameTime()) > 1L);
+                if (LOS_PAIR_CACHE.asMap().size() > maxEntries) {
+                    int toRemove = LOS_PAIR_CACHE.asMap().size() - maxEntries;
+                    java.util.Iterator<java.util.Map.Entry<LosPairKey, LosPairEntry>> it = LOS_PAIR_CACHE.asMap().entrySet().iterator();
                     for (int i = 0; i < toRemove && it.hasNext(); i++) {
                         it.next();
                         it.remove();
@@ -158,12 +199,15 @@ public final class OptimizedLOS {
         if (level == null || level.isClientSide() || level != target.level()) {
             return CompletableFuture.completedFuture(false);
         }
+        if (!ACCEPTING_REQUESTS.get()) {
+            return CompletableFuture.completedFuture(false);
+        }
 
         boolean enableBatching = false;
         int queueMax = 4096;
         try {
             enableBatching = SoundAttractConfig.COMMON.enableLosBatching.get();
-            queueMax = SoundAttractConfig.COMMON.losBatchQueueMaxSize.get();
+            queueMax = Math.min(MAX_BATCH_QUEUE, SoundAttractConfig.COMMON.losBatchQueueMaxSize.get());
         } catch (Throwable ignored) {
         }
 
@@ -187,19 +231,37 @@ public final class OptimizedLOS {
             return AsyncManager.callOnMain(() -> Boolean.valueOf(canSee(looker, target))).thenApply(Boolean::booleanValue);
         }
 
-        CompletableFuture<Boolean> created = new CompletableFuture<>();
-        CompletableFuture<Boolean> prior = LOS_IN_FLIGHT.putIfAbsent(key, created);
-        if (prior != null) {
-            return prior;
+        synchronized (LOS_QUEUE) {
+            if (!ACCEPTING_REQUESTS.get()) {
+                return CompletableFuture.completedFuture(false);
+            }
+            int boundedMax = Math.max(64, queueMax);
+            CompletableFuture<Boolean> existingInLock = LOS_IN_FLIGHT.get(key);
+            if (existingInLock != null) {
+                return existingInLock;
+            }
+            if (LOS_QUEUE_SIZE.get() >= boundedMax || LOS_IN_FLIGHT.size() >= boundedMax) {
+                return AsyncManager.callOnMain(() -> Boolean.valueOf(canSee(looker, target))).thenApply(Boolean::booleanValue);
+            }
+            CompletableFuture<Boolean> created = new CompletableFuture<>();
+            LOS_IN_FLIGHT.put(key, created);
+            LOS_QUEUE.add(new LosRequest(level, looker, target, key));
+            LOS_QUEUE_SIZE.incrementAndGet();
+            return created;
         }
-
-        LOS_QUEUE.add(new LosRequest(level, looker, target, key));
-        LOS_QUEUE_SIZE.incrementAndGet();
-        return created;
     }
 
     @SubscribeEvent
     public static void onServerTick(TickEvent.ServerTickEvent event) {
+        MinecraftServer tickServer = event == null ? null : event.getServer();
+        if (tickServer == null) return;
+        MinecraftServer knownServer = activeServer;
+        if (stoppedServer == tickServer || (knownServer != null && knownServer != tickServer)) {
+            return;
+        }
+        activeServer = tickServer;
+        stoppedServer = null;
+        ACCEPTING_REQUESTS.set(true);
         if (event.phase != TickEvent.Phase.END) return;
         resetMufflingBudget();
         if (LOS_QUEUE.isEmpty()) return;
@@ -209,7 +271,7 @@ public final class OptimizedLOS {
             budget = SoundAttractConfig.COMMON.losBatchBudgetPerTick.get();
         } catch (Throwable ignored) {
         }
-        budget = Math.max(1, budget);
+        budget = Math.min(MAX_BATCH_BUDGET_PER_TICK, Math.max(1, budget));
 
         for (int i = 0; i < budget; i++) {
             LosRequest req = LOS_QUEUE.poll();
@@ -251,7 +313,7 @@ public final class OptimizedLOS {
 
         boolean debug = false;
         try {
-            debug = SoundAttractConfig.COMMON.debugLogging.get();
+            debug = DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.PATHFINDING);
         } catch (Throwable ignored) {
         }
         if (debug) {
@@ -294,7 +356,7 @@ public final class OptimizedLOS {
     private static boolean hasLineOfSightDda(Level level, Vec3 start, Vec3 end, Mob looker) {
 
         try {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.PATHFINDING)) {
                 DEBUG_DDA_CALLS.incrementAndGet();
             }
         } catch (Throwable ignored) {
@@ -521,7 +583,7 @@ public final class OptimizedLOS {
         try {
             max = SoundAttractConfig.COMMON.maxMufflingRaycastsPerTick.get();
         } catch (Throwable ignored) {}
-        if (max <= 0) return true; 
+        if (max <= 0) return true;
         return MUFFLING_RAYCASTS_THIS_TICK.incrementAndGet() <= max;
     }
 

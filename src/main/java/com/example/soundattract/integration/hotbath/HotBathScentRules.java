@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.hotbath;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import net.minecraft.core.registries.Registries;
@@ -9,53 +11,59 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 public final class HotBathScentRules {
-    private static final Map<ResourceLocation, HotBathConfigParser.FluidModifier> SCENT_MODIFIERS = new ConcurrentHashMap<>();
-    private static final Map<ResourceLocation, HotBathConfigParser.CamoWashRate> CAMO_WASH_RATES = new ConcurrentHashMap<>();
-    private static final Map<ResourceLocation, HotBathConfigParser.CamoWashRate> SPLASH_WASH_RATES = new ConcurrentHashMap<>();
+    private static volatile Map<ResourceLocation, HotBathConfigParser.FluidModifier> scentModifiers = Map.of();
+    private static volatile Map<ResourceLocation, HotBathConfigParser.CamoWashRate> camoWashRates = Map.of();
+    private static volatile Map<ResourceLocation, HotBathConfigParser.CamoWashRate> splashWashRates = Map.of();
     private static volatile List<HotBathConfigParser.BiomeModifier> biomeModifiers = List.of();
 
     private HotBathScentRules() {}
 
     public static void rebuildFromConfig() {
-        SCENT_MODIFIERS.clear();
-        CAMO_WASH_RATES.clear();
-        SPLASH_WASH_RATES.clear();
+        Map<ResourceLocation, HotBathConfigParser.FluidModifier> newScentModifiers = new HashMap<>();
+        Map<ResourceLocation, HotBathConfigParser.CamoWashRate> newCamoWashRates = new HashMap<>();
+        Map<ResourceLocation, HotBathConfigParser.CamoWashRate> newSplashWashRates = new HashMap<>();
         List<HotBathConfigParser.BiomeModifier> biome = new ArrayList<>();
 
         if (SoundAttractConfig.COMMON == null) {
+            scentModifiers = Map.of();
+            camoWashRates = Map.of();
+            splashWashRates = Map.of();
             biomeModifiers = List.of();
             return;
         }
 
-        parseFluidList(SoundAttractConfig.COMMON.hotBathFluidScentModifiers.get(), SCENT_MODIFIERS);
-        parseFluidList(SoundAttractConfig.COMMON.hotBathCustomFluidScentModifiers.get(), SCENT_MODIFIERS);
-        parseWashList(SoundAttractConfig.COMMON.hotBathCamoWashRates.get(), CAMO_WASH_RATES);
-        parseWashList(SoundAttractConfig.COMMON.hotBathCustomFluidCamoWashRates.get(), CAMO_WASH_RATES);
-        parseWashList(SoundAttractConfig.COMMON.hotBathSplashCamoWashRates.get(), SPLASH_WASH_RATES);
+        parseFluidList(SoundAttractConfig.COMMON.hotBathFluidScentModifiers.get(), newScentModifiers);
+        parseFluidList(SoundAttractConfig.COMMON.hotBathCustomFluidScentModifiers.get(), newScentModifiers);
+        parseWashList(SoundAttractConfig.COMMON.hotBathCamoWashRates.get(), newCamoWashRates);
+        parseWashList(SoundAttractConfig.COMMON.hotBathCustomFluidCamoWashRates.get(), newCamoWashRates);
+        parseWashList(SoundAttractConfig.COMMON.hotBathSplashCamoWashRates.get(), newSplashWashRates);
 
         for (String raw : SoundAttractConfig.COMMON.hotBathBiomeScentModifiers.get()) {
             HotBathConfigParser.parseBiomeModifier(raw).ifPresentOrElse(
                     biome::add,
                     () -> warnInvalid("biome scent modifier", raw));
         }
+        scentModifiers = Map.copyOf(newScentModifiers);
+        camoWashRates = Map.copyOf(newCamoWashRates);
+        splashWashRates = Map.copyOf(newSplashWashRates);
         biomeModifiers = List.copyOf(biome);
     }
 
     public static HotBathConfigParser.FluidModifier scentModifier(ResourceLocation fluidId) {
-        return fluidId == null ? null : SCENT_MODIFIERS.get(fluidId);
+        return fluidId == null ? null : scentModifiers.get(fluidId);
     }
 
     public static HotBathConfigParser.CamoWashRate camoWashRate(ResourceLocation fluidId) {
-        return fluidId == null ? null : CAMO_WASH_RATES.get(fluidId);
+        return fluidId == null ? null : camoWashRates.get(fluidId);
     }
 
     public static HotBathConfigParser.CamoWashRate splashWashRate(ResourceLocation fluidId) {
-        return fluidId == null ? null : SPLASH_WASH_RATES.get(fluidId);
+        return fluidId == null ? null : splashWashRates.get(fluidId);
     }
 
     public static double biomeMultiplier(ResourceLocation fluidId, Level level, net.minecraft.core.BlockPos pos) {
@@ -95,7 +103,7 @@ public final class HotBathScentRules {
     }
 
     private static void warnInvalid(String kind, String raw) {
-        if (SoundAttractConfig.COMMON != null && SoundAttractConfig.COMMON.debugLogging != null && SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.HOT_BATH)) {
             SoundAttractMod.LOGGER.warn("[HotBathIntegration] Ignoring invalid {} entry '{}'", kind, raw);
         }
     }

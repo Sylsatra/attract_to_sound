@@ -1,5 +1,7 @@
 package com.example.soundattract.ai;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -35,12 +37,6 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.common.ForgeMod;
 import net.minecraftforge.event.ForgeEventFactory;
 
-/**
- * A modified version of EnhancedAI's BlockBreakerGoal. This goal makes a mob
- * break blocks to reach a specific BlockPos, not a LivingEntity. It is designed
- * to be a "specialist" goal, managed and activated by another goal (like
- * AttractionGoal) when the mob gets stuck.
- */
 public class BlockBreakerPosGoal extends Goal {
 
     private final Mob miner;
@@ -67,27 +63,23 @@ public class BlockBreakerPosGoal extends Goal {
         this.setFlags(EnumSet.of(Flag.LOOK, Flag.MOVE));
     }
 
-    /**
-     * This goal is managed externally by another goal (e.g. AttractionGoal). It
-     * can only be used if we have a valid destination and there are blocks in
-     * the way.
-     */
+
     @Override
     public boolean canUse() {
         if (!this.miner.level().getGameRules().getBoolean(GameRules.RULE_MOBGRIEFING)) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                 SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] canUse FAILED for {}: mobGriefing is false.", this.miner.getName().getString());
             }
             return false;
         }
         if (this.destinationPos == null) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                 SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] canUse FAILED for {}: destinationPos is null.", this.miner.getName().getString());
             }
             return false;
         }
         if (this.toolOnly && !(this.miner.getOffhandItem().getItem() instanceof DiggerItem)) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                 SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] canUse FAILED for {}: toolOnly is true, but no DiggerItem in offhand.", this.miner.getName().getString());
             }
             return false;
@@ -95,22 +87,19 @@ public class BlockBreakerPosGoal extends Goal {
 
         this.fillTargetBlocks();
         if (this.targetBlocks.isEmpty()) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                 SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] canUse FAILED for {}: fillTargetBlocks() found no blocks to break.", this.miner.getName().getString());
             }
             return false;
         }
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
             SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] canUse PASSED for {}. Target block: {}.", this.miner.getName().getString(), this.targetBlocks.get(0));
         }
         return true;
     }
 
-    /**
-     * Continue using the goal as long as there are blocks to break and we
-     * haven't reached the destination.
-     */
+
     @Override
     public boolean canContinueToUse() {
         if (this.targetBlocks.isEmpty() || this.destinationPos == null) {
@@ -121,11 +110,9 @@ public class BlockBreakerPosGoal extends Goal {
             return false;
         }
 
-
         if (this.miner.blockPosition().distSqr(this.destinationPos) < 4.0d) {
             return false;
         }
-
 
         return !this.miner.level().getBlockState(this.targetBlocks.get(0)).isAir();
     }
@@ -133,13 +120,13 @@ public class BlockBreakerPosGoal extends Goal {
     @Override
     public void start() {
         if (!this.targetBlocks.isEmpty()) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                 SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] STARTING for {}. Beginning to break {}.", this.miner.getName().getString(), this.targetBlocks.get(0));
             }
             initBlockBreak();
             this.miner.setAggressive(true);
         } else {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                 SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] Attempted to START for {}, but targetBlocks was empty.", this.miner.getName().getString());
             }
         }
@@ -147,7 +134,7 @@ public class BlockBreakerPosGoal extends Goal {
 
     @Override
     public void stop() {
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
             SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] STOPPING for {}.", this.miner.getName().getString());
         }
         if (!this.targetBlocks.isEmpty()) {
@@ -208,10 +195,7 @@ public class BlockBreakerPosGoal extends Goal {
         this.breakingTick = 0;
     }
 
-    /**
-     * This is the core modification. Instead of raycasting to a target entity's
-     * eyes, we raycast to the center of our destination BlockPos.
-     */
+
     private void fillTargetBlocks() {
         this.targetBlocks.clear();
         if (this.destinationPos == null) {
@@ -221,7 +205,7 @@ public class BlockBreakerPosGoal extends Goal {
         Vec3 destinationVec = Vec3.atCenterOf(this.destinationPos);
         int mobHeight = Mth.ceil(this.miner.getBbHeight());
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
             SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] fillTargetBlocks for {}: Raycasting from mob eyes to {}.", this.miner.getName().getString(), destinationVec);
         }
 
@@ -230,7 +214,7 @@ public class BlockBreakerPosGoal extends Goal {
             BlockHitResult rayTraceResult = this.miner.level().clip(new ClipContext(rayStart, destinationVec, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, this.miner));
 
             if (rayTraceResult.getType() == HitResult.Type.MISS) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                     SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] -> Raycast MISS. No blocks in the way.");
                 }
                 continue;
@@ -243,7 +227,7 @@ public class BlockBreakerPosGoal extends Goal {
                 continue;
             }
             if (hitPos.getY() > EnhancedAICompat.getMaxY()) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                     SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] -> FAILED check for {}: Block {} at Y={} is above maxY of {}.", this.miner.getName().getString(), state.getBlock().getName().getString(), hitPos.getY(), EnhancedAICompat.getMaxY());
                 }
                 continue;
@@ -251,34 +235,34 @@ public class BlockBreakerPosGoal extends Goal {
 
             double distance = this.miner.distanceToSqr(rayTraceResult.getLocation());
             if (distance > this.reachDistance * this.reachDistance) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                     SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] -> FAILED check for {}: Block {} is too far away (distSqr {} > {}).", this.miner.getName().getString(), state.getBlock().getName().getString(), distance, this.reachDistance * this.reachDistance);
                 }
                 continue;
             }
 
             if (state.hasBlockEntity() && EnhancedAICompat.shouldBlacklistTileEntities()) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                     SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] -> FAILED check for {}: Block {} is a blacklisted Tile Entity.", this.miner.getName().getString(), state.getBlock().getName().getString());
                 }
                 continue;
             }
 
             if (state.getDestroySpeed(this.miner.level(), hitPos) == -1) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                     SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] -> FAILED check for {}: Block {} is unbreakable (destroy speed -1).", this.miner.getName().getString(), state.getBlock().getName().getString());
                 }
                 continue;
             }
 
             if ((!EnhancedAICompat.isBlacklistAsWhitelist() && state.is(EnhancedAICompat.getBlockBlacklistTag())) || (EnhancedAICompat.isBlacklistAsWhitelist() && !state.is(EnhancedAICompat.getBlockBlacklistTag()))) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                     SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] -> FAILED check for {}: Block {} is in the blacklist/not in whitelist.", this.miner.getName().getString(), state.getBlock().getName().getString());
                 }
                 continue;
             }
 
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                 SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] -> SUCCESS: Found valid block to break: {} at {}.", state.getBlock().getName().getString(), hitPos);
             }
             this.targetBlocks.add(hitPos);
@@ -290,7 +274,6 @@ public class BlockBreakerPosGoal extends Goal {
     public boolean requiresUpdateEveryTick() {
         return true;
     }
-
 
     private int computeTickToBreak() {
         int canHarvestBlock = this.canHarvestBlock() ? 30 : 100;

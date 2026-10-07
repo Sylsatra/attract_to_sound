@@ -14,8 +14,10 @@ import net.minecraftforge.network.NetworkEvent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
+import io.netty.handler.codec.DecoderException;
 
 public class CamoSyncMessage {
+    private static final int MAX_LAYERS = 64;
     private final int entityId;
     private final List<CamoLayer> layers;
 
@@ -26,8 +28,16 @@ public class CamoSyncMessage {
 
     public static void encode(CamoSyncMessage msg, FriendlyByteBuf buf) {
         buf.writeInt(msg.entityId);
-        buf.writeInt(msg.layers.size());
-        for (CamoLayer layer : msg.layers) {
+        List<CamoLayer> safeLayers = new ArrayList<>(MAX_LAYERS);
+        if (msg.layers != null) {
+            for (CamoLayer layer : msg.layers) {
+                if (layer != null && safeLayers.size() < MAX_LAYERS) {
+                    safeLayers.add(layer);
+                }
+            }
+        }
+        buf.writeInt(safeLayers.size());
+        for (CamoLayer layer : safeLayers) {
             CompoundTag tag = layer.save();
             buf.writeNbt(tag);
         }
@@ -36,6 +46,9 @@ public class CamoSyncMessage {
     public static CamoSyncMessage decode(FriendlyByteBuf buf) {
         int entityId = buf.readInt();
         int size = buf.readInt();
+        if (size < 0 || size > MAX_LAYERS) {
+            throw new DecoderException("Invalid camouflage layer count: " + size);
+        }
         List<CamoLayer> layers = new ArrayList<>(size);
         for (int i = 0; i < size; i++) {
             CompoundTag tag = buf.readNbt();

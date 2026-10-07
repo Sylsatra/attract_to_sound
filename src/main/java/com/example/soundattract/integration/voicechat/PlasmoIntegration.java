@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.voicechat;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.network.SoundMessage;
 import com.example.soundattract.tracking.SoundTracker;
@@ -23,7 +25,7 @@ public class PlasmoIntegration implements AddonInitializer {
 
     @Override
     public void onAddonInitialize() {
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.VOICE_CHAT)) {
             SoundAttractMod.LOGGER.info("[PlasmoIntegration] onAddonInitialize: registering voice listener");
         }
 
@@ -111,7 +113,7 @@ public class PlasmoIntegration implements AddonInitializer {
                 net.minecraft.core.BlockPos pos = mcPlayer.blockPosition();
                 String dimString = mcPlayer.serverLevel().dimension().location().toString();
 
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.VOICE_CHAT)) {
                     SoundAttractMod.LOGGER.info("[PlasmoIntegration] VOICE_CHAT forwarded via Plasmo: player={} range={} dim={}",
                             mcPlayer.getGameProfile().getName(), range, mcPlayer.serverLevel().dimension().location());
                 }

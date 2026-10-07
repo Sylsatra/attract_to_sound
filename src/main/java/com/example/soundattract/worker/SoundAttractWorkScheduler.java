@@ -13,4 +13,10 @@ public interface SoundAttractWorkScheduler {
     List<WorkerScheduler.GroupComputeResult> drainGroupResults();
 
     List<WorkerScheduler.SoundScoreResult> drainSoundScoreResults();
+
+    default void clearResults() {
+    }
+
+    default void flushPendingSoundScores() {
+    }
 }

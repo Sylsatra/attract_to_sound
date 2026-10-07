@@ -1,5 +1,7 @@
 package com.example.soundattract.ai;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import java.util.EnumSet;
 
 import com.example.soundattract.runtime.DynamicScanCooldownManager;
@@ -102,12 +104,11 @@ public class FollowerEdgeRelayGoal extends Goal {
         return this.soundResultCache;
     }
 
-
-
     private void moveToThrottled(BlockPos dest, double speed, boolean force) {
         if (dest == null) return;
         if (force) {
-            this.mob.getNavigation().moveTo(dest.getX(), dest.getY(), dest.getZ(), speed);
+            com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(
+                    this.mob, net.minecraft.world.phys.Vec3.atCenterOf(dest), speed);
             this.lastIssuedNavTarget = dest;
             this.repathCooldown = REPATH_COOLDOWN_TICKS;
             return;
@@ -122,7 +123,8 @@ public class FollowerEdgeRelayGoal extends Goal {
         double distSq = dest.distSqr(this.mob.blockPosition());
         double thresholdSq = 4.0;
         if (destChanged || navDoneOrStuck || distSq > thresholdSq) {
-            this.mob.getNavigation().moveTo(dest.getX(), dest.getY(), dest.getZ(), speed);
+            com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(
+                    this.mob, net.minecraft.world.phys.Vec3.atCenterOf(dest), speed);
             this.lastIssuedNavTarget = dest;
             this.repathCooldown = REPATH_COOLDOWN_TICKS;
         }
@@ -130,6 +132,9 @@ public class FollowerEdgeRelayGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        if (LivingWallCoordinator.isControlled(this.mob)) {
+            return false;
+        }
         if (this.mob.isVehicle() || this.mob.isSleeping()) {
             return false;
         }
@@ -171,7 +176,7 @@ public class FollowerEdgeRelayGoal extends Goal {
         if (this.mob.getTarget() != null && this.mob.getTarget().isAlive()) {
             double threshold = SoundAttractConfig.COMMON.highSoundWeightTargetOverride.get();
             if (threshold > 0 && newSound.weight >= threshold && isEligibleForOverride()) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                     SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] Mob {} dropping target for high-weight sound ({}).", this.mob.getName().getString(), newSound.weight);
                 }
                 this.mob.setTarget(null);
@@ -196,7 +201,7 @@ public class FollowerEdgeRelayGoal extends Goal {
         this.cachedReturnLeader = null;
         this.returnLogCooldown = 0;
         this.raidScheduled = false;
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
             SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] START GOING_TO_SOUND: mob={} leader={} edgeMob={} deserter={} soundPos={} weight={}",
                     mob.getName().getString(),
                     (leader != null ? leader.getName().getString() : "null"),
@@ -210,6 +215,9 @@ public class FollowerEdgeRelayGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
+        if (LivingWallCoordinator.isControlled(this.mob)) {
+            return false;
+        }
         if (this.mob.getTarget() != null && this.mob.getTarget().isAlive()) {
             double threshold = SoundAttractConfig.COMMON.highSoundWeightTargetOverride.get();
             SoundTracker.SoundRecord bestNow = getCachedNearestSound();
@@ -225,13 +233,13 @@ public class FollowerEdgeRelayGoal extends Goal {
             return true;
         }
         if (!isMobEligible() || this.mob.isVehicle() || this.mob.isSleeping()) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                 SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] canContinueToUse -> FALSE (suppressed or ineligible) for mob {}.", mob.getName().getString());
             }
             return false;
         }
         if (this.targetSoundPos == null) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                 SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] canContinueToUse -> FALSE (targetSoundPos null) for mob {}.", mob.getName().getString());
             }
             return false;
@@ -242,20 +250,20 @@ public class FollowerEdgeRelayGoal extends Goal {
             boolean isDeserterHere = MobGroupManager.isDeserter(mob);
             if (isDeserterHere) {
 
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                     SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] Arrived at sound; deserter will NOT return. Ending goal for mob {}.", mob.getName().getString());
                 }
                 return false;
             }
 
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                 SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] Arrived at sound; holding to return for mob {}.", mob.getName().getString());
             }
             return true;
         }
         SoundTracker.SoundRecord bestSoundNow = getCachedNearestSound();
         if (bestSoundNow == null) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                 SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] canContinueToUse -> FALSE (no best sound now) for mob {}.", mob.getName().getString());
             }
             return false;
@@ -267,7 +275,7 @@ public class FollowerEdgeRelayGoal extends Goal {
         }
         double switchRatio = SoundAttractConfig.COMMON.soundSwitchRatio.get();
         if (bestSoundNow.weight > this.currentTargetWeight * switchRatio) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                 SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] canContinueToUse -> FALSE (switching to stronger sound {} > {}) for mob {}.",
                         String.format("%.2f", bestSoundNow.weight),
                         String.format("%.2f", this.currentTargetWeight),
@@ -287,7 +295,7 @@ public class FollowerEdgeRelayGoal extends Goal {
         if (this.mob.isSprinting()) this.mob.setSprinting(false);
         if (leader != mob && smartEdge && edgeMobState == EdgeMobState.GOING_TO_SOUND) {
             edgeMobState = EdgeMobState.RETURNING_TO_LEADER;
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                 SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] stop(): follower {} transitioning to RETURNING_TO_LEADER.", mob.getName().getString());
             }
             edgeArrivalTicks = 0;
@@ -303,20 +311,23 @@ public class FollowerEdgeRelayGoal extends Goal {
         this.lastIssuedNavTarget = null;
         this.repathCooldown = 0;
         this.highWeightOverrideActive = false;
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
             SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] stop(): mob {} cleanup complete (state reset).", mob.getName().getString());
         }
     }
 
     @Override
     public void tick() {
+        if (LivingWallCoordinator.isControlled(this.mob)) {
+            return;
+        }
 
         if (this.blockBreakerGoal != null && this.mob.goalSelector.getRunningGoals().anyMatch(g -> g.getGoal() == this.blockBreakerGoal)) {
             SoundTracker.SoundRecord bestPossibleSound = getCachedNearestSound();
             if (bestPossibleSound != null && this.cachedSound != null && !areSoundsEffectivelySame(bestPossibleSound, this.cachedSound)) {
                 double switchRatio = SoundAttractConfig.COMMON.soundSwitchRatio.get();
                 if (bestPossibleSound.weight > this.cachedSound.weight * switchRatio) {
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                         SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] {} found a better sound ({} > {}). Stopping block breaking.", this.mob.getName().getString(), bestPossibleSound.weight, this.cachedSound.weight);
                     }
                     BlockBreakerManager.scheduleRemove(this.mob, this.blockBreakerGoal);
@@ -333,7 +344,6 @@ public class FollowerEdgeRelayGoal extends Goal {
             }
             return;
         }
-
 
         if (this.edgeMobState != EdgeMobState.RETURNING_TO_LEADER) {
             SoundTracker.SoundRecord fresh = getCachedNearestSound();
@@ -373,7 +383,6 @@ public class FollowerEdgeRelayGoal extends Goal {
         boolean smartEdge = SoundAttractConfig.COMMON.edgeMobSmartBehavior.get();
         Mob leader = MobGroupManager.getLeader(mob);
 
-
         if (lastPos != null && mob.position().distanceToSqr(Vec3.atCenterOf(lastPos)) < 1.0) {
             stuckTicks++;
         } else {
@@ -387,7 +396,7 @@ public class FollowerEdgeRelayGoal extends Goal {
             lastPos = mob.blockPosition();
         }
         if (stuckTicks >= 40 && SoundAttractConfig.COMMON.enableBlockBreaking.get()) {
-            if (SoundAttractConfig.COMMON.debugLogging.get() && stuckTicks == 40) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS) && stuckTicks == 40) {
                 SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal DEBUG] {} truly stuck. isStuck(): {}", mob.getName().getString(), this.mob.getNavigation().isStuck());
             }
             if (this.blockBreakerGoal == null) {
@@ -403,7 +412,7 @@ public class FollowerEdgeRelayGoal extends Goal {
                         stuckTicks++;
                         if (stuckTicks >= 20 && SoundAttractConfig.COMMON.enableBlockBreaking.get()) {
                             if (this.blockBreakerGoal == null) {
-                                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                                     if (this.edgeMobState == EdgeMobState.RETURNING_TO_LEADER && destLeader != null) {
                                         SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] {} returning to leader {} but stuck. Deploying BlockBreakerPosGoal toward leader.", mob.getName().getString(), destLeader.getName().getString());
                                     } else {
@@ -431,22 +440,19 @@ public class FollowerEdgeRelayGoal extends Goal {
             }
         }
 
-
-
         boolean isDeserter = MobGroupManager.isDeserter(this.mob);
         if (this.edgeMobState != EdgeMobState.RETURNING_TO_LEADER && (!smartEdge || (leader == mob && !isDeserter))) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                 SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal DEBUG] Fallback direct move to sound for {} (leader==mob: {}, smartEdge: {}, deserter: {}).", mob.getName().getString(), leader == mob, smartEdge, isDeserter);
             }
             moveToThrottled(this.targetSoundPos, this.moveSpeed, false);
             return;
         }
 
-
         if (edgeMobState == null) {
             edgeMobState = EdgeMobState.GOING_TO_SOUND;
             moveToThrottled(this.targetSoundPos, this.moveSpeed, true);
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                 SoundAttractMod.LOGGER.info(
                         "Follower {} (leader: {}) starting to move to sound at {} (EdgeMobState: GOING_TO_SOUND)",
                         mob.getName().getString(),
@@ -479,7 +485,7 @@ public class FollowerEdgeRelayGoal extends Goal {
                                 this.mob.level().getGameTime()
                         );
                         raidScheduled = true;
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                             if (usedFallback) {
                                 SoundAttractMod.LOGGER.info(
                                         "[FollowerEdgeRelayGoal] {} consumed suppression signal and scheduled RAID for nearest leader {} at {} (fallback, no immediate relay).",
@@ -490,7 +496,7 @@ public class FollowerEdgeRelayGoal extends Goal {
                                         mob.getName().getString(), raidLeader.getName().getString(), this.targetSoundPos);
                             }
                         }
-                    } else if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    } else if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                         SoundAttractMod.LOGGER.info(
                                 "[FollowerEdgeRelayGoal] {} suppression signal but no suitable leader found to schedule RAID.",
                                 mob.getName().getString());
@@ -509,7 +515,7 @@ public class FollowerEdgeRelayGoal extends Goal {
                 this.cachedReturnLeader = chosenLeaderSupp;
                 edgeMobState = EdgeMobState.RETURNING_TO_LEADER;
                 this.lastIssuedNavTarget = null;
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                     if (this.cachedReturnLeader != null) {
                         SoundAttractMod.LOGGER.info(
                                 "[FollowerEdgeRelayGoal] {} suppression signal -> RETURNING_TO_LEADER (leader: {}).",
@@ -526,7 +532,7 @@ public class FollowerEdgeRelayGoal extends Goal {
                 return;
             }
             if (mob.position().distanceToSqr(Vec3.atCenterOf(targetSoundPos)) < getArrivalDistance() * getArrivalDistance()) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                     SoundAttractMod.LOGGER.info(
                             "Follower {} arrived at sound location {}. Waiting for {} ticks.",
                             mob.getName().getString(),
@@ -550,7 +556,7 @@ public class FollowerEdgeRelayGoal extends Goal {
                                 && !com.example.soundattract.ai.RaidManager.isRaidAdvancing(raidLeader)) {
                             com.example.soundattract.ai.RaidManager.scheduleRaid(raidLeader, this.targetSoundPos, this.mob.level().getGameTime());
                             raidScheduled = true;
-                            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                                 if (usedFallbackArr) {
                                     SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] {} scheduled RAID for nearest leader {} at {} (arrival-phase, no immediate relay).",
                                             mob.getName().getString(), raidLeader.getName().getString(), this.targetSoundPos);
@@ -559,13 +565,13 @@ public class FollowerEdgeRelayGoal extends Goal {
                                             mob.getName().getString(), raidLeader.getName().getString(), this.targetSoundPos);
                                 }
                             }
-                        } else if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        } else if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                             SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] {} arrival-phase but no suitable leader found to schedule RAID.", mob.getName().getString());
                         }
                     }
 
                     if (MobGroupManager.isDeserter(this.mob)) {
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                             SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] {} is a deserter; will NOT return after arrival. Ending goal.", mob.getName().getString());
                         }
                         targetSoundPos = null;
@@ -573,7 +579,6 @@ public class FollowerEdgeRelayGoal extends Goal {
                         cachedReturnLeader = null;
                         return;
                     }
-
 
                     this.mob.getNavigation().stop();
                     if (this.blockBreakerGoal != null) {
@@ -587,7 +592,7 @@ public class FollowerEdgeRelayGoal extends Goal {
                     this.cachedReturnLeader = chosenLeader;
                     edgeMobState = EdgeMobState.RETURNING_TO_LEADER;
                     this.lastIssuedNavTarget = null;
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                         if (this.cachedReturnLeader != null) {
                             SoundAttractMod.LOGGER.info(
                                     "Follower {} transitioning to RETURNING_TO_LEADER (leader: {}).",
@@ -607,7 +612,7 @@ public class FollowerEdgeRelayGoal extends Goal {
         } else if (edgeMobState == EdgeMobState.RETURNING_TO_LEADER) {
 
             if (MobGroupManager.isDeserter(this.mob)) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                     SoundAttractMod.LOGGER.info("[FollowerEdgeRelayGoal] {} is a deserter but entered RETURNING_TO_LEADER; aborting return.", mob.getName().getString());
                 }
                 if (this.mob.isSprinting()) this.mob.setSprinting(false);
@@ -624,7 +629,7 @@ public class FollowerEdgeRelayGoal extends Goal {
                 if (!this.mob.isSprinting()) this.mob.setSprinting(true);
                 double sprintMult = SoundAttractConfig.COMMON.groupSprintMultiplier.get();
                 moveToThrottled(returnLeader.blockPosition(), this.moveSpeed * sprintMult, false);
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                     if (returnLogCooldown <= 0) {
                         double distSq = mob.distanceToSqr(returnLeader);
                         boolean navDone = mob.getNavigation().isDone();
@@ -645,7 +650,7 @@ public class FollowerEdgeRelayGoal extends Goal {
 
                 double returnArrive = SoundAttractConfig.COMMON.leaderReturnArrivalDistance.get();
                 if (mob.distanceToSqr(returnLeader) < (returnArrive * returnArrive)) {
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                         SoundAttractMod.LOGGER.info(
                                 "Follower {} reached leader {}. Stopping edge relay goal (will re-evaluate).",
                                 mob.getName().getString(),
@@ -661,7 +666,7 @@ public class FollowerEdgeRelayGoal extends Goal {
                     return;
                 }
             } else {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
                     SoundAttractMod.LOGGER.info(
                             "Follower {} lost its leader while returning. Stopping edge relay goal.",
                             mob.getName().getString()
@@ -681,11 +686,7 @@ public class FollowerEdgeRelayGoal extends Goal {
         }
     }
 
-    /**
-     * Returns true if this mob qualifies for the high-sound-weight target override:
-     * - Must detect a sound at or above the configured weight threshold
-     * - Must NOT be in an active raid phase
-     */
+
     private boolean shouldOverrideTarget() {
         double threshold = SoundAttractConfig.COMMON.highSoundWeightTargetOverride.get();
         if (threshold <= 0) return false;
@@ -720,4 +721,3 @@ public class FollowerEdgeRelayGoal extends Goal {
                 && Math.abs(s1.weight - s2.weight) < 0.01;
     }
 }
-

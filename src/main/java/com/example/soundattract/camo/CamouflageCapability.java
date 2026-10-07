@@ -59,17 +59,12 @@ public class CamouflageCapability {
         }
     }
 
-    /**
-     * Returns an unmodifiable view of the layers.
-     * Use {@link #setLayers(List)} for bulk mutation.
-     */
+
     public List<CamoLayer> getLayers() {
         return Collections.unmodifiableList(layers);
     }
 
-    /**
-     * Replaces all layers atomically. Used by network sync.
-     */
+
     public void setLayers(List<CamoLayer> newLayers) {
         layers.clear();
         layers.addAll(newLayers);
@@ -97,7 +92,7 @@ public class CamouflageCapability {
 
     public float getVisualCamoStrength() {
         if (layers.isEmpty()) return 0.0f;
-        
+
         float totalDurability = 0;
         for (CamoLayer layer : layers) {
             totalDurability += (layer.upperDurability() + layer.lowerDurability()) / 2.0f;
@@ -107,10 +102,10 @@ public class CamouflageCapability {
 
     public double getScentBlockFactor() {
         if (layers.isEmpty()) return 0.0;
-        
+
         List<CamoLayer> scentLayers = layers.stream().filter(CamoLayer::blocksScent).toList();
         if (scentLayers.isEmpty()) return 0.0;
-        
+
         double sum = 0;
         for (CamoLayer layer : scentLayers) {
             sum += (layer.upperDurability() + layer.lowerDurability()) / 2.0f;
@@ -123,25 +118,24 @@ public class CamouflageCapability {
     public void applyMaterial(LivingEntity entity, CamoMaterialRegistry.CamoMaterialEntry entry, boolean isCreative) {
         long currentTick = entity.level().getGameTime();
         long seed = entity.getRandom().nextLong();
-        
+
         CamoUtil.ClimateData climate = CamoUtil.sampleClimate(entity);
         CamoLayer layer = entry.getLayer(currentTick, seed, climate);
-        
+
 
         boolean headEmpty = entity.getItemBySlot(EquipmentSlot.HEAD).isEmpty();
         boolean chestEmpty = entity.getItemBySlot(EquipmentSlot.CHEST).isEmpty();
         boolean legsEmpty = entity.getItemBySlot(EquipmentSlot.LEGS).isEmpty();
         boolean feetEmpty = entity.getItemBySlot(EquipmentSlot.FEET).isEmpty();
-        
+
         boolean hitUpper = headEmpty || chestEmpty;
         boolean hitLower = legsEmpty || feetEmpty;
-        
+
         if (hitUpper || hitLower) {
 
             CamoLayer skinLayer = new CamoLayer(layer.color(), layer.category(), hitUpper ? layer.upperDurability() : 0f, hitLower ? layer.lowerDurability() : 0f, layer.blocksScent(), layer.appliedTick(), layer.seed(), climate.erosion(), climate.humidity(), climate.temperature());
             addLayer(entity, skinLayer);
         }
-
 
         for (EquipmentSlot slot : EquipmentSlot.values()) {
             if (slot.getType() == EquipmentSlot.Type.ARMOR) {
@@ -154,9 +148,9 @@ public class CamouflageCapability {
             }
         }
 
-        entity.level().playSound(null, entity.getX(), entity.getY(), entity.getZ(), 
+        entity.level().playSound(null, entity.getX(), entity.getY(), entity.getZ(),
             SoundEvents.MUD_PLACE, SoundSource.PLAYERS, 1.0f, 1.0f);
-        
+
         sync(entity);
     }
 
@@ -164,15 +158,15 @@ public class CamouflageCapability {
         float gain = 0.1f;
         long seed = entity.level().random.nextLong();
         long time = entity.level().getGameTime();
-        
+
         boolean headEmpty = entity.getItemBySlot(EquipmentSlot.HEAD).isEmpty();
         boolean chestEmpty = entity.getItemBySlot(EquipmentSlot.CHEST).isEmpty();
         boolean legsEmpty = entity.getItemBySlot(EquipmentSlot.LEGS).isEmpty();
         boolean feetEmpty = entity.getItemBySlot(EquipmentSlot.FEET).isEmpty();
-        
+
         boolean hitUpper = headEmpty || chestEmpty;
         boolean hitLower = legsEmpty || feetEmpty;
-        
+
         if (hitUpper || hitLower) {
             CamoUtil.ClimateData climate = CamoUtil.sampleClimate(entity);
             addLayer(entity, new CamoLayer(0xCACACA, "snow", hitUpper ? gain : 0f, hitLower ? gain : 0f, true, time, seed, climate.erosion(), climate.humidity(), climate.temperature()));
@@ -199,7 +193,6 @@ public class CamouflageCapability {
         boolean washUpper = totalSplash || ((headEmpty || chestEmpty) && (CamoUtil.isSlotSubmerged(entity, EquipmentSlot.HEAD) || CamoUtil.isSlotSubmerged(entity, EquipmentSlot.CHEST)));
         boolean washLower = totalSplash || ((legsEmpty || feetEmpty) && (CamoUtil.isSlotSubmerged(entity, EquipmentSlot.LEGS) || CamoUtil.isSlotSubmerged(entity, EquipmentSlot.FEET)));
 
-
         for (EquipmentSlot slot : EquipmentSlot.values()) {
             if (slot.getType() == EquipmentSlot.Type.ARMOR) {
                 if (totalSplash || CamoUtil.isSlotSubmerged(entity, slot)) {
@@ -207,7 +200,6 @@ public class CamouflageCapability {
                 }
             }
         }
-
 
         if (washUpper || washLower) {
             List<CamoLayer> next = new ArrayList<>();
@@ -225,7 +217,7 @@ public class CamouflageCapability {
                 layers.addAll(next);
             }
         }
-        
+
         sync(entity);
     }
 
@@ -278,7 +270,7 @@ public class CamouflageCapability {
 
     public void tickDegradation(LivingEntity entity, Level level, StealthDetectionEvents.StealthPerfTier tier) {
         int interval = getCamoTickInterval(tier);
-        
+
         double tps = StealthDetectionEvents.getLastEstimatedTps();
         if (tps > 0 && tps < 18.0) {
             interval *= 2;
@@ -288,12 +280,12 @@ public class CamouflageCapability {
 
         float decayScale = 1.0f / Math.max(1, StealthConfig.MAX_CAMO_LAYERS.get());
         float baseDecay = ((float) interval / StealthConfig.BASE_CAMO_DURATION_TICKS.get()) * decayScale;
-        
+
         net.minecraft.core.BlockPos pos = entity.blockPosition();
         boolean inRain = level.isRainingAt(pos) && level.canSeeSky(pos);
-        
 
-        boolean lowerInWater = level.getFluidState(pos.offset(0, 0, 0)).is(net.minecraft.tags.FluidTags.WATER) 
+
+        boolean lowerInWater = level.getFluidState(pos.offset(0, 0, 0)).is(net.minecraft.tags.FluidTags.WATER)
                             || level.getFluidState(pos.offset(0, 1, 0)).is(net.minecraft.tags.FluidTags.WATER);
         boolean upperInWater = level.getFluidState(pos.offset(0, 2, 0)).is(net.minecraft.tags.FluidTags.WATER);
 
@@ -302,7 +294,6 @@ public class CamouflageCapability {
         float waterRate = StealthConfig.WATER_DEGRADATION_RATE.get().floatValue() * decayScale;
 
         boolean dirty = false;
-
 
         if (!layers.isEmpty()) {
             List<CamoLayer> nextLayers = new ArrayList<>();
@@ -333,22 +324,22 @@ public class CamouflageCapability {
 
                 float newUpper = Math.max(0, layer.upperDurability() - upperDecay);
                 float newLower = Math.max(0, layer.lowerDurability() - lowerDecay);
-                
+
                 if (newUpper > 0 || newLower > 0) {
                     nextLayers.add(new CamoLayer(layer.color(), layer.category(), newUpper, newLower, layer.blocksScent(), layer.appliedTick(), layer.seed(), layer.erosion(), layer.humidity(), layer.temperature()));
                 }
-                
+
                 if (newUpper != layer.upperDurability() || newLower != layer.lowerDurability()) {
                     dirty = true;
                 }
             }
-            
+
             if (dirty) {
                 layers.clear();
                 layers.addAll(nextLayers);
             }
         }
-        
+
 
         for (EquipmentSlot slot : EquipmentSlot.values()) {
             if (slot.getType() == EquipmentSlot.Type.ARMOR) {
@@ -377,19 +368,18 @@ public class CamouflageCapability {
                                 decay += StealthConfig.SPRINT_DEGRADATION_RATE.get().floatValue() * decayScale;
                             }
 
-
                             float currentDur = (layer.upperDurability() + layer.lowerDurability()) / 2.0f;
                             float newDur = Math.max(0, currentDur - decay);
-                            
+
                             if (newDur > 0) {
                                 nextList.add(new CamoLayer(layer.color(), layer.category(), newDur, newDur, layer.blocksScent(), layer.appliedTick(), layer.seed(), layer.erosion(), layer.humidity(), layer.temperature()).save());
                             }
-                            
+
                             if (newDur != currentDur) {
                                 armorChanged = true;
                             }
                         }
-                        
+
                         if (armorChanged) {
                             if (nextList.isEmpty()) {
                                 tag.remove("soundattract:CamoLayers");
@@ -397,7 +387,7 @@ public class CamouflageCapability {
                                 tag.put("soundattract:CamoLayers", nextList);
                             }
                         }
-                    } 
+                    }
                     else if (tag.contains("soundattract:CamoStrength")) {
                         float current = tag.getFloat("soundattract:CamoStrength");
                         float decay = slotSubmerged ? (waterRate + baseDecay) : baseDecay;
@@ -441,14 +431,12 @@ public class CamouflageCapability {
         layers.clear();
         layers.addAll(nextLayers);
 
-
         for (EquipmentSlot slot : EquipmentSlot.values()) {
             if (slot.getType() == EquipmentSlot.Type.ARMOR) {
                 ItemStack armorStack = entity.getItemBySlot(slot);
                 if (!armorStack.isEmpty() && armorStack.hasTag()) {
                     net.minecraft.nbt.CompoundTag tag = armorStack.getTag();
                     boolean changed = false;
-
 
                     if (tag.contains("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_LIST)) {
                         net.minecraft.nbt.ListTag list = tag.getList("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_COMPOUND);
@@ -463,13 +451,13 @@ public class CamouflageCapability {
                         if (nextList.size() != list.size()) {
                             changed = true;
                         }
-                        
+
                         if (nextList.isEmpty()) {
                             tag.remove("soundattract:CamoLayers");
                         } else {
                             tag.put("soundattract:CamoLayers", nextList);
                         }
-                    } 
+                    }
 
                     else if (tag.contains("soundattract:CamoStrength")) {
                         float current = tag.getFloat("soundattract:CamoStrength");

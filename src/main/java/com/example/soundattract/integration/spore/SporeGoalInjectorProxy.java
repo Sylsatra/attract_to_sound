@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.spore;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.Harbinger.Spore.Core.Seffects;
 import com.Harbinger.Spore.Sentities.BaseEntities.Infected;
 import com.Harbinger.Spore.Sentities.BaseEntities.Organoid;
@@ -84,7 +86,7 @@ public class SporeGoalInjectorProxy {
             infected.goalSelector.addGoal(3, new InfectedSoundRelayGoal(infected));
         }
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SPORE)) {
             SoundAttractMod.LOGGER.info("[SporeGoalInjector] Injected goals for Infected {} (alreadyHadAttraction={}, speed={})",
                     infected.getName().getString(), hasAttractionGoal, moveSpeed);
         }
@@ -92,7 +94,7 @@ public class SporeGoalInjectorProxy {
 
     private static void injectProtoGoals(Proto proto) {
         if (!IntegrationConfig.ENABLE_PROTO_SOUND_DEPLOYMENT.get()) return;
-        
+
         if (findAttractionGoal(proto) == null) {
             AttractionGoal biomassGoal = new AttractionGoal(proto, 0.0) {
                 @Override
@@ -114,12 +116,12 @@ public class SporeGoalInjectorProxy {
                 proto.goalSelector.addGoal(5, new com.example.soundattract.integration.spore.goals.ProtoNeuralSoundInfluenceGoal(proto));
             }
         }
-        
+
         if (IntegrationConfig.ENABLE_PROTO_PREDATORY_CREEP.get()) {
             proto.goalSelector.addGoal(6, new ProtoPredatoryCreepGoal(proto));
         }
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SPORE)) {
             SoundAttractMod.LOGGER.info("[SporeGoalInjector] Injected ProtoSoundDeploymentGoal and biomass-aware AttractionGoal for Proto {}",
                     proto.getName().getString());
         }
@@ -127,18 +129,16 @@ public class SporeGoalInjectorProxy {
 
     private static void injectVigilGoals(Vigil vigil) {
         if (!IntegrationConfig.ENABLE_PROTO_PREDATORY_CREEP.get()) return;
-        
+
         vigil.goalSelector.addGoal(2, new VigilSightedReporterGoal(vigil));
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SPORE)) {
             SoundAttractMod.LOGGER.info("[SporeGoalInjector] Injected VigilSightedReporterGoal for Vigil {}",
                     vigil.getName().getString());
         }
     }
 
-    /**
-     * Finds the AttractionGoal or LeaderAttractionGoal instance on a mob.
-     */
+
     public static void injectHiveTumorGoals(HiveTumor tumor) {
         if (tumor != null && IntegrationConfig.ENABLE_HARMONIC_FEAR.get()) {
             tumor.goalSelector.addGoal(4, new com.example.soundattract.integration.spore.goals.HiveTumorHarmonicFearGoal(tumor));
@@ -151,9 +151,7 @@ public class SporeGoalInjectorProxy {
         }
     }
 
-    /**
-     * Finds the current sound target position for a mob by checking its sound-tracking goals.
-     */
+
     public static BlockPos getActiveSoundTarget(Mob mob) {
         for (WrappedGoal wg : mob.goalSelector.getAvailableGoals()) {
             Goal goal = wg.getGoal();
@@ -167,9 +165,7 @@ public class SporeGoalInjectorProxy {
         return null;
     }
 
-    /**
-     * Finds the current sound weight for a mob by checking its sound-tracking goals.
-     */
+
     public static double getActiveSoundWeight(Mob mob) {
         for (WrappedGoal wg : mob.goalSelector.getAvailableGoals()) {
             Goal goal = wg.getGoal();
@@ -183,9 +179,7 @@ public class SporeGoalInjectorProxy {
         return -1.0;
     }
 
-    /**
-     * Finds the AttractionGoal or LeaderAttractionGoal instance on a mob.
-     */
+
     public static Goal findAttractionGoal(Mob mob) {
         for (WrappedGoal wg : mob.goalSelector.getAvailableGoals()) {
             Goal goal = wg.getGoal();
@@ -196,10 +190,7 @@ public class SporeGoalInjectorProxy {
         return null;
     }
 
-    /**
-     * Determines the appropriate attraction speed for a Spore mob.
-     * Stationary mobs like Organoids (Proto, Mound) get 0.0 speed.
-     */
+
     private static double getAttractionSpeed(Mob mob) {
         if (mob instanceof Organoid) {
             return 0.0;
@@ -211,21 +202,17 @@ public class SporeGoalInjectorProxy {
         return SoundAttractConfig.COMMON.mobMoveSpeed.get();
     }
 
-    /**
-     * Checks if a target should have their stealth bypassed for a specific looker.
-    */
+
     public static boolean shouldBypassStealth(Mob looker, LivingEntity target) {
         if (!IntegrationConfig.ENABLE_STEALTH_MARKER_BRIDGE.get()) return false;
-        
+
         if (looker instanceof Infected) {
             return target.hasEffect(Seffects.MARKER.get());
         }
         return false;
     }
 
-    /**
-     * Handles visibility modification based on MARKER.
-    */
+
     public static void handleVisibilityEvent(LivingEvent.LivingVisibilityEvent event) {
         if (!IntegrationConfig.ENABLE_STEALTH_MARKER_BRIDGE.get()) return;
 
@@ -239,16 +226,14 @@ public class SporeGoalInjectorProxy {
         }
     }
 
-    /**
-     * Accelerates the dissipation of ScentEntities near a stealthy player.
-     */
+
     public static void accelerateScentDissipation(LivingEntity entity, double radius, int acceleration) {
         if (!IntegrationConfig.ENABLE_SCENT_BLOCK_SUPPRESSION.get()) return;
 
         AABB area = entity.getBoundingBox().inflate(radius);
         List<ScentEntity> scents = entity.level().getEntitiesOfClass(ScentEntity.class, area);
 
-        for (ScentEntity scent : scents) {            
+        for (ScentEntity scent : scents) {
             int current = scent.getDissipate();
             scent.setDissipate(current + acceleration);
         }
@@ -271,7 +256,7 @@ public class SporeGoalInjectorProxy {
         private static void updateInfectedChunks(Proto proto, ProtoTerritory territory) {
             territory.infectedChunks.clear();
             ChunkPos start = new ChunkPos(proto.blockPosition());
-            
+
             Queue<ChunkPos> queue = new LinkedList<>();
             Set<ChunkPos> visited = new HashSet<>();
             Map<ChunkPos, Integer> distances = new HashMap<>();
@@ -286,7 +271,7 @@ public class SporeGoalInjectorProxy {
 
                 if (isChunkInfected(proto.level(), current)) {
                     territory.infectedChunks.add(current);
-                    
+
                     if (dist < 2) {
                         for (int dx = -1; dx <= 1; dx++) {
                             for (int dz = -1; dz <= 1; dz++) {
@@ -305,7 +290,7 @@ public class SporeGoalInjectorProxy {
         }
 
         private static boolean isChunkInfected(net.minecraft.world.level.Level level, ChunkPos chunk) {
-            AABB chunkBox = new AABB(chunk.getMinBlockX(), level.getMinBuildHeight(), chunk.getMinBlockZ(), 
+            AABB chunkBox = new AABB(chunk.getMinBlockX(), level.getMinBuildHeight(), chunk.getMinBlockZ(),
                                      chunk.getMaxBlockX(), level.getMaxBuildHeight(), chunk.getMaxBlockZ());
             List<Mound> mounds = level.getEntitiesOfClass(Mound.class, chunkBox);
             if (!mounds.isEmpty()) return true;
@@ -316,7 +301,7 @@ public class SporeGoalInjectorProxy {
                     int bx = chunk.getMinBlockX() + xOff;
                     int bz = chunk.getMinBlockZ() + zOff;
                     int by = level.getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz);
-                    
+
                     if (isBiomass(level.getBlockState(new BlockPos(bx, by, bz))) ||
                         isBiomass(level.getBlockState(new BlockPos(bx, by - 1, bz)))) {
                         return true;

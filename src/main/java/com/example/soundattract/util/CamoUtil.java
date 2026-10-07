@@ -1,5 +1,7 @@
 package com.example.soundattract.util;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.camo.CamoLayer;
 import com.example.soundattract.camo.CamouflageCapability;
@@ -44,7 +46,7 @@ public final class CamoUtil {
         try {
             inTag = new net.minecraft.world.item.ItemStack(item).is(DataDrivenTags.CAMOUFLAGE_ARMOR);
         } catch (Exception e) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                 SoundAttractMod.LOGGER.warn("[CamoUtil] Failed to check CAMOUFLAGE_ARMOR tag for {}: {}", id, e.getMessage());
             }
         }
@@ -62,17 +64,14 @@ public final class CamoUtil {
         }
     }
 
-    /**
-     * Aggregates all camouflage layers from both the skin capability and armor NBT.
-     */
+
     public static List<CamoLayer> getTotalCamoLayers(LivingEntity entity) {
         List<CamoLayer> total = new ArrayList<>();
-        
+
 
         entity.getCapability(CamouflageCapability.INSTANCE).ifPresent(cap -> {
             total.addAll(cap.getLayers());
         });
-
 
         for (EquipmentSlot slot : EquipmentSlot.values()) {
             if (slot.getType() == EquipmentSlot.Type.ARMOR) {
@@ -85,7 +84,7 @@ public final class CamoUtil {
                         for (int i = 0; i < list.size(); i++) {
                             total.add(CamoLayer.load(list.getCompound(i)));
                         }
-                    } 
+                    }
 
                     else if (tag.contains("soundattract:CamoStrength")) {
                         int color = tag.getInt("soundattract:CamoColor");
@@ -99,9 +98,7 @@ public final class CamoUtil {
         return total;
     }
 
-    /**
-     * Calculates the blended color of all active camouflage smudges.
-     */
+
     public static Optional<Integer> getBlendedCamoColor(LivingEntity entity) {
         List<CamoLayer> layers = getTotalCamoLayers(entity);
         if (layers.isEmpty()) return Optional.empty();
@@ -123,9 +120,7 @@ public final class CamoUtil {
         return Optional.of((r << 16) | (g << 8) | b);
     }
 
-    /**
-     * Calculates the "base" color of the entity (skin + armor dyes/config colors).
-     */
+
     public static int getEffectiveBaseColor(LivingEntity entity) {
         List<Integer> colors = new ArrayList<>();
         boolean onlyDyedLeather = SoundAttractConfig.COMMON.environmentalCamouflageOnlyDyedLeather.get();
@@ -153,7 +148,6 @@ public final class CamoUtil {
             }
         }
 
-
         if (colors.isEmpty()) {
             return 0x8D5932;
         }
@@ -168,9 +162,7 @@ public final class CamoUtil {
         return ((int)(totalR / n) << 16) | ((int)(totalG / n) << 8) | (int)(totalB / n);
     }
 
-    /**
-     * Calculates the combined strength (coverage) of all layers.
-     */
+
     public static float getCombinedCamoStrength(LivingEntity entity) {
         List<CamoLayer> layers = getTotalCamoLayers(entity);
         if (layers.isEmpty()) return 0.0f;
@@ -179,8 +171,6 @@ public final class CamoUtil {
         for (CamoLayer layer : layers) {
             totalDurability += layer.durability();
         }
-
-
 
         return Math.min(1.0f, totalDurability / 5.0f);
     }
@@ -191,10 +181,10 @@ public final class CamoUtil {
 
     public static void addLayerToStack(ItemStack stack, CamoLayer layer, net.minecraft.world.entity.EquipmentSlot slot) {
         if (stack.isEmpty()) return;
-        
+
         float upper = layer.upperDurability();
         float lower = layer.lowerDurability();
-        
+
         if (slot != null) {
             switch (slot) {
                 case HEAD:
@@ -209,7 +199,7 @@ public final class CamoUtil {
                     break;
             }
         }
-        
+
         CamoLayer splitLayer = new CamoLayer(layer.color(), layer.category(), upper, lower, layer.blocksScent(), layer.appliedTick(), layer.seed(), layer.erosion(), layer.humidity(), layer.temperature());
 
         net.minecraft.nbt.CompoundTag tag = stack.getOrCreateTag();
@@ -219,7 +209,7 @@ public final class CamoUtil {
         } else {
             list = new net.minecraft.nbt.ListTag();
             tag.put("soundattract:CamoLayers", list);
-            
+
             if (tag.contains("soundattract:CamoStrength")) {
                 float s = tag.getFloat("soundattract:CamoStrength");
                 int c = tag.getInt("soundattract:CamoColor");
@@ -230,7 +220,7 @@ public final class CamoUtil {
                 tag.remove("soundattract:CamoSeed");
             }
         }
-        
+
         list.add(splitLayer.save());
         int max = com.example.soundattract.config.separate.StealthConfig.MAX_CAMO_LAYERS.get();
         while (list.size() > max) {
@@ -271,13 +261,11 @@ public final class CamoUtil {
         return changed;
     }
 
-    /**
-     * Final color for perception based on BaseColor and CamoSmudgeColor.
-     */
+
     public static int getFinalPerceptionColor(LivingEntity entity) {
         int baseColor = getEffectiveBaseColor(entity);
         Optional<Integer> camoColorOpt = getBlendedCamoColor(entity);
-        
+
         if (camoColorOpt.isEmpty()) return baseColor;
 
         float strength = getCombinedCamoStrength(entity);
@@ -325,25 +313,23 @@ public final class CamoUtil {
         int g = (int) (totalG / totalWeight);
         int b = (int) (totalB / totalWeight);
         int color = (r << 16) | (g << 8) | b;
-        
+
         return new BlendedCamoData(Optional.of(color), Math.min(1.0f, totalWeight), lastSeed, lastErosion, lastHumidity, lastTemp);
     }
 
-    /**
-     * Helper to check if a specific armor slot's position is submerged in water for an entity.
-     */
+
     public static boolean isSlotSubmerged(LivingEntity entity, EquipmentSlot slot) {
         if (entity == null || entity.level() == null) return false;
-        
+
         net.minecraft.core.BlockPos pos = entity.blockPosition();
         net.minecraft.world.level.Level level = entity.level();
-        
+
         if (!level.isLoaded(pos)) return false;
 
         return switch (slot) {
             case FEET -> level.getFluidState(pos).is(net.minecraft.tags.FluidTags.WATER);
             case LEGS -> level.getFluidState(pos.offset(0, 1, 0)).is(net.minecraft.tags.FluidTags.WATER);
-            case CHEST -> level.getFluidState(pos.offset(0, 1, 0)).is(net.minecraft.tags.FluidTags.WATER) 
+            case CHEST -> level.getFluidState(pos.offset(0, 1, 0)).is(net.minecraft.tags.FluidTags.WATER)
                        || level.getFluidState(pos.offset(0, 2, 0)).is(net.minecraft.tags.FluidTags.WATER);
             case HEAD -> level.getFluidState(pos.offset(0, 2, 0)).is(net.minecraft.tags.FluidTags.WATER);
             default -> false;
@@ -354,23 +340,20 @@ public final class CamoUtil {
         public static final ClimateData DEFAULT = new ClimateData(0, 0, 0);
     }
 
-    /**
-     * Samples climate data (Erosion, Humidity, Temperature) at the given entity's position.
-     * Guarded against NPEs and server/client discrepancies.
-     */
+
     public static ClimateData sampleClimate(LivingEntity entity) {
         if (entity == null || entity.level() == null || entity.level().isClientSide) return ClimateData.DEFAULT;
-        
+
         try {
             if (entity.level() instanceof net.minecraft.server.level.ServerLevel serverLevel) {
                 net.minecraft.world.level.biome.Climate.Sampler sampler = serverLevel.getChunkSource().randomState().sampler();
                 net.minecraft.core.BlockPos pos = entity.blockPosition();
-                
+
                 net.minecraft.world.level.biome.Climate.TargetPoint target = sampler.sample(pos.getX(), pos.getY(), pos.getZ());
-                
+
                 return new ClimateData(
-                    target.erosion() / 10000.0f, 
-                    target.humidity() / 10000.0f, 
+                    target.erosion() / 10000.0f,
+                    target.humidity() / 10000.0f,
                     target.temperature() / 10000.0f
                 );
             }
@@ -379,4 +362,3 @@ public final class CamoUtil {
         return ClimateData.DEFAULT;
     }
 }
-

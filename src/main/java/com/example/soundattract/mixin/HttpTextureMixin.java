@@ -12,25 +12,17 @@ import com.example.soundattract.camo.CamoTextureGenerator;
 @Mixin(HttpTexture.class)
 public abstract class HttpTextureMixin extends SimpleTextureMixin {
 
-    /**
-     * Captures the skin NativeImage after it finishes downloading.
-     * Target names:
-     * - onLoadingFinished / loadCallback (Mojang)
-     * - onDownload (MCP/Mappings)
-     * - m_118010_ (Searge/Runtime)
-     */
+
     @Inject(
-        method = {"onLoadingFinished", "loadCallback", "onDownload", "m_118010_"}, 
-        at = @At("HEAD"), 
-        remap = false, 
+        method = {"onLoadingFinished", "loadCallback", "onDownload", "m_118010_"},
+        at = @At("HEAD"),
+        remap = false,
         require = 0
     )
     private void soundattract$onDownload(NativeImage img, CallbackInfo ci) {
         ResourceLocation loc = this.soundattract$getLocation();
         if (loc != null) {
-            NativeImage copy = new NativeImage(img.getWidth(), img.getHeight(), false);
-            copy.copyFrom(img);
-            CamoTextureGenerator.recordCapturedMask(loc, copy);
+            CamoTextureGenerator.recordCapturedMaskCopy(loc, img);
         }
     }
 }

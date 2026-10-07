@@ -39,11 +39,11 @@ public class DelusionareSoundAttackGoal extends Goal {
     public void tick() {
         Level level = delusionare.level();
         double threshold = IntegrationConfig.DELUGE_OF_SOUND_WEIGHT_THRESHOLD.get();
-        
+
         List<SoundTracker.SoundRecord> sounds = SoundTracker.getNearbySounds(
-                level, 
-                level.dimension().location().toString(), 
-                delusionare.blockPosition(), 
+                level,
+                level.dimension().location().toString(),
+                delusionare.blockPosition(),
                 null
         );
 

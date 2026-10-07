@@ -53,7 +53,7 @@ public class SoundOverride {
         String rangeStr;
         String weightStr;
 
-        if (parts.length == 4) { 
+        if (parts.length == 4) {
             if (parts[0].trim().isEmpty() || parts[1].trim().isEmpty()) {
                 throw new IllegalArgumentException("Malformed SoundOverride entry '" + entry + "'. Namespace or path part is empty when 4 parts are provided.");
             }

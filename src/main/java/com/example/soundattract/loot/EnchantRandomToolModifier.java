@@ -25,7 +25,7 @@ public class EnchantRandomToolModifier extends EnchantRandomlyModifier {
     @Override
     protected boolean isValidItem(ItemStack stack) {
         Item item = stack.getItem();
-        return item instanceof TieredItem || 
+        return item instanceof TieredItem ||
                item instanceof BowItem ||
                item instanceof CrossbowItem ||
                item instanceof TridentItem ||

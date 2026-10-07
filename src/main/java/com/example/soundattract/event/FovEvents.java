@@ -1,17 +1,21 @@
 package com.example.soundattract.event;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.data.DataDrivenTags;
 import com.example.soundattract.integration.enhancedai.EnhancedAICompat;
 import com.example.soundattract.los.OptimizedLOS;
 import com.example.soundattract.quantified.QuantifiedCacheCompat;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.time.Duration;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvents;
@@ -33,6 +37,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraftforge.event.entity.living.LivingEvent;
 import net.minecraftforge.event.entity.living.LivingHurtEvent;
+import net.minecraftforge.event.server.ServerStoppedEvent;
 import net.minecraftforge.eventbus.api.Event;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -51,7 +56,7 @@ public class FovEvents {
 
     }
 
-    private static FovData CONFIG_DEFAULT_FOV = null;
+    private static volatile FovData CONFIG_DEFAULT_FOV = null;
 
     private static final Set<EntityType<?>> DEVELOPER_EXCLUSIONS = Set.of(
             EntityType.WARDEN,
@@ -59,8 +64,8 @@ public class FovEvents {
             EntityType.WITHER
     );
 
-    private static Map<ResourceLocation, FovData> CONFIG_FOV_CACHE = null;
-    private static Set<ResourceLocation> USER_EXCLUSION_CACHE = null;
+    private static volatile Map<ResourceLocation, FovData> CONFIG_FOV_CACHE = null;
+    private static volatile Set<ResourceLocation> USER_EXCLUSION_CACHE = null;
 
     private record LosCacheKey(String dim, int sx, int sy, int sz, int ex, int ey, int ez) {
     }
@@ -74,69 +79,84 @@ public class FovEvents {
     private record LosPairEntry(boolean result, long gameTime) {
     }
 
-    private static final ConcurrentHashMap<LosCacheKey, LosCacheEntry> LOS_CACHE = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<LosPairKey, LosPairEntry> LOS_PAIR_CACHE = new ConcurrentHashMap<>();
+    private static final Cache<LosCacheKey, LosCacheEntry> LOS_CACHE = Caffeine.newBuilder()
+            .maximumSize(65536)
+            .expireAfterWrite(Duration.ofSeconds(10))
+            .build();
+    private static final Cache<LosPairKey, LosPairEntry> LOS_PAIR_CACHE = Caffeine.newBuilder()
+            .maximumSize(65536)
+            .expireAfterWrite(Duration.ofSeconds(10))
+            .build();
+
+    @SubscribeEvent
+    public static void onServerStopped(ServerStoppedEvent event) {
+        LOS_CACHE.invalidateAll();
+        LOS_PAIR_CACHE.invalidateAll();
+    }
 
     private static void buildCaches() {
         double defaultH = SoundAttractConfig.COMMON.defaultHorizontalFov.get();
         double defaultV = SoundAttractConfig.COMMON.defaultVerticalFov.get();
-        CONFIG_DEFAULT_FOV = new FovData(defaultH, defaultV);
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        FovData defaultFov = new FovData(defaultH, defaultV);
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
             LOGGER.info("[FOV Config] Loaded default FOV: {} horizontal, {} vertical.", defaultH, defaultV);
         }
 
-        USER_EXCLUSION_CACHE = new HashSet<>();
+        Set<ResourceLocation> exclusions = new HashSet<>();
         List<? extends String> exclusionList = SoundAttractConfig.COMMON.fovExclusionList.get();
         for (String entry : exclusionList) {
             try {
                 ResourceLocation loc = ResourceLocation.tryParse(entry.trim());
                 if (loc != null) {
-                    USER_EXCLUSION_CACHE.add(loc);
+                    exclusions.add(loc);
                 } else {
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                         LOGGER.warn("[FOV Config] Malformed exclusion entry, skipping: " + entry);
                     }
                 }
             } catch (Exception e) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     LOGGER.error("[FOV Config] Failed to parse exclusion entry: " + entry, e);
                 }
             }
         }
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
-            LOGGER.info("[FOV Config] Loaded {} user-defined exclusions.", USER_EXCLUSION_CACHE.size());
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+            LOGGER.info("[FOV Config] Loaded {} user-defined exclusions.", exclusions.size());
         }
 
-        CONFIG_FOV_CACHE = new HashMap<>();
+        Map<ResourceLocation, FovData> overrides = new HashMap<>();
         List<? extends String> overrideList = SoundAttractConfig.COMMON.fovOverrides.get();
         for (String entry : overrideList) {
             try {
                 String[] parts = entry.split(",");
                 if (parts.length != 3) {
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                         LOGGER.warn("[FOV Config] Malformed FOV override, skipping: " + entry);
                     }
                     continue;
                 }
                 ResourceLocation mobId = ResourceLocation.tryParse(parts[0].trim());
                 if (mobId == null) {
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                         LOGGER.warn("[FOV Config] Malformed mob identifier in override, skipping: " + entry);
                     }
                     continue;
                 }
                 double h = Double.parseDouble(parts[1].trim());
                 double v = Double.parseDouble(parts[2].trim());
-                CONFIG_FOV_CACHE.put(mobId, new FovData(h, v));
+                overrides.put(mobId, new FovData(h, v));
             } catch (Exception e) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     LOGGER.error("[FOV Config] Failed to parse FOV override entry: " + entry, e);
                 }
             }
         }
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
-            LOGGER.info("[FOV Config] Loaded {} custom FOV overrides.", CONFIG_FOV_CACHE.size());
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+            LOGGER.info("[FOV Config] Loaded {} custom FOV overrides.", overrides.size());
         }
+        CONFIG_DEFAULT_FOV = defaultFov;
+        USER_EXCLUSION_CACHE = Set.copyOf(exclusions);
+        CONFIG_FOV_CACHE = Map.copyOf(overrides);
     }
 
     @SubscribeEvent
@@ -224,18 +244,11 @@ public class FovEvents {
     }
 
     public static boolean hasSmartLineOfSight(Mob looker, Entity target) {
-        if (com.example.soundattract.integration.csgrenades.CsGrenadesCompat.isLoaded()
-                && com.example.soundattract.config.SoundAttractConfig.COMMON.enableCsgrenadesIntegration.get()
-                && com.example.soundattract.config.SoundAttractConfig.COMMON.enableSmokeLosBlocking.get()) {
-            Vec3 eye = looker.getEyePosition();
-            Vec3 targetCenter = target.getBoundingBox().getCenter();
-            int maxAge = com.example.soundattract.config.SoundAttractConfig.COMMON.smokeLifetimeMaxTicks.get();
-            long currentTick = looker.level().getGameTime();
-            boolean smokeBlocks = com.example.soundattract.integration.csgrenades.CsGrenadesTracker.smokeBlocksRay(eye, targetCenter, maxAge, currentTick);
-            if (smokeBlocks) {
+        if (isSmokeBlockingLineOfSight(looker, target)) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.debug("[Smoke] Blocking LOS for mob {} to target {}", looker.getName().getString(), target.getName().getString());
-                return false;
             }
+            return false;
         }
         boolean enableOptimized = true;
         try {
@@ -246,6 +259,21 @@ public class FovEvents {
             return OptimizedLOS.canSee(looker, target);
         }
         return hasSmartLineOfSightLegacy(looker, target);
+    }
+
+    public static boolean isSmokeBlockingLineOfSight(Mob looker, Entity target) {
+        if (looker == null || target == null
+                || !com.example.soundattract.integration.csgrenades.CsGrenadesCompat.isLoaded()
+                || !com.example.soundattract.config.SoundAttractConfig.COMMON.enableCsgrenadesIntegration.get()
+                || !com.example.soundattract.config.SoundAttractConfig.COMMON.enableSmokeLosBlocking.get()) {
+            return false;
+        }
+        Vec3 eye = looker.getEyePosition();
+        Vec3 targetCenter = target.getBoundingBox().getCenter();
+        int maxAge = com.example.soundattract.config.SoundAttractConfig.COMMON.smokeLifetimeMaxTicks.get();
+        long currentTick = looker.level().getGameTime();
+        return com.example.soundattract.integration.csgrenades.CsGrenadesTracker.smokeBlocksRay(
+                looker.level(), eye, targetCenter, maxAge, currentTick);
     }
 
     private static boolean hasSmartLineOfSightLegacy(Mob looker, Entity target) {
@@ -264,7 +292,7 @@ public class FovEvents {
         final String dim = level.dimension().location().toString();
         if (useCache) {
             LosPairKey pairKey = new LosPairKey(dim, looker.getId(), target.getId());
-            LosPairEntry existing = LOS_PAIR_CACHE.get(pairKey);
+            LosPairEntry existing = LOS_PAIR_CACHE.getIfPresent(pairKey);
             if (existing != null && (now - existing.gameTime()) <= 1L) {
                 return existing.result();
             }
@@ -282,17 +310,17 @@ public class FovEvents {
         if (useCache) {
             LosPairKey pairKey = new LosPairKey(dim, looker.getId(), target.getId());
             LOS_PAIR_CACHE.put(pairKey, new LosPairEntry(result, now));
-            if (maxEntriesFinal > 0 && LOS_PAIR_CACHE.size() > maxEntriesFinal) {
-                java.util.Iterator<java.util.Map.Entry<LosPairKey, LosPairEntry>> it = LOS_PAIR_CACHE.entrySet().iterator();
+            if (maxEntriesFinal > 0 && LOS_PAIR_CACHE.asMap().size() > maxEntriesFinal) {
+                java.util.Iterator<java.util.Map.Entry<LosPairKey, LosPairEntry>> it = LOS_PAIR_CACHE.asMap().entrySet().iterator();
                 while (it.hasNext()) {
                     java.util.Map.Entry<LosPairKey, LosPairEntry> e = it.next();
                     if ((now - e.getValue().gameTime()) > 1L) {
                         it.remove();
                     }
                 }
-                if (LOS_PAIR_CACHE.size() > maxEntriesFinal) {
-                    int toRemove = LOS_PAIR_CACHE.size() - maxEntriesFinal;
-                    java.util.Iterator<java.util.Map.Entry<LosPairKey, LosPairEntry>> it2 = LOS_PAIR_CACHE.entrySet().iterator();
+                if (LOS_PAIR_CACHE.asMap().size() > maxEntriesFinal) {
+                    int toRemove = LOS_PAIR_CACHE.asMap().size() - maxEntriesFinal;
+                    java.util.Iterator<java.util.Map.Entry<LosPairKey, LosPairEntry>> it2 = LOS_PAIR_CACHE.asMap().entrySet().iterator();
                     for (int i = 0; i < toRemove && it2.hasNext(); i++) {
                         it2.next();
                         it2.remove();
@@ -343,24 +371,24 @@ public class FovEvents {
 
         long now = level.getGameTime();
         LosCacheKey cacheKey = new LosCacheKey(dim, q(start.x), q(start.y), q(start.z), q(end.x), q(end.y), q(end.z));
-        LosCacheEntry existing = LOS_CACHE.get(cacheKey);
+        LosCacheEntry existing = LOS_CACHE.getIfPresent(cacheKey);
         if (existing != null && (now - existing.gameTime()) <= ttlTicksFinal) {
             return existing.result();
         }
 
         boolean computed = raycastIgnoringNonBlockingUncached(level, start, end, looker);
         LOS_CACHE.put(cacheKey, new LosCacheEntry(computed, now));
-        if (maxEntriesFinal > 0 && LOS_CACHE.size() > maxEntriesFinal) {
-            java.util.Iterator<java.util.Map.Entry<LosCacheKey, LosCacheEntry>> it = LOS_CACHE.entrySet().iterator();
+        if (maxEntriesFinal > 0 && LOS_CACHE.asMap().size() > maxEntriesFinal) {
+            java.util.Iterator<java.util.Map.Entry<LosCacheKey, LosCacheEntry>> it = LOS_CACHE.asMap().entrySet().iterator();
             while (it.hasNext()) {
                 java.util.Map.Entry<LosCacheKey, LosCacheEntry> e = it.next();
                 if ((now - e.getValue().gameTime()) > ttlTicksFinal) {
                     it.remove();
                 }
             }
-            if (LOS_CACHE.size() > maxEntriesFinal) {
-                int toRemove = LOS_CACHE.size() - maxEntriesFinal;
-                java.util.Iterator<java.util.Map.Entry<LosCacheKey, LosCacheEntry>> it2 = LOS_CACHE.entrySet().iterator();
+            if (LOS_CACHE.asMap().size() > maxEntriesFinal) {
+                int toRemove = LOS_CACHE.asMap().size() - maxEntriesFinal;
+                java.util.Iterator<java.util.Map.Entry<LosCacheKey, LosCacheEntry>> it2 = LOS_CACHE.asMap().entrySet().iterator();
                 for (int i = 0; i < toRemove && it2.hasNext(); i++) {
                     it2.next();
                     it2.remove();

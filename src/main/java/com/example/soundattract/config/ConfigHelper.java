@@ -17,6 +17,8 @@ public class ConfigHelper {
 
     public static void register(ModLoadingContext context) {
 
+        migrateDebugLogging();
+
         context.registerConfig(ModConfig.Type.COMMON, GeneralConfig.SPEC, "soundattract/general.toml");
         context.registerConfig(ModConfig.Type.COMMON, StealthConfig.SPEC, "soundattract/stealth.toml");
         context.registerConfig(ModConfig.Type.COMMON, GunsConfig.SPEC, "soundattract/guns.toml");
@@ -25,13 +27,79 @@ public class ConfigHelper {
         context.registerConfig(ModConfig.Type.COMMON, com.example.soundattract.config.separate.ScentConfig.SPEC, "soundattract/scent.toml");
         context.registerConfig(ModConfig.Type.COMMON, PerformanceConfig.SPEC, "soundattract/performance.toml");
         context.registerConfig(ModConfig.Type.COMMON, RaidConfig.SPEC, "soundattract/raid.toml");
+        context.registerConfig(ModConfig.Type.COMMON, LivingWallConfig.SPEC, "soundattract/living_wall.toml");
         context.registerConfig(ModConfig.Type.COMMON, PathfindingConfig.SPEC, "soundattract/pathfinding.toml");
         context.registerConfig(ModConfig.Type.SERVER, SoundAttractConfig.SERVER_SPEC, "soundattract/server-rules.toml");
-
+        context.registerConfig(ModConfig.Type.COMMON, DebugLoggingConfig.SPEC, "soundattract/debug_logging.toml");
+        context.registerConfig(ModConfig.Type.CLIENT, ClientConfig.SPEC, "soundattract/awareness.toml");
 
         Path oldConfigPath = FMLPaths.CONFIGDIR.get().resolve(SoundAttractMod.MOD_ID + "-common.toml");
         if (Files.exists(oldConfigPath)) {
             migrateOldConfig(oldConfigPath);
+        }
+    }
+
+    private static void migrateDebugLogging() {
+        Path configDirectory = FMLPaths.CONFIGDIR.get().resolve("soundattract");
+        Path generalPath = configDirectory.resolve("general.toml");
+        Path debugPath = configDirectory.resolve("debug_logging.toml");
+        Path legacyPath = FMLPaths.CONFIGDIR.get().resolve(SoundAttractMod.MOD_ID + "-common.toml");
+        try {
+            Boolean legacyValue = readLegacyDebugLogging(generalPath);
+            if (!Files.exists(debugPath) && legacyValue == null) {
+                legacyValue = readLegacyDebugLogging(legacyPath);
+            }
+            if (!Files.exists(debugPath) && legacyValue != null) {
+                Files.createDirectories(configDirectory);
+                try (CommentedFileConfig newConfig = CommentedFileConfig.builder(debugPath)
+                        .sync().writingMode(WritingMode.REPLACE).build()) {
+                    newConfig.load();
+                    DebugLoggingConfig.SPEC.correct(newConfig);
+                    newConfig.save();
+                }
+                SoundAttractMod.LOGGER.info("Migrated general.debugLogging to feature switches in debug_logging.toml; all switches remain disabled");
+            }
+            if (Files.exists(debugPath)) {
+                removeLegacyAllSwitch(debugPath);
+                removeLegacyDebugLogging(generalPath);
+            }
+        } catch (IOException | RuntimeException e) {
+            SoundAttractMod.LOGGER.error("Failed to migrate general.debugLogging to debug_logging.toml", e);
+        }
+    }
+
+    private static void removeLegacyAllSwitch(Path path) {
+        try (CommentedFileConfig config = CommentedFileConfig.builder(path).sync().build()) {
+            config.load();
+            if (config.contains("debug_logging.all")) {
+                config.remove("debug_logging.all");
+                DebugLoggingConfig.SPEC.correct(config);
+                config.save();
+            }
+        }
+    }
+
+    private static Boolean readLegacyDebugLogging(Path path) {
+        if (!Files.isRegularFile(path)) {
+            return null;
+        }
+        try (CommentedFileConfig config = CommentedFileConfig.builder(path).sync().build()) {
+            config.load();
+            Object value = config.getRaw("general.debugLogging");
+            return value instanceof Boolean enabled ? enabled : null;
+        }
+    }
+
+    private static void removeLegacyDebugLogging(Path path) {
+        if (!Files.isRegularFile(path)) {
+            return;
+        }
+        try (CommentedFileConfig config = CommentedFileConfig.builder(path).sync().build()) {
+            config.load();
+            if (config.contains("general.debugLogging")) {
+                config.remove("general.debugLogging");
+                config.save();
+            }
         }
     }
 
@@ -43,9 +111,7 @@ public class ConfigHelper {
                 .build();
         oldConfig.load();
 
-
         migrateToSpec(oldConfig, GeneralConfig.SPEC, FMLPaths.CONFIGDIR.get().resolve("soundattract/general.toml"), List.of(
-                new Mapping("general.debugLogging", "general.debugLogging"),
                 new Mapping("general.enableDataDriven", "general.enableDataDriven"),
                 new Mapping("general.datapackPriority", "general.datapackPriority"),
                 new Mapping("mobs.attractedEntities", "mobs.attractedEntities"),
@@ -82,7 +148,6 @@ public class ConfigHelper {
                 new Mapping("legacy_profiles.specialMobProfilesRaw", "legacy_profiles.specialMobProfilesRaw"),
                 new Mapping("legacy_profiles.specialPlayerProfilesRaw", "legacy_profiles.specialPlayerProfilesRaw")
         ));
-
 
         migrateToSpec(oldConfig, StealthConfig.SPEC, FMLPaths.CONFIGDIR.get().resolve("soundattract/stealth.toml"), List.of(
                 new Mapping("sound_attract_stealth.fov.defaultHorizontalFov", "sound_attract_stealth.fov.defaultHorizontalFov"),
@@ -138,7 +203,6 @@ public class ConfigHelper {
                 new Mapping("sound_attract_stealth.detection_range_limits.maxStealthDetectionRange", "sound_attract_stealth.detection_range_limits.maxStealthDetectionRange")
         ));
 
-
         migrateToSpec(oldConfig, GunsConfig.SPEC, FMLPaths.CONFIGDIR.get().resolve("soundattract/guns.toml"), List.of(
                 new Mapping("guns.tacz.enableTaczIntegration", "guns.tacz.enableTaczIntegration"),
                 new Mapping("guns.tacz.taczReloadRange", "guns.tacz.taczReloadRange"),
@@ -163,7 +227,6 @@ public class ConfigHelper {
                 new Mapping("guns.pointblank.pointBlankMuzzleFlashReductions", "guns.pointblank.pointBlankMuzzleFlashReductions")
         ));
 
-
         migrateToSpec(oldConfig, VoiceConfig.SPEC, FMLPaths.CONFIGDIR.get().resolve("soundattract/voice.toml"), List.of(
                 new Mapping("voice_chat.Simple VC.enableVoiceChatIntegration", "voice_chat.Simple VC.enableVoiceChatIntegration"),
                 new Mapping("voice_chat.Simple VC.voiceChatWhisperRange", "voice_chat.Simple VC.voiceChatWhisperRange"),
@@ -178,7 +241,7 @@ public class ConfigHelper {
                 new Mapping("integration.relentless_undead.preventRelentlessUndeadTargeting", "integration.relentless_undead_inspired.enableRelentlessClimbing"),
                 new Mapping("integration.custom_npcs.enableCustomNpcsSupport", "integration.enableCustomNpcsIntegration"),
                 new Mapping("integration.quantified.enableQuantifiedIntegration", "integration.enableQuantifiedIntegration"),
-                new Mapping("integration.smartbrainlib.enableSblIntegration", "integration.enableSmartBrainLibIntegration"),                
+                new Mapping("integration.smartbrainlib.enableSblIntegration", "integration.enableSmartBrainLibIntegration"),
                 new Mapping("mob_ai.pick_up_and_throw.enablePickUpAndThrowToSound", "integration.enhanced_ai_inspired.enablePickUpAndThrowToSound"),
                 new Mapping("mob_ai.pick_up_and_throw.pickUpChance", "integration.enhanced_ai_inspired.pickUpChance"),
                 new Mapping("mob_ai.pick_up_and_throw.pickUpCooldownTicks", "integration.enhanced_ai_inspired.pickUpCooldownTicks"),
@@ -196,7 +259,6 @@ public class ConfigHelper {
                 new Mapping("mob_ai.xray_targeting.xrayChance", "integration.enhanced_ai_inspired.xrayChance")
         ));
 
-
         migrateToSpec(oldConfig, com.example.soundattract.config.separate.ScentConfig.SPEC, FMLPaths.CONFIGDIR.get().resolve("soundattract/scent.toml"), List.of(
                 new Mapping("scent_system.enableScentSystem", "scent_system.enableScentSystem"),
                 new Mapping("scent_system.scentLifetimeTicks", "scent_system.scentLifetimeTicks"),
@@ -205,7 +267,7 @@ public class ConfigHelper {
                 new Mapping("scent_system.scentUpdateInterval", "scent_system.scentUpdateInterval"),
                 new Mapping("scent_system.scentStrengthDecay", "scent_system.scentStrengthDecay")
         ));
-        
+
 
         migrateToSpec(oldConfig, PerformanceConfig.SPEC, FMLPaths.CONFIGDIR.get().resolve("soundattract/performance.toml"), List.of(
                 new Mapping("performance.enableOptimizedLos", "performance.enableOptimizedLos"),
@@ -220,7 +282,6 @@ public class ConfigHelper {
         ));
 
         oldConfig.close();
-
 
         try {
             Files.move(oldPath, oldPath.resolveSibling(oldPath.getFileName().toString() + ".migrated"));

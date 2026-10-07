@@ -1,8 +1,12 @@
 package com.example.soundattract.event;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.registration.ModSounds;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
@@ -16,9 +20,7 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 public final class FloorCreekEvents {
@@ -27,7 +29,9 @@ public final class FloorCreekEvents {
             TagKey.create(net.minecraft.core.registries.Registries.BLOCK,
                     ResourceLocation.fromNamespaceAndPath("soundattract", "floor_creek_blocks"));
 
-    private static final Map<UUID, State> STATES = new ConcurrentHashMap<>();
+    private static final Cache<UUID, State> STATES = Caffeine.newBuilder()
+            .maximumSize(4096)
+            .build();
 
     public static double poseProbability(boolean visuallySwimming,
                                          boolean inWater,
@@ -47,13 +51,13 @@ public final class FloorCreekEvents {
     @SubscribeEvent
     public void onPlayerLogout(net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedOutEvent event) {
         if (event.getEntity() != null) {
-            STATES.remove(event.getEntity().getUUID());
+            STATES.invalidate(event.getEntity().getUUID());
         }
     }
 
     @SubscribeEvent
     public void onServerStopping(net.minecraftforge.event.server.ServerStoppingEvent event) {
-        STATES.clear();
+        STATES.invalidateAll();
     }
 
     @SubscribeEvent
@@ -65,7 +69,7 @@ public final class FloorCreekEvents {
         if (!serverPlayer.isAlive() || serverPlayer.isSpectator()) return;
 
         UUID id = serverPlayer.getUUID();
-        State state = STATES.computeIfAbsent(id, k -> new State(serverPlayer.position(), serverPlayer.onGround()));
+        State state = STATES.asMap().computeIfAbsent(id, k -> new State(serverPlayer.position(), serverPlayer.onGround()));
 
         Vec3 curr = serverPlayer.position();
         boolean onGroundNow = serverPlayer.onGround();
@@ -128,8 +132,10 @@ public final class FloorCreekEvents {
                 SoundSource.BLOCKS,
                 0.3f,
                 pitch);
-        if (SoundAttractConfig.COMMON.debugLogging != null && SoundAttractConfig.COMMON.debugLogging.get()) {
-            SoundAttractMod.LOGGER.debug("[FloorCreek] {} creak at {} (p={})", player.getName().getString(), player.blockPosition(), probability);
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.FLOOR_CREEKS)) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.FLOOR_CREEKS)) {
+                SoundAttractMod.LOGGER.debug("[FloorCreek] {} creak at {} (p={})", player.getName().getString(), player.blockPosition(), probability);
+            }
         }
     }
 

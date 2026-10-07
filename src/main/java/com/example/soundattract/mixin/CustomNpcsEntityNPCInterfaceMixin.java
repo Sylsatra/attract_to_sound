@@ -1,5 +1,7 @@
 package com.example.soundattract.mixin;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.ai.AttractionGoal;
 import com.example.soundattract.ai.FollowerEdgeRelayGoal;
@@ -40,7 +42,7 @@ public abstract class CustomNpcsEntityNPCInterfaceMixin {
             return;
         }
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
             SoundAttractMod.LOGGER.info("[CustomNPCs] updateTasks called for {}, checking goals", mob.getName().getString());
         }
 
@@ -50,14 +52,14 @@ public abstract class CustomNpcsEntityNPCInterfaceMixin {
         }
 
         if (!SoundAttractionEvents.isCustomNpcsMob(mob)) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                 SoundAttractMod.LOGGER.info("[CustomNPCs] {} is not detected as CustomNPCs mob", mob.getName().getString());
             }
             return;
         }
 
         if (mob.goalSelector == null) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                 SoundAttractMod.LOGGER.info("[CustomNPCs] {} has null goalSelector", mob.getName().getString());
             }
             return;
@@ -80,13 +82,13 @@ public abstract class CustomNpcsEntityNPCInterfaceMixin {
         if (smartEdge) {
             if (!hasFollowerEdgeRelayGoal) {
                 mob.goalSelector.addGoal(attractionPriority, new FollowerEdgeRelayGoal(mob, moveSpeed));
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                     com.example.soundattract.SoundAttractMod.LOGGER.info("[CustomNPCs] Re-added FollowerEdgeRelayGoal to {}", mob.getName().getString());
                 }
             }
             if (!hasLeaderAttractionGoal) {
                 mob.goalSelector.addGoal(attractionPriority + 1, new LeaderAttractionGoal(mob, moveSpeed));
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                     com.example.soundattract.SoundAttractMod.LOGGER.info("[CustomNPCs] Re-added LeaderAttractionGoal to {}", mob.getName().getString());
                 }
             }
@@ -103,7 +105,7 @@ public abstract class CustomNpcsEntityNPCInterfaceMixin {
                         return (mob.getTarget() == null || !mob.getTarget().isAlive()) && super.canContinueToUse();
                     }
                 });
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                     com.example.soundattract.SoundAttractMod.LOGGER.info("[CustomNPCs] Re-added AttractionGoal to {}", mob.getName().getString());
                 }
             }
@@ -117,7 +119,7 @@ public abstract class CustomNpcsEntityNPCInterfaceMixin {
     @Inject(method = "readSpawnData(Lnet/minecraft/nbt/CompoundTag;)V", at = @At("TAIL"))
     private void soundattract$onReadSpawnData(CallbackInfo ci) {
         if (SoundAttractConfig.COMMON == null || !SoundAttractConfig.COMMON.enableCustomNpcsIntegration.get()) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                 SoundAttractMod.LOGGER.info("[CustomNPCs] Integration disabled, skipping readSpawnData");
             }
             return;
@@ -134,12 +136,12 @@ public abstract class CustomNpcsEntityNPCInterfaceMixin {
             return;
         }
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
             SoundAttractMod.LOGGER.info("[CustomNPCs] readSpawnData called for {}, checking if CustomNPCs", mob.getName().getString());
         }
 
         if (!SoundAttractionEvents.isCustomNpcsMob(mob)) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                 SoundAttractMod.LOGGER.info("[CustomNPCs] {} is not detected as CustomNPCs mob", mob.getName().getString());
             }
             return;
@@ -147,7 +149,7 @@ public abstract class CustomNpcsEntityNPCInterfaceMixin {
 
         SoundAttractionEvents.invalidateCachedEntityTypes();
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
             SoundAttractMod.LOGGER.info("[CustomNPCs] Spawn data read for {}, forcing goal registration", mob.getName().getString());
         }
 

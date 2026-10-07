@@ -7,7 +7,7 @@ import net.minecraftforge.network.simple.SimpleChannel;
 
 public class SoundAttractNetwork {
 
-    private static final String PROTOCOL_VERSION = "2";
+    private static final String PROTOCOL_VERSION = "3";
     public static SimpleChannel INSTANCE;
 
     public static void register() {
@@ -19,7 +19,7 @@ public class SoundAttractNetwork {
             .simpleChannel();
 
         int id = 0;
-        
+
         INSTANCE.messageBuilder(SoundMessage.class, id++)
                 .encoder(SoundMessage::encode)
                 .decoder(SoundMessage::decode)
@@ -36,6 +36,18 @@ public class SoundAttractNetwork {
                 .encoder(PacketCamoRemoval::toBytes)
                 .decoder(PacketCamoRemoval::new)
                 .consumerMainThread(PacketCamoRemoval::handle)
+                .add();
+
+        INSTANCE.messageBuilder(AwarenessSnapshotMessage.class, id++)
+                .encoder(AwarenessSnapshotMessage::encode)
+                .decoder(AwarenessSnapshotMessage::decode)
+                .consumerMainThread(AwarenessSnapshotMessage::handle)
+                .add();
+
+        INSTANCE.messageBuilder(FromTheFogEquipmentMarkerMessage.class, id++)
+                .encoder(FromTheFogEquipmentMarkerMessage::encode)
+                .decoder(FromTheFogEquipmentMarkerMessage::decode)
+                .consumerMainThread(FromTheFogEquipmentMarkerMessage::handle)
                 .add();
     }
 

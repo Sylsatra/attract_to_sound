@@ -14,4 +14,3 @@ public interface LivingEntityInvoker {
     @Invoker("getHurtSound")
     SoundEvent soundattract$getHurtSound(DamageSource source);
 }
-

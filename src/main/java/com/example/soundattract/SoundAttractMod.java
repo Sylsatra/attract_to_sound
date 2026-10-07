@@ -1,5 +1,7 @@
 package com.example.soundattract;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 import net.minecraftforge.common.MinecraftForge;
@@ -36,15 +38,16 @@ public class SoundAttractMod {
 
     public SoundAttractMod() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
-        
+
         ModEnchantments.register(modEventBus);
         ModLootModifiers.register(modEventBus);
+        com.example.soundattract.registration.ModParticles.register(modEventBus);
         com.example.soundattract.registration.ModSounds.register(modEventBus);
         modEventBus.addListener(this::onCommonSetup);
         modEventBus.addListener(SoundAttractMod::onClientSetup);
 
         ConfigHelper.register(ModLoadingContext.get());
-        
+
         MinecraftForge.EVENT_BUS.register(new FovEvents());
         MinecraftForge.EVENT_BUS.register(new StealthDetectionEvents());
         MinecraftForge.EVENT_BUS.register(new PlasmoVoiceBootstrap());
@@ -53,7 +56,7 @@ public class SoundAttractMod {
         MinecraftForge.EVENT_BUS.register(new com.example.soundattract.event.FloorCreekEvents());
         MinecraftForge.EVENT_BUS.register(new com.example.soundattract.event.ArrowInvestigationEvents());
         MinecraftForge.EVENT_BUS.register(this);
-        
+
         modEventBus.addListener(this::onRegister);
 
         MinecraftForge.EVENT_BUS.addGenericListener(net.minecraft.world.entity.Entity.class, this::attachPlayerCapabilities);
@@ -82,7 +85,7 @@ public class SoundAttractMod {
     }
 
     public void onConfigLoading(final net.minecraftforge.fml.event.config.ModConfigEvent.Loading event) {
-        if (event.getConfig().getSpec() == GeneralConfig.SPEC || 
+        if (event.getConfig().getSpec() == GeneralConfig.SPEC ||
             event.getConfig().getSpec() == StealthConfig.SPEC ||
             event.getConfig().getSpec() == GunsConfig.SPEC ||
             event.getConfig().getSpec() == VoiceConfig.SPEC ||
@@ -98,7 +101,7 @@ public class SoundAttractMod {
     }
 
     public void onConfigReloading(final net.minecraftforge.fml.event.config.ModConfigEvent.Reloading event) {
-        if (event.getConfig().getSpec() == GeneralConfig.SPEC || 
+        if (event.getConfig().getSpec() == GeneralConfig.SPEC ||
             event.getConfig().getSpec() == StealthConfig.SPEC ||
             event.getConfig().getSpec() == GunsConfig.SPEC ||
             event.getConfig().getSpec() == VoiceConfig.SPEC ||
@@ -121,17 +124,18 @@ public class SoundAttractMod {
     private void onCommonSetup(final FMLCommonSetupEvent event) {
         event.enqueueWork(() -> {
             SoundAttractConfig.bakeConfig();
+            QuantifiedIntegration.bootstrap();
             WorkSchedulerManager.refresh();
             SoundAttractNetwork.register();
-            QuantifiedIntegration.bootstrap();
             com.example.soundattract.integration.csgrenades.CsGrenadesIntegration.register();
             com.example.soundattract.integration.customnpcs.CustomNpcsStealthTargetBridge.registerIfPresent();
             registerHotBathIntegrationIfPresent();
             registerToughAsNailsIntegrationIfPresent();
+            com.example.soundattract.integration.spoiled.SpoiledScentIntegration.logStatus();
 
             if (ModList.get().isLoaded("spore")) {
                 MinecraftForge.EVENT_BUS.register(BiomassSoundHandler.class);
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SPORE)) {
                     LOGGER.info("Spore mod detected. Registered BiomassSoundHandler.");
                 }
             }
@@ -165,18 +169,18 @@ public class SoundAttractMod {
 
     private void handleTaczIntegration() {
         if (ModList.get().isLoaded("tacz") && SoundAttractConfig.TACZ_ENABLED_CACHE) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.TACZ)) {
                 LOGGER.info("Tacz mod found and integration is enabled. Registering event listeners.");
             }
             try {
                 com.example.soundattract.integration.tacz.TaczIntegrationHandler.register();
             } catch (NoClassDefFoundError e) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.TACZ)) {
                     LOGGER.error("Failed to register Tacz integration events. The Tacz API might be missing or has changed.", e);
                 }
             }
         } else {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.TACZ)) {
                 LOGGER.info("Tacz integration is disabled or mod not found.");
             }
         }
@@ -185,12 +189,12 @@ public class SoundAttractMod {
     private static void onClientSetup(final FMLClientSetupEvent event) {
         event.enqueueWork(() -> {
             if (ModList.get().isLoaded("voicechat")) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.VOICE_CHAT)) {
                     LOGGER.info("[SoundAttractMod] Registering VoiceChat integration on client setup");
                 }
                 SoundAttractClientEvents.registerVoiceChatIntegration();
             } else {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.VOICE_CHAT)) {
                     LOGGER.info("[SoundAttractMod] VoiceChat mod not present; skipping integration");
                 }
             }

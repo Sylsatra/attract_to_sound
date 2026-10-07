@@ -7,13 +7,6 @@ import net.minecraftforge.fml.ModList;
 
 import java.util.List;
 
-/**
- * Advanced Spore Integration: Hive Tumor Harmonic Fear.
- * 
- * This goal causes the Hive Tumor to enter a 'Panic' state if it 'hears' player-produced sounds
- * within its influence radius. This connects SoundAttract's player-sound detection 
- * with the Spore mod's defensive panic mechanics.
- */
 public class HiveTumorHarmonicFearGoal extends Goal {
     private final HiveTumor hiveTumor;
 
@@ -24,7 +17,7 @@ public class HiveTumorHarmonicFearGoal extends Goal {
     @Override
     public boolean canUse() {
         if (!ModList.get().isLoaded("spore") || hiveTumor.level().isClientSide) return false;
-        
+
         if (hiveTumor.isScared()) return false;
 
         return hiveTumor.tickCount % 20 == 0;
@@ -34,10 +27,10 @@ public class HiveTumorHarmonicFearGoal extends Goal {
     public void tick() {
         if (hiveTumor.level().isClientSide) return;
 
-        double range = 32.0; 
-        
+        double range = 32.0;
+
         List<SoundTracker.SoundRecord> playerSounds = SoundTracker.getNearbySounds(hiveTumor.level(), hiveTumor.blockPosition(), range);
-        
+
         boolean heardThreat = false;
         for (SoundTracker.SoundRecord sound : playerSounds) {
             if (sound.isPlayerProduced() || sound.weight > 15) {

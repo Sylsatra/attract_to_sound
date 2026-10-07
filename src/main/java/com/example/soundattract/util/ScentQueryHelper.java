@@ -1,5 +1,7 @@
 package com.example.soundattract.util;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.scents.ScentManager;
@@ -16,17 +18,15 @@ public class ScentQueryHelper {
         return computeFreshScentInfo(mob, maxAgeTicks, radius).hasFresh();
     }
 
-    /**
-     * Combined query: returns whether any fresh scent exists in radius AND the strongest
-     * strength among matching nodes. Cached per mob.
-     */
+
     public static ScentQueryCache.Result computeFreshScentInfo(Mob mob, int maxAgeTicks, double radius) {
         if (mob == null || mob.level() == null || mob.level().isClientSide) return ScentQueryCache.Result.EMPTY;
         if (SoundAttractConfig.COMMON == null) return ScentQueryCache.Result.EMPTY;
 
         long now = mob.level().getGameTime();
         int ttl = SoundAttractConfig.COMMON.scentQueryCacheTtlTicks.get();
-        ScentQueryCache.Result cached = ScentQueryCache.getCached(mob.getUUID(), now, ttl);
+        ScentQueryCache.Result cached = ScentQueryCache.getCached(
+                mob.getUUID(), mob.level().dimension().location(), now, ttl);
         if (cached != null) return cached;
 
         ScentQueryCache.Result computed;
@@ -58,13 +58,13 @@ public class ScentQueryHelper {
                 return new ScentQueryCache.Result(now, anyFresh, strongest);
             }).orElse(ScentQueryCache.Result.EMPTY);
         } catch (Throwable t) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
                 SoundAttractMod.LOGGER.warn("[ScentQueryHelper] computeFreshScentInfo failed: {}", t.toString());
             }
             computed = ScentQueryCache.Result.EMPTY;
         }
 
-        ScentQueryCache.put(mob.getUUID(), computed);
+        ScentQueryCache.put(mob.getUUID(), mob.level().dimension().location(), computed);
         return computed;
     }
 }

@@ -8,26 +8,22 @@
     "HurtByTargetGoalMixin",
     "LivingEntityLosMixin",
     "SensingMixin",
-    "PointBlankGunItemMixin",
-    "TaczNpcsAbstractScavEntityMixin",
-    "CustomNpcsEntityNPCInterfaceMixin",
-    "CustomNpcsEntityAIMovingPathMixin",
-    "CustomNpcsEntityAIWanderMixin",
-    "CustomNpcsEntityAIReturnMixin",
-    "CustomNpcsUpdateTasksMixin",
     "ItemStackMixin",
     "LivingEntityMixin",
     "EntityMixin",
     "SnowballMixin",
     "ThrownPotionMixin",
-    "MobAccessor"
+    "MobAccessor",
+    "WalkNodeEvaluatorMixin",
+    "LivingBridgePathNavigationMixin"
   ],
   "client": [
     "HumanoidArmorLayerMixin",
     "ItemInHandLayerMixin",
     "SimpleTextureMixin",
     "HttpTextureMixin",
-    "NativeImageAccessor"
+    "NativeImageAccessor",
+    "AddLayersRendererMapAccessor"
   ],
   "server": [],
   "injectors": {

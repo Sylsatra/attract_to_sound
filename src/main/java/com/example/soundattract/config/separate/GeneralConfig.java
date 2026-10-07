@@ -8,7 +8,6 @@ public class GeneralConfig {
     public static final ForgeConfigSpec.Builder BUILDER = new ForgeConfigSpec.Builder();
     public static final ForgeConfigSpec SPEC;
 
-    public static final ForgeConfigSpec.BooleanValue DEBUG_LOGGING;
     public static final ForgeConfigSpec.BooleanValue ENABLE_DATA_DRIVEN;
     public static final ForgeConfigSpec.ConfigValue<String> DATAPACK_PRIORITY;
     public static final ForgeConfigSpec.BooleanValue ENABLE_FLEE_FROM_UNSEEN_ATTACKER_GOAL;
@@ -46,7 +45,6 @@ public class GeneralConfig {
     public static final ForgeConfigSpec.BooleanValue SKIP_SOUND_SCAN_WHEN_HAS_TARGET;
     public static final ForgeConfigSpec.IntValue MAX_MUFFLING_RAYCASTS_PER_TICK;
 
-
     public static final ForgeConfigSpec.BooleanValue ENABLE_BLOCK_MUFFLING;
     public static final ForgeConfigSpec.DoubleValue MUFFLING_FACTOR_WOOL;
     public static final ForgeConfigSpec.DoubleValue MUFFLING_FACTOR_SOLID;
@@ -60,7 +58,7 @@ public class GeneralConfig {
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> CUSTOM_THIN_BLOCKS;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> CUSTOM_LIQUID_BLOCKS;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> CUSTOM_AIR_BLOCKS;
-    
+
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SPECIAL_MOB_PROFILES;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> SPECIAL_PLAYER_PROFILES;
 
@@ -84,9 +82,6 @@ public class GeneralConfig {
     static {
         BUILDER.comment("Sound Attract Mod - General Configuration").push("general");
 
-        DEBUG_LOGGING = BUILDER.comment("Enable debug logging for troubleshooting.")
-                .define("debugLogging", false);
-
         ENABLE_DATA_DRIVEN = BUILDER.comment("Enable datapack-based configuration.")
                 .define("enableDataDriven", true);
 
@@ -106,7 +101,7 @@ public class GeneralConfig {
                 .defineInRange("soundNoveltyTimeTicks", 100, 1, 200);
 
         CONFIG_SCHEMA_VERSION = BUILDER.comment("Internal schema version for config migrations. Do not change.")
-                .defineInRange("configSchemaVersion", 18, 0, Integer.MAX_VALUE);
+                .defineInRange("configSchemaVersion", 19, 0, Integer.MAX_VALUE);
 
         BUILDER.pop();
 
@@ -145,14 +140,14 @@ public class GeneralConfig {
                         "minecraft:wither_skeleton", "minecraft:zoglin", "minecraft:zombie", "minecraft:zombie_villager",
                         "scguns:cog_knight", "scguns:cog_minion", "scguns:blunderer", "scguns:hive", "scguns:dissident", "scguns:hornlin", "scguns:redcoat", "scguns:cog_knight",
                         "scguns:sky_carrier", "scguns:supply_scamp", "scguns:swarm", "scguns:zombified_hornlin",
-                        "spore:inf_human", "spore:inf_husk", "spore:inf_drowned", "spore:inf_villager", "spore:inf_pillager", 
-                        "spore:inf_player", "spore:inf_witch", "spore:inf_diseased_villager", "spore:inf_wanderer", "spore:inf_hazmat", 
-                        "spore:knight", "spore:griefer", "spore:braiomil", "spore:busser", "spore:thorn", "spore:jagd", "spore:scavenger", "spore:bloater", "spore:naiad", 
-                        "spore:leaper", "spore:slasher", "spore:spitter", "spore:volatile", "spore:mephitic", "spore:howler", "spore:stalker", "spore:brute", "spore:nuclea", 
-                        "spore:protector", "spore:chemist", "spore:inebriater", "spore:inf_vindicator", "spore:inf_evoker", "spore:inquisitor", "spore:brot", "spore:wendigo", 
-                        "spore:ogre", "spore:hvindicator", "spore:hevoker", "spore:plagued", "spore:lacerator", "spore:biobloob", "spore:saugling", "spore:bairn", "spore:scamper", 
-                        "spore:gastgaber", "spore:specter", "spore:vanguard", "spore:claw", "spore:hevoker_arm", "spore:sieger_tail", "spore:licker", "spore:howit_arm", "spore:stahl_arm", 
-                        "spore:arena_tendril", "spore:tentacle", "spore:mound", "spore:umarmed", "spore:usurper", "spore:vigil", "spore:braurei", "spore:verva", "spore:delusioner", 
+                        "spore:inf_human", "spore:inf_husk", "spore:inf_drowned", "spore:inf_villager", "spore:inf_pillager",
+                        "spore:inf_player", "spore:inf_witch", "spore:inf_diseased_villager", "spore:inf_wanderer", "spore:inf_hazmat",
+                        "spore:knight", "spore:griefer", "spore:braiomil", "spore:busser", "spore:thorn", "spore:jagd", "spore:scavenger", "spore:bloater", "spore:naiad",
+                        "spore:leaper", "spore:slasher", "spore:spitter", "spore:volatile", "spore:mephitic", "spore:howler", "spore:stalker", "spore:brute", "spore:nuclea",
+                        "spore:protector", "spore:chemist", "spore:inebriater", "spore:inf_vindicator", "spore:inf_evoker", "spore:inquisitor", "spore:brot", "spore:wendigo",
+                        "spore:ogre", "spore:hvindicator", "spore:hevoker", "spore:plagued", "spore:lacerator", "spore:biobloob", "spore:saugling", "spore:bairn", "spore:scamper",
+                        "spore:gastgaber", "spore:specter", "spore:vanguard", "spore:claw", "spore:hevoker_arm", "spore:sieger_tail", "spore:licker", "spore:howit_arm", "spore:stahl_arm",
+                        "spore:arena_tendril", "spore:tentacle", "spore:mound", "spore:umarmed", "spore:usurper", "spore:vigil", "spore:braurei", "spore:verva", "spore:delusioner",
                         "spore:reconstructor", "spore:proto", "spore:hivetumor", "spore:sieger", "spore:howitzer", "spore:stahl", "spore:hohlfresser", "spore:gazenbreacher", "spore:kraken", "spore:hindenburg",
                         "spore:gargoyle", "spore:conductor", "spore:grober", "spore:reaper", "spore:leviathan",
                         "sculkhorde:sculk_zombie", "sculkhorde:sculk_witch", "sculkhorde:sculk_vindicator", "sculkhorde:sculk_vex",
@@ -343,72 +338,72 @@ public class GeneralConfig {
                                     "scguns:item.sculk.fire;160;16.0",
                                     "scguns:item.raygun.fire;170;17.0",
                                     "scguns:item.rocket_rifle.fire;195;19.5",
-                                    "scguns:item.makeshift_rifle.cock;10;1.0", 
-                                    "scguns:item.pistol.cock;5;0.5", 
-                                    "scguns:item.flamethrower.reload;10;1.0", 
-                                    "scguns:item.gauss.reload;25;2.5", 
-                                    "scguns:item.pistol.reload;10;1.0", 
-                                    "scguns:item.airgun.fire;80;8.0", 
-                                    "scguns:item.beam.fire;100;10.0", 
-                                    "scguns:item.blackpowder.fire;115;11.5", 
-                                    "scguns:item.boomstick.fire;120;12.0", 
-                                    "scguns:item.brass_pistol.fire;105;10.5", 
-                                    "scguns:item.brass_revolver.fire;110;11.0", 
-                                    "scguns:item.brass_shotgun.fire;110;11.0", 
-                                    "scguns:item.bruiser.fire;115;11.5", 
-                                    "scguns:item.combat_shotgun.fire;120;12.0", 
-                                    "scguns:item.cowboy.fire;110;11.0", 
-                                    "scguns:item.flamethrower.fire_2;95;9.5", 
-                                    "scguns:item.gauss.fire;130;13.0", 
-                                    "scguns:item.greaser_smg.fire;110;11.0", 
-                                    "scguns:item.gyrojet.fire;115;11.5", 
-                                    "scguns:item.heavy_rifle.fire;120;12.0", 
-                                    "scguns:item.heavier_rifle.fire;125;12.5", 
-                                    "scguns:item.iron_pistol.fire;110;11.0", 
-                                    "scguns:item.iron_rifle.fire;120;12.0", 
-                                    "scguns:item.makeshift_rifle.fire;110;11.0", 
-                                    "scguns:item.plasma.fire;115;11.5", 
-                                    "scguns:item.raygun.fire;110;11.0", 
-                                    "scguns:item.rocket.fire;140;14.0", 
-                                    "scguns:item.rocket_rifle.fire;135;13.5", 
-                                    "scguns:item.rusty_gnat.fire;105;10.5", 
-                                    "scguns:item.scrapper.fire;110;11.0", 
-                                    "scguns:item.sculk.fire;100;10.0", 
-                                    "scguns:item.shock.fire;95;9.5", 
-                                    "scguns:item.shulker.fire;105;10.5", 
-                                    "scguns:item.scorched_sniper.fire;130;13.0", 
-                                    "scguns:item.scorched_rifle.fire;125;12.5", 
-                                    "scguns:item.shock.silenced_fire;45;4.5", 
-                                    "scguns:item.bruiser.silenced_fire;55;5.5", 
-                                    "scguns:item.makeshift_rifle.silenced_fire;50;5.0", 
-                                    "scguns:item.combat_shotgun.silenced_fire;60;6.0", 
-                                    "scguns:item.rusty_gnat.silenced_fire;45;4.5", 
-                                    "scguns:item.shock.fire;155;15.5", 
-                                    "scguns:item.scorched_sniper.fire;190;19.0", 
-                                    "scguns:item.scorched_rifle.fire;185;18.5", 
-                                    "scguns:item.bruiser.fire;175;17.5", 
-                                    "scguns:item.flamethrower.fire_2;155;15.5", 
-                                    "scguns:item.blackpowder.fire;175;17.5", 
-                                    "scguns:item.gyrojet.fire;175;17.5", 
-                                    "scguns:item.boomstick.fire;180;18.0", 
-                                    "scguns:item.brass_shotgun.fire;170;17.0", 
-                                    "scguns:item.brass_revolver.fire;170;17.0", 
-                                    "scguns:item.shulker.fire;165;16.5", 
-                                    "scguns:item.iron_rifle.fire;180;18.0", 
-                                    "scguns:item.combat_shotgun.fire;180;18.0", 
-                                    "scguns:item.beam.fire;160;16.0", 
-                                    "scguns:item.airgun.fire;140;14.0", 
-                                    "scguns:item.heavier_rifle.fire;185;18.5", 
-                                    "scguns:item.iron_pistol.fire;170;17.0", 
-                                    "scguns:item.gauss.fire;190;19.0", 
-                                    "scguns:item.heavy_rifle.fire;180;18.0", 
-                                    "scguns:item.greaser_smg.fire;170;17.0", 
-                                    "scguns:item.plasma.fire;175;17.5", 
-                                    "scguns:item.rusty_gnat.fire;165;16.5", 
-                                    "scguns:item.cowboy.fire;170;17.0", 
-                                    "scguns:item.scrapper.fire;170;17.0", 
-                                    "scguns:item.sculk.fire;160;16.0", 
-                                    "scguns:item.raygun.fire;170;17.0", 
+                                    "scguns:item.makeshift_rifle.cock;10;1.0",
+                                    "scguns:item.pistol.cock;5;0.5",
+                                    "scguns:item.flamethrower.reload;10;1.0",
+                                    "scguns:item.gauss.reload;25;2.5",
+                                    "scguns:item.pistol.reload;10;1.0",
+                                    "scguns:item.airgun.fire;80;8.0",
+                                    "scguns:item.beam.fire;100;10.0",
+                                    "scguns:item.blackpowder.fire;115;11.5",
+                                    "scguns:item.boomstick.fire;120;12.0",
+                                    "scguns:item.brass_pistol.fire;105;10.5",
+                                    "scguns:item.brass_revolver.fire;110;11.0",
+                                    "scguns:item.brass_shotgun.fire;110;11.0",
+                                    "scguns:item.bruiser.fire;115;11.5",
+                                    "scguns:item.combat_shotgun.fire;120;12.0",
+                                    "scguns:item.cowboy.fire;110;11.0",
+                                    "scguns:item.flamethrower.fire_2;95;9.5",
+                                    "scguns:item.gauss.fire;130;13.0",
+                                    "scguns:item.greaser_smg.fire;110;11.0",
+                                    "scguns:item.gyrojet.fire;115;11.5",
+                                    "scguns:item.heavy_rifle.fire;120;12.0",
+                                    "scguns:item.heavier_rifle.fire;125;12.5",
+                                    "scguns:item.iron_pistol.fire;110;11.0",
+                                    "scguns:item.iron_rifle.fire;120;12.0",
+                                    "scguns:item.makeshift_rifle.fire;110;11.0",
+                                    "scguns:item.plasma.fire;115;11.5",
+                                    "scguns:item.raygun.fire;110;11.0",
+                                    "scguns:item.rocket.fire;140;14.0",
+                                    "scguns:item.rocket_rifle.fire;135;13.5",
+                                    "scguns:item.rusty_gnat.fire;105;10.5",
+                                    "scguns:item.scrapper.fire;110;11.0",
+                                    "scguns:item.sculk.fire;100;10.0",
+                                    "scguns:item.shock.fire;95;9.5",
+                                    "scguns:item.shulker.fire;105;10.5",
+                                    "scguns:item.scorched_sniper.fire;130;13.0",
+                                    "scguns:item.scorched_rifle.fire;125;12.5",
+                                    "scguns:item.shock.silenced_fire;45;4.5",
+                                    "scguns:item.bruiser.silenced_fire;55;5.5",
+                                    "scguns:item.makeshift_rifle.silenced_fire;50;5.0",
+                                    "scguns:item.combat_shotgun.silenced_fire;60;6.0",
+                                    "scguns:item.rusty_gnat.silenced_fire;45;4.5",
+                                    "scguns:item.shock.fire;155;15.5",
+                                    "scguns:item.scorched_sniper.fire;190;19.0",
+                                    "scguns:item.scorched_rifle.fire;185;18.5",
+                                    "scguns:item.bruiser.fire;175;17.5",
+                                    "scguns:item.flamethrower.fire_2;155;15.5",
+                                    "scguns:item.blackpowder.fire;175;17.5",
+                                    "scguns:item.gyrojet.fire;175;17.5",
+                                    "scguns:item.boomstick.fire;180;18.0",
+                                    "scguns:item.brass_shotgun.fire;170;17.0",
+                                    "scguns:item.brass_revolver.fire;170;17.0",
+                                    "scguns:item.shulker.fire;165;16.5",
+                                    "scguns:item.iron_rifle.fire;180;18.0",
+                                    "scguns:item.combat_shotgun.fire;180;18.0",
+                                    "scguns:item.beam.fire;160;16.0",
+                                    "scguns:item.airgun.fire;140;14.0",
+                                    "scguns:item.heavier_rifle.fire;185;18.5",
+                                    "scguns:item.iron_pistol.fire;170;17.0",
+                                    "scguns:item.gauss.fire;190;19.0",
+                                    "scguns:item.heavy_rifle.fire;180;18.0",
+                                    "scguns:item.greaser_smg.fire;170;17.0",
+                                    "scguns:item.plasma.fire;175;17.5",
+                                    "scguns:item.rusty_gnat.fire;165;16.5",
+                                    "scguns:item.cowboy.fire;170;17.0",
+                                    "scguns:item.scrapper.fire;170;17.0",
+                                    "scguns:item.sculk.fire;160;16.0",
+                                    "scguns:item.raygun.fire;170;17.0",
                                     "scguns:item.rocket_rifle.fire;195;19.5",
                                     "superbwarfare:taser_fire_1p;150;65",
                                     "superbwarfare:taser_fire_3p;150;65",
@@ -897,20 +892,20 @@ public class GeneralConfig {
                                     "immersive_melodies:instruments.handpan.c3;32;32",
                                     "immersive_melodies:instruments.handpan.c2;32;32",
                                      "immersive_melodies:instruments.handpan.c1;32;32",
-                                     "spore:engine;64;40", "spore:saw_sound;48;30", "spore:electric1;32;20", "spore:electric2;32;20", "spore:nuke;256;200", 
-                                     "spore:kraken_growl1;96;60", "spore:kraken_growl2;96;60", "spore:vanguard_fireworks;128;80", "spore:vanguard_call;80;50", 
-                                     "spore:printing;24;15", "spore:signal;40;25", "spore:infected_weapon_throw;24;15", "spore:infected_weapon_hit_block;16;12", 
-                                     "spore:infected_weapon_hit_entity;16;12", "spore:cdu_insert;12;8", "spore:cleaver_spin;40;25", "spore:infected_pickaxe;20;15", 
-                                     "spore:reaver_reave;48;35", "spore:saber_leap;32;20", "spore:scanner_item;16;10", "spore:syringe_suck;8;5", 
-                                     "spore:syringe_inject;8;5", "spore:reagent;12;8", "spore:infected_gear_break;24;15", "spore:infected_gear_equip;12;8", 
-                                     "spore:pci_inject;10;6", "spore:shield_bash;24;18", "spore:syringegun_reload;24;10", "spore:syringegun_spin;32;15", 
-                                     "spore:syringegun_shot;64;40", "spore:syringegun_inject;12;8", "spore:tumoroid_nuke;256;200", "spore:mistmaker_deploy;16;10", 
-                                     "spore:mistmaker_shot1;48;30", "spore:mistmaker_shot2;48;30", "spore:bile_blaster_shot1;56;35", "spore:bile_blaster_shot2;56;35", 
+                                     "spore:engine;64;40", "spore:saw_sound;48;30", "spore:electric1;32;20", "spore:electric2;32;20", "spore:nuke;256;200",
+                                     "spore:kraken_growl1;96;60", "spore:kraken_growl2;96;60", "spore:vanguard_fireworks;128;80", "spore:vanguard_call;80;50",
+                                     "spore:printing;24;15", "spore:signal;40;25", "spore:infected_weapon_throw;24;15", "spore:infected_weapon_hit_block;16;12",
+                                     "spore:infected_weapon_hit_entity;16;12", "spore:cdu_insert;12;8", "spore:cleaver_spin;40;25", "spore:infected_pickaxe;20;15",
+                                     "spore:reaver_reave;48;35", "spore:saber_leap;32;20", "spore:scanner_item;16;10", "spore:syringe_suck;8;5",
+                                     "spore:syringe_inject;8;5", "spore:reagent;12;8", "spore:infected_gear_break;24;15", "spore:infected_gear_equip;12;8",
+                                     "spore:pci_inject;10;6", "spore:shield_bash;24;18", "spore:syringegun_reload;24;10", "spore:syringegun_spin;32;15",
+                                     "spore:syringegun_shot;64;40", "spore:syringegun_inject;12;8", "spore:tumoroid_nuke;256;200", "spore:mistmaker_deploy;16;10",
+                                     "spore:mistmaker_shot1;48;30", "spore:mistmaker_shot2;48;30", "spore:bile_blaster_shot1;56;35", "spore:bile_blaster_shot2;56;35",
                                      "spore:assassin_shot1;48;30", "spore:assassin_shot2;48;30",
                                      "soundattract:wooden_floor_creek;20;20",
                                      "soundattract:arrow_miss;16;10",
                                      "soundattract:arrow_impact;24;15"
-                ), obj -> obj instanceof String && ((String) obj).split(";").length == 3);        
+                ), obj -> obj instanceof String && ((String) obj).split(";").length == 3);
         SOUND_ID_BLACKLIST = BUILDER.comment("List of sound IDs that are explicitly ignored by mobs, even if loud.")
                 .defineList("soundIdBlacklist", Arrays.asList(), obj -> obj instanceof String && net.minecraft.resources.ResourceLocation.tryParse((String) obj) != null);
         SOUND_ID_WHITELIST = BUILDER.comment("List of sound IDs that can attract mobs. Mobs will ignore any sound not in this whitelist.")
@@ -1143,25 +1138,25 @@ public class GeneralConfig {
                             "scguns:item.flamethrower.fire_2",
                             "scguns:item.blackpowder.fire",
                             "scguns:item.gyrojet.fire",
-                            "scguns:item.boomstick.fire", 
-                            "scguns:item.brass_shotgun.fire", 
-                            "scguns:item.brass_revolver.fire", 
-                            "scguns:item.shulker.fire", 
-                            "scguns:item.iron_rifle.fire", 
-                            "scguns:item.combat_shotgun.fire", 
-                            "scguns:item.beam.fire", 
-                            "scguns:item.airgun.fire", 
-                            "scguns:item.heavier_rifle.fire", 
-                            "scguns:item.iron_pistol.fire", 
-                            "scguns:item.gauss.fire", 
-                            "scguns:item.heavy_rifle.fire", 
-                            "scguns:item.greaser_smg.fire", 
-                            "scguns:item.plasma.fire", 
-                            "scguns:item.rusty_gnat.fire", 
-                            "scguns:item.cowboy.fire", 
-                            "scguns:item.scrapper.fire", 
-                            "scguns:item.sculk.fire", 
-                            "scguns:item.raygun.fire", 
+                            "scguns:item.boomstick.fire",
+                            "scguns:item.brass_shotgun.fire",
+                            "scguns:item.brass_revolver.fire",
+                            "scguns:item.shulker.fire",
+                            "scguns:item.iron_rifle.fire",
+                            "scguns:item.combat_shotgun.fire",
+                            "scguns:item.beam.fire",
+                            "scguns:item.airgun.fire",
+                            "scguns:item.heavier_rifle.fire",
+                            "scguns:item.iron_pistol.fire",
+                            "scguns:item.gauss.fire",
+                            "scguns:item.heavy_rifle.fire",
+                            "scguns:item.greaser_smg.fire",
+                            "scguns:item.plasma.fire",
+                            "scguns:item.rusty_gnat.fire",
+                            "scguns:item.cowboy.fire",
+                            "scguns:item.scrapper.fire",
+                            "scguns:item.sculk.fire",
+                            "scguns:item.raygun.fire",
                             "scguns:item.rocket_rifle.fire",
                             "superbwarfare:taser_fire_1p",
                             "superbwarfare:taser_fire_3p",
@@ -1650,18 +1645,17 @@ public class GeneralConfig {
                             "immersive_melodies:instruments.handpan.c3",
                             "immersive_melodies:instruments.handpan.c2",
                             "immersive_melodies:instruments.handpan.c1",
-                            "spore:engine", "spore:saw_sound", "spore:electric1", "spore:electric2", "spore:nuke", "spore:kraken_growl1", 
-                            "spore:kraken_growl2", "spore:vanguard_fireworks", "spore:vanguard_call", "spore:printing", "spore:signal", 
-                            "spore:infected_weapon_throw", "spore:infected_weapon_hit_block", "spore:infected_weapon_hit_entity", 
-                            "spore:cdu_insert", "spore:cleaver_spin", "spore:infected_pickaxe", "spore:reaver_reave", "spore:saber_leap", 
-                            "spore:scanner_item", "spore:syringe_suck", "spore:syringe_inject", "spore:reagent", "spore:infected_gear_break", 
-                            "spore:infected_gear_equip", "spore:pci_inject", "spore:shield_bash", "spore:syringegun_reload", "spore:syringegun_spin", 
-                            "spore:syringegun_shot", "spore:syringegun_inject", "spore:tumoroid_nuke", "spore:mistmaker_deploy", "spore:mistmaker_shot1", 
+                            "spore:engine", "spore:saw_sound", "spore:electric1", "spore:electric2", "spore:nuke", "spore:kraken_growl1",
+                            "spore:kraken_growl2", "spore:vanguard_fireworks", "spore:vanguard_call", "spore:printing", "spore:signal",
+                            "spore:infected_weapon_throw", "spore:infected_weapon_hit_block", "spore:infected_weapon_hit_entity",
+                            "spore:cdu_insert", "spore:cleaver_spin", "spore:infected_pickaxe", "spore:reaver_reave", "spore:saber_leap",
+                            "spore:scanner_item", "spore:syringe_suck", "spore:syringe_inject", "spore:reagent", "spore:infected_gear_break",
+                            "spore:infected_gear_equip", "spore:pci_inject", "spore:shield_bash", "spore:syringegun_reload", "spore:syringegun_spin",
+                            "spore:syringegun_shot", "spore:syringegun_inject", "spore:tumoroid_nuke", "spore:mistmaker_deploy", "spore:mistmaker_shot1",
                             "spore:mistmaker_shot2", "spore:bile_blaster_shot1", "spore:bile_blaster_shot2", "spore:assassin_shot1", "spore:assassin_shot2",
                             "soundattract:wooden_floor_creek", "soundattract:arrow_miss", "soundattract:arrow_impact"
                 ), obj -> obj instanceof String && net.minecraft.resources.ResourceLocation.tryParse((String) obj) != null);
         BUILDER.pop();
-
 
         BUILDER.push("groups");
         MAX_GROUP_SIZE = BUILDER.defineInRange("maxGroupSize", 64, 1, 128);

@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.toughasnails;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import net.minecraft.server.MinecraftServer;
@@ -91,7 +93,7 @@ public final class ToughAsNailsIntegration {
             ToughAsNailsStateCache.update(player.getUUID(), new ToughAsNailsStateCache.State(config(scent), config(sound), now));
         } catch (Throwable t) {
             ToughAsNailsStateCache.update(player.getUUID(), new ToughAsNailsStateCache.State(1.0, 1.0, now));
-            if (SoundAttractConfig.COMMON != null && SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.TOUGH_AS_NAILS)) {
                 SoundAttractMod.LOGGER.warn("[ToughAsNailsIntegration] Failed to update state for {}", player.getName().getString(), t);
             }
         }

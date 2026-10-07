@@ -15,10 +15,6 @@ import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.EnumSet;
 
-/**
- * AI goal for Vigil scouts to report player sightings back to their Proto parent.
- * This triggers the Proto's predatory creeping behavior.
- */
 public class VigilSightedReporterGoal extends Goal {
     private final Vigil vigil;
     private int reportCooldown = 0;
@@ -31,7 +27,7 @@ public class VigilSightedReporterGoal extends Goal {
     @Override
     public boolean canUse() {
         if (!IntegrationConfig.ENABLE_PROTO_PREDATORY_CREEP.get()) return false;
-        
+
         if (reportCooldown > 0) {
             reportCooldown--;
             return false;
@@ -51,16 +47,16 @@ public class VigilSightedReporterGoal extends Goal {
 
         BlockPos targetPos = target.blockPosition();
         CompoundTag nbt = proto.getPersistentData();
-        
-        if (!nbt.contains("SoundAttract_HuntTarget") || 
+
+        if (!nbt.contains("SoundAttract_HuntTarget") ||
             BlockPos.of(nbt.getLong("SoundAttract_HuntTarget")).distSqr(targetPos) > 64) {
-            
+
             nbt.putLong("SoundAttract_HuntTarget", targetPos.asLong());
             nbt.putLong("SoundAttract_HuntStartTime", vigil.level().getGameTime());
-            
+
             playAlertSound(vigil);
-            
-            reportCooldown = 400; 
+
+            reportCooldown = 400;
         }
     }
 

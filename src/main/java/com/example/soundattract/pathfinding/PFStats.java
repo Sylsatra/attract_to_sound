@@ -9,6 +9,7 @@ public final class PFStats {
     public static volatile long moveToIssued = 0;
     public static volatile long moveToDroppedCooldown = 0;
     public static volatile long moveToDroppedDelta = 0;
+    public static volatile long moveToDroppedDangerous = 0;
     public static volatile long moveToFallbackAttempted = 0;
     public static volatile long moveToFallbackSucceeded = 0;
 
@@ -18,6 +19,7 @@ public final class PFStats {
         long i = moveToIssued;
         long c = moveToDroppedCooldown;
         long d = moveToDroppedDelta;
+        long h = moveToDroppedDangerous;
         long fa = moveToFallbackAttempted;
         long fs = moveToFallbackSucceeded;
         pathAttemptsConsumed = 0;
@@ -25,8 +27,9 @@ public final class PFStats {
         moveToIssued = 0;
         moveToDroppedCooldown = 0;
         moveToDroppedDelta = 0;
+        moveToDroppedDangerous = 0;
         moveToFallbackAttempted = 0;
         moveToFallbackSucceeded = 0;
-        return "PFStats: path(consumed=" + a + ", rejected=" + r + ") moveTo(issued=" + i + ", droppedCooldown=" + c + ", droppedDelta=" + d + ", fallback=" + fs + "/" + fa + ")";
+        return "PFStats: path(consumed=" + a + ", rejected=" + r + ") moveTo(issued=" + i + ", droppedCooldown=" + c + ", droppedDelta=" + d + ", droppedDangerous=" + h + ", fallback=" + fs + "/" + fa + ")";
     }
 }

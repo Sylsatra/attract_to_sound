@@ -1,5 +1,7 @@
 package com.example.soundattract.reload;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.config.SoundAttractConfig.SoundDefaultEntry;
@@ -110,7 +112,7 @@ public class SoundDefinitionsReloadListener extends SimpleJsonResourceReloadList
             SoundAttractConfig.bakeConfig();
             SoundAttractionEvents.invalidateCachedEntityTypes();
         } catch (Throwable t) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_TRACKING)) {
                 SoundAttractMod.LOGGER.warn("[SoundDefinitionsReloadListener] Failed to re-bake config after datapack reload", t);
             }
         }

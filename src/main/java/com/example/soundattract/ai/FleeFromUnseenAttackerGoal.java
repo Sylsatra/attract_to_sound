@@ -3,7 +3,7 @@ package com.example.soundattract.ai;
 import com.example.soundattract.event.StealthDetectionEvents;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.PathfinderMob; 
+import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.util.DefaultRandomPos;
 import net.minecraft.world.entity.player.Player;
@@ -51,7 +51,7 @@ public class FleeFromUnseenAttackerGoal extends Goal {
         if (fleePos == null) {
             return false;
         }
-        
+
         this.wantedX = fleePos.x;
         this.wantedY = fleePos.y;
         this.wantedZ = fleePos.z;

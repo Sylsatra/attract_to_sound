@@ -34,15 +34,15 @@ import java.util.Optional;
 public abstract class HumanoidArmorLayerMixin {
     private static final Logger LOGGER = LogManager.getLogger();
 
-    @Shadow(remap = false) 
+    @Shadow(remap = false)
     protected abstract ResourceLocation getArmorResource(net.minecraft.world.entity.Entity entity, ItemStack stack, EquipmentSlot slot, String type);
 
     private static final ThreadLocal<java.util.List<ResourceLocation>> s_CapturedTextures = ThreadLocal.withInitial(java.util.ArrayList::new);
     private static final ThreadLocal<Boolean> s_IsRecording = ThreadLocal.withInitial(() -> false);
-    
+
     @Inject(method = "renderArmorPiece", at = @At("HEAD"), cancellable = true)
     private void soundattract$startRecording(PoseStack poseStack, MultiBufferSource buffer, LivingEntity entity, EquipmentSlot slot, int packedLight, HumanoidModel<?> armorModel, CallbackInfo ci) {
-        if (entity.isInvisible() && SoundAttractConfig.shouldHideWornGearWhileInvisible()) {
+        if (entity.isInvisible() && !com.example.soundattract.client.FromTheFogVisualCompat.shouldKeepInvisibleEquipment(entity) && SoundAttractConfig.shouldHideWornGearWhileInvisible()) {
             ci.cancel();
             return;
         }
@@ -62,18 +62,18 @@ public abstract class HumanoidArmorLayerMixin {
 
     @Inject(method = "renderArmorPiece", at = @At("TAIL"))
     private void soundattract$tintArmorWithCamo(
-            PoseStack poseStack, MultiBufferSource buffer, 
-            LivingEntity entity, EquipmentSlot slot, 
-            int packedLight, HumanoidModel<?> armorModel, 
+            PoseStack poseStack, MultiBufferSource buffer,
+            LivingEntity entity, EquipmentSlot slot,
+            int packedLight, HumanoidModel<?> armorModel,
             CallbackInfo ci) {
-        
+
         s_IsRecording.set(false);
         if (entity.isInvisible() && SoundAttractConfig.shouldHideWornGearWhileInvisible()) return;
         CamoLODUtil.LODResult lod = CamoLODUtil.getLOD(entity);
         if (!lod.shouldRender()) return;
 
         java.util.List<ResourceLocation> captured = new java.util.ArrayList<>(s_CapturedTextures.get());
-        
+
         if (entity == Minecraft.getInstance().player && entity.level().getGameTime() % 200 == 0) {
             if (captured.isEmpty()) {
             } else {
@@ -94,36 +94,36 @@ public abstract class HumanoidArmorLayerMixin {
         if (stack.isEmpty() || !stack.hasTag()) return;
 
         net.minecraft.nbt.CompoundTag tag = stack.getTag();
-        
+
         if (tag.contains("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_LIST)) {
             net.minecraft.nbt.ListTag list = tag.getList("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_COMPOUND);
             com.example.soundattract.util.CamoUtil.BlendedCamoData blended = com.example.soundattract.util.CamoUtil.getBlendedDataFromTag(list);
-            
+
             if (blended.color().isPresent()) {
                 ResourceLocation smudgeTex = com.example.soundattract.camo.CamoTextureGenerator.getOrCreateMaskedSmudge(
-                    blended.seed(), 
-                    blended.color().get(), 
-                    blended.strength() * 2.0f, 
-                    captured, 
+                    blended.seed(),
+                    blended.color().get(),
+                    blended.strength() * 2.0f,
+                    captured,
                     lod.resolution(),
                     blended.erosion(),
                     blended.humidity(),
                     blended.temp()
                 );
-        
+
                 if (smudgeTex != null) {
                     VertexConsumer vertexConsumer = buffer.getBuffer(CamoRenderTypes.camoOverlay(smudgeTex));
                     armorModel.renderToBuffer(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY, 1.0f, 1.0f, 1.0f, 1.0f);
                 }
             }
-        } 
+        }
         else if (tag.contains("soundattract:CamoStrength")) {
             int color = tag.getInt("soundattract:CamoColor");
             float strength = tag.getFloat("soundattract:CamoStrength");
             long seed = tag.getLong("soundattract:CamoSeed");
 
             ResourceLocation smudgeTex = CamoTextureGenerator.getOrCreateMaskedSmudge(seed, color, strength, captured, lod.resolution(), 0, 0, 0);
-            
+
             if (smudgeTex != null) {
                 VertexConsumer vertexConsumer = buffer.getBuffer(CamoRenderTypes.camoOverlay(smudgeTex));
                 armorModel.renderToBuffer(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY, 1.0f, 1.0f, 1.0f, 1.0f);

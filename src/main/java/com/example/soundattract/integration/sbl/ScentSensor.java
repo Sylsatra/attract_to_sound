@@ -31,14 +31,12 @@ public class ScentSensor<E extends PathfinderMob> extends ExtendedSensor<E> {
         MemoryModuleType.WALK_TARGET
     );
 
-
     private UUID targetScentOwner;
     private long lastScentTime;
 
     public ScentSensor() {
 
-
-        setScanRate(e -> 10); 
+        setScanRate(e -> 10);
     }
 
     @Override
@@ -60,12 +58,11 @@ public class ScentSensor<E extends PathfinderMob> extends ExtendedSensor<E> {
     protected void doTick(ServerLevel level, E entity) {
         if (!SoundAttractConfig.COMMON.enableScentSystem.get()) return;
 
-
         if (entity.getTarget() != null && entity.getTarget().isAlive()) {
             BrainUtils.clearMemory(entity, SCENT_TARGET);
             return;
         }
-        
+
 
         if (SoundAttractConfig.COMMON.enableStealthMechanics.get() && StealthDetectionEvents.shouldSuppressTargeting(entity)) {
             BrainUtils.clearMemory(entity, SCENT_TARGET);
@@ -79,7 +76,6 @@ public class ScentSensor<E extends PathfinderMob> extends ExtendedSensor<E> {
         List<ScentNode> nodes = scentManager.getNodesInArea(chunkPos);
 
         if (nodes.isEmpty()) {
-
 
              BrainUtils.clearMemory(entity, SCENT_TARGET);
              return;
@@ -95,10 +91,10 @@ public class ScentSensor<E extends PathfinderMob> extends ExtendedSensor<E> {
                 .filter(n -> (currentTime - n.getTimestamp()) <= maxDuration)
                 .max(Comparator.comparingLong(ScentNode::getTimestamp))
                 .orElse(null);
-            
+
             if (freshestNode != null) {
                 targetScentOwner = freshestNode.getOwnerUUID();
-                
+
 
                 bestNode = nodes.stream()
                     .filter(n -> n.getOwnerUUID().equals(targetScentOwner))
@@ -114,11 +110,9 @@ public class ScentSensor<E extends PathfinderMob> extends ExtendedSensor<E> {
                 .filter(n -> n.getTimestamp() > lastScentTime)
                 .min(Comparator.comparingLong(ScentNode::getTimestamp))
                 .orElse(null);
-            
+
 
             if (bestNode == null) {
-
-
 
             }
         }
@@ -128,10 +122,6 @@ public class ScentSensor<E extends PathfinderMob> extends ExtendedSensor<E> {
             BrainUtils.setMemory(entity, SCENT_TARGET, bestNode.getBlockPos());
         } else if (targetScentOwner != null) {
 
-
-
-
-            
 
 
         }

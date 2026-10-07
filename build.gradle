@@ -12,6 +12,7 @@ group = project.property('mod_group_id')
 mixin {
     add sourceSets.main, "soundattract.refmap.json"
     config "soundattract.mixins.json"
+    config "soundattract.taczhostiles.mixins.json"
     defaultObfuscationEnv = "searge"
     debug.verbose     = true
     debug.export      = true
@@ -71,6 +72,15 @@ minecraft {
                 }
         gameTestServer {
             property 'forge.enabledGameTestNamespaces', project.property('mod_id')
+            if (project.hasProperty('livingBridgeGameTestDirectory')) {
+                workingDirectory project.file(project.property('livingBridgeGameTestDirectory'))
+            }
+            mods {
+                "${project.property('mod_id')}" {
+                    source sourceSets.main
+                    source sourceSets.test
+                }
+            }
         }
         data { 
             workingDirectory project.file('run-data')
@@ -96,7 +106,7 @@ repositories {
         url = "https://repo.plasmoverse.com/releases"
     }
     flatDir {
-        dirs 'libs'
+        dirs 'libs', 'mods/weather2/libs'
     }
     maven {
         name = 'GeckoLib'
@@ -109,6 +119,9 @@ repositories {
 }
 
 dependencies {
+    def quantifiedApiJar = file('mods/quantified-api-omni-2.2.0.jar').exists()
+            ? file('mods/quantified-api-omni-2.2.0.jar')
+            : file('libs/quantified api-omni-2.2.0.jar')
         minecraft "net.minecraftforge:forge:${project.property('minecraft_version')}-${project.property('forge_version')}"
     compileOnly "de.maxhenkel.voicechat:voicechat-api:2.5.27"
     runtimeOnly fg.deobf("maven.modrinth:simple-voice-chat:forge-1.20.1-2.5.27")
@@ -120,13 +133,23 @@ dependencies {
     compileOnly "su.plo.voice.api:server:2.1.5"
     compileOnly "su.plo.voice.api:client:2.1.5"
     compileOnly "maven.modrinth:smartbrainlib:1.15"
-    compileOnly files('libs/quantified api-omni-2.0.0.jar')
+    compileOnly files(quantifiedApiJar)
+    compileOnly fg.deobf('local.weather2:weather2-1.20.1:2.8.3')
+    compileOnly fg.deobf('local.coroutil:coroutil-forge-1.20.1:1.3.7')
     compileOnly files('libs/relentlessundead-1.20.1-0.0.2-ALPHA.jar')
     compileOnly files('libs/spore_2.2.0_1.20.1.jar')
     compileOnly files('libs/hotbath-1.20.1-4.0.0.jar')
     compileOnly files('libs/ToughAsNails-forge-1.20.1-9.2.0.171.jar')
+    compileOnly files('libs/tacz_hostiles-1.1.1.jar')
     implementation fg.deobf("software.bernie.geckolib:geckolib-forge-1.20.1:4.4.2")
     implementation("com.eliotlash.mclib:mclib:20")
+    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
+    minecraftLibrary("com.github.ben-manes.caffeine:caffeine:3.1.8")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
 }
 
 tasks.named('processResources', ProcessResources).configure {
@@ -150,7 +173,51 @@ tasks.named('processResources', ProcessResources).configure {
     }
 }
 
+tasks.register('syncGameTestStructuresToRun', Copy) {
+    from('src/test/resources/gameteststructures') {
+        include '*.snbt'
+    }
+    if (project.hasProperty('livingBridgeGameTestDirectory')) {
+        def isolatedRoot = file(project.property('livingBridgeGameTestDirectory'))
+        def repoRoot = project.projectDir.canonicalFile.toPath()
+        def isolatedPath = isolatedRoot.canonicalFile.toPath()
+        if (!new File(project.property('livingBridgeGameTestDirectory').toString()).isAbsolute()
+                || isolatedPath.startsWith(repoRoot)
+                || isolatedPath.startsWith(repoRoot.resolve('run'))) {
+            throw new GradleException('livingBridgeGameTestDirectory must be absolute and outside the repository and run directory')
+        }
+        into new File(isolatedRoot, 'gameteststructures')
+    } else {
+        into layout.projectDirectory.dir('run/gameteststructures')
+    }
+}
+
+tasks.matching { it.name == 'runGameTestServer' }.configureEach {
+    dependsOn tasks.named('syncGameTestStructuresToRun')
+    if (project.hasProperty('livingBridgeGameTestDirectory')) {
+        def isolatedRoot = file(project.property('livingBridgeGameTestDirectory'))
+        def repoRoot = project.projectDir.canonicalFile.toPath()
+        def isolatedPath = isolatedRoot.canonicalFile.toPath()
+        if (!new File(project.property('livingBridgeGameTestDirectory').toString()).isAbsolute()
+                || isolatedPath.startsWith(repoRoot)
+                || isolatedPath.startsWith(repoRoot.resolve('run'))) {
+            throw new GradleException('livingBridgeGameTestDirectory must be absolute and outside the repository and run directory')
+        }
+    }
+    if (project.hasProperty('livingBridgeFixture')) {
+        jvmArgs "-DlivingBridgeFixture=${project.property('livingBridgeFixture')}"
+    }
+}
+
 tasks.named('jar', Jar).configure {
+    // Caffeine is used by the hot hazard classifier and must travel with the
+    // mod; the Forge development runtime supplies it automatically, but a
+    // normal players' mods folder does not.
+    from {
+        configurations.runtimeClasspath
+                .filter { it.name.startsWith('caffeine-') }
+                .collect { zipTree(it).matching { exclude 'META-INF/**' } }
+    }
     manifest {
         attributes([
                 'Specification-Title'     : project.property('mod_id'),

@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.smartbrainlib;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import com.example.soundattract.runtime.DynamicScanCooldownManager;
 import com.example.soundattract.SoundAttractMod;
 
@@ -16,7 +18,7 @@ public final class SmartBrainLibCompat {
         try {
             return Proxy.tryAttach(mob);
         } catch (Throwable t) {
-            if (com.example.soundattract.config.SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SMART_BRAIN_LIB)) {
                 SoundAttractMod.LOGGER.warn("[SmartBrainLibCompat] Failed to attach brain integration for {}", mob.getUUID());
             }
             return false;
@@ -55,11 +57,9 @@ public final class SmartBrainLibCompat {
             addSensor(brain, new com.example.soundattract.integration.sbl.SoundAttractSensor<>());
             addSensor(brain, new com.example.soundattract.integration.sbl.ScentSensor<>());
 
-
             com.example.soundattract.integration.sbl.MoveToSoundBehaviour<net.minecraft.world.entity.PathfinderMob> soundBehaviour = new com.example.soundattract.integration.sbl.MoveToSoundBehaviour<>();
             soundBehaviour.cooldownFor(e -> Math.max(1, DynamicScanCooldownManager.currentScanCooldownTicks));
             addBehaviour(brain, 3, net.minecraft.world.entity.schedule.Activity.IDLE, soundBehaviour);
-
 
             com.example.soundattract.integration.sbl.MoveToScentBehaviour<net.minecraft.world.entity.PathfinderMob> scentBehaviour = new com.example.soundattract.integration.sbl.MoveToScentBehaviour<>();
             addBehaviour(brain, 5, net.minecraft.world.entity.schedule.Activity.IDLE, scentBehaviour);
@@ -83,7 +83,7 @@ public final class SmartBrainLibCompat {
                 Class<?> sensorClass = Class.forName("net.tslat.smartbrainlib.api.core.sensor.ExtendedSensor");
                 smartBrain.getMethod("addSensor", sensorClass).invoke(brain, sensor);
             } catch (Throwable t) {
-                if (com.example.soundattract.config.SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SMART_BRAIN_LIB)) {
                     SoundAttractMod.LOGGER.warn("[SmartBrainLibCompat] Failed to add sensor: {}", t.getMessage());
                 }
             }
@@ -97,7 +97,7 @@ public final class SmartBrainLibCompat {
                 smartBrain.getMethod("addBehaviour", int.class, activityClass, behaviourClass)
                     .invoke(brain, priority, activity, behaviour);
             } catch (Throwable t) {
-                if (com.example.soundattract.config.SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SMART_BRAIN_LIB)) {
                     SoundAttractMod.LOGGER.warn("[SmartBrainLibCompat] Failed to add behaviour: {}", t.getMessage());
                 }
             }

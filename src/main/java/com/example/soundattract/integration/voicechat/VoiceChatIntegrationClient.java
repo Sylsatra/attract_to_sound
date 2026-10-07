@@ -1,5 +1,7 @@
 package com.example.soundattract.integration.voicechat;
 
+import com.example.soundattract.config.DebugLoggingConfig;
+
 import de.maxhenkel.voicechat.api.events.ClientSoundEvent;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.player.Player;
@@ -31,7 +33,6 @@ public class VoiceChatIntegrationClient {
             return;
         }
 
-
         double db = computePeakDb(rawAudio);
         double normDb = db - (-127.0);
         float intensity01 = (float) Math.max(0.0, Math.min(1.0, normDb / 127.0));
@@ -42,7 +43,7 @@ public class VoiceChatIntegrationClient {
 
         boolean isWhispering = event.isWhispering();
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.VOICE_CHAT)) {
             SoundAttractMod.LOGGER.info(
                 "[SVC Client] dbFS={} normDb={} intensity01={} whispering={}",
                 db, normDb, intensity01, isWhispering
@@ -65,7 +66,6 @@ public class VoiceChatIntegrationClient {
         );
         SoundAttractNetwork.INSTANCE.sendToServer(msg);
     }
-
 
     private static double computePeakDb(short[] samples) {
         int highest = 0;
