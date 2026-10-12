@@ -16,6 +16,7 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
 import net.minecraftforge.event.entity.EntityLeaveLevelEvent;
+import net.minecraftforge.event.entity.living.LivingHurtEvent;
 import net.minecraftforge.event.server.ServerStoppedEvent;
 import net.minecraftforge.event.level.LevelEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -50,6 +51,10 @@ public class CsGrenadesEventHandler {
             .build();
     private static final Set<Entity> TRACKED_GRENADES = java.util.Collections.synchronizedSet(
             java.util.Collections.newSetFromMap(new WeakHashMap<>()));
+    private static final Map<Mob, FireHitThreat> RECENT_FIRE_HITS = java.util.Collections.synchronizedMap(new WeakHashMap<>());
+    private static final long FIRE_HIT_RETREAT_TICKS = 20L;
+
+    private record FireHitThreat(Vec3 position, long expiresAt) {}
 
     static List<Entity> trackedGrenadesSnapshot(net.minecraft.world.level.Level level) {
         if (level == null) return java.util.Collections.emptyList();
@@ -248,6 +253,10 @@ public class CsGrenadesEventHandler {
             return;
         }
 
+        if (event.getLevel().isClientSide) {
+            return;
+        }
+
         if (!(entity instanceof PathfinderMob mob)) {
             return;
         }
@@ -267,11 +276,69 @@ public class CsGrenadesEventHandler {
             return;
         }
 
+        // TACZ Hostiles use SmartBrainLib and its brain movement tasks can replace
+        // vanilla goal navigation every tick, so attach the flee behavior there.
+        if (isTaczCombatNpc(mob)
+                && com.example.soundattract.integration.smartbrainlib.SmartBrainLibCompat.tryAttachFireFleeBrain(mob)) {
+            return;
+        }
+
         boolean hasGoal = mob.goalSelector.getAvailableGoals().stream()
                 .anyMatch(wg -> wg.getGoal() instanceof FleeFromFireGoal);
         if (!hasGoal) {
             mob.goalSelector.addGoal(1, new FleeFromFireGoal(mob));
         }
+    }
+
+    @SubscribeEvent
+    public static void onLivingHurt(LivingHurtEvent event) {
+        if (event.getEntity().level().isClientSide
+                || !CsGrenadesCompat.isLoaded()
+                || !SoundAttractConfig.COMMON.enableCsgrenadesIntegration.get()
+                || !SoundAttractConfig.COMMON.enableFireFlee.get()) {
+            return;
+        }
+
+        Entity source = event.getSource().getEntity();
+        if (!isCsFireGrenade(source) || !(event.getEntity() instanceof PathfinderMob mob) || mob.fireImmune()) {
+            return;
+        }
+
+        String entityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).toString();
+        if (!SoundAttractConfig.FLEE_FROM_FIRE_ELIGIBLE_SET.contains(entityId) && !isTaczCombatNpc(mob)) {
+            return;
+        }
+
+        long currentTick = mob.level().getGameTime();
+        RECENT_FIRE_HITS.put(mob, new FireHitThreat(source.position(), currentTick + FIRE_HIT_RETREAT_TICKS));
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+            SoundAttractMod.LOGGER.debug("[CSGrenades] Mob {} took incendiary damage at {}; requesting retreat",
+                    mob.getType().getDescriptionId(), source.position());
+        }
+    }
+
+    private static boolean isCsFireGrenade(Entity entity) {
+        if (entity == null) {
+            return false;
+        }
+        for (Class<?> type = entity.getClass(); type != null; type = type.getSuperclass()) {
+            if ("club.pisquad.minecraft.csgrenades.entity.AbstractFireGrenade".equals(type.getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static Vec3 recentFireHitPosition(Mob mob, long currentTick) {
+        FireHitThreat threat = RECENT_FIRE_HITS.get(mob);
+        if (threat == null) {
+            return null;
+        }
+        if (currentTick >= threat.expiresAt()) {
+            RECENT_FIRE_HITS.remove(mob);
+            return null;
+        }
+        return threat.position();
     }
 
     private static boolean isTaczCombatNpc(PathfinderMob mob) {
@@ -286,6 +353,7 @@ public class CsGrenadesEventHandler {
         TRACKED_GRENADES.remove(entity);
         if (entity instanceof Mob mob) {
             FLEE_COOLDOWNS.invalidate(mob);
+            RECENT_FIRE_HITS.remove(mob);
         }
 
         if (!CsGrenadesCompat.isLoaded()) {
@@ -319,6 +387,7 @@ public class CsGrenadesEventHandler {
         FLEE_COOLDOWNS.invalidateAll();
         PROCESSED_FLASHBANGS.invalidateAll();
         TRACKED_GRENADES.clear();
+        RECENT_FIRE_HITS.clear();
         LAST_SCAN_TICKS.clear();
     }
 

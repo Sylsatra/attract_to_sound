@@ -6,6 +6,7 @@ import com.example.soundattract.runtime.DynamicScanCooldownManager;
 import com.example.soundattract.SoundAttractMod;
 
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.PathfinderMob;
 import net.minecraftforge.fml.ModList;
 
 public final class SmartBrainLibCompat {
@@ -25,9 +26,46 @@ public final class SmartBrainLibCompat {
         }
     }
 
+    /** Attach the fire flee behavior to both idle and combat activities for SBL mobs. */
+    public static boolean tryAttachFireFleeBrain(Mob mob) {
+        if (!IS_SBL_LOADED || !(mob instanceof PathfinderMob pathfinder)) return false;
+        try {
+            return Proxy.tryAttachFireFlee(pathfinder);
+        } catch (Throwable t) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                SoundAttractMod.LOGGER.warn("[CSGrenades] Failed to attach SmartBrainLib fire flee behavior for {}", mob.getUUID(), t);
+            }
+            return false;
+        }
+    }
+
     private static final class Proxy {
         private static final String OLD_BEHAVIOUR_CLASS = "com.example.soundattract.integration.sbl.SoundAttractSblBehaviour";
         private static final String BEHAVIOUR_CLASS = "com.example.soundattract.integration.sbl.MoveToSoundBehaviour";
+        private static final String FIRE_FLEE_BEHAVIOUR_CLASS = "com.example.soundattract.integration.csgrenades.FireFleeBehaviour";
+
+        private static boolean tryAttachFireFlee(PathfinderMob mob) {
+            Object brain = mob.getBrain();
+            if (!isSmartBrain(brain)) {
+                return false;
+            }
+
+            if (net.tslat.smartbrainlib.util.BrainUtils.getAllBehaviours(mob.getBrain())
+                    .anyMatch(behaviour -> behaviour != null && behaviour.getClass().getName().equals(FIRE_FLEE_BEHAVIOUR_CLASS))) {
+                return true;
+            }
+
+            com.example.soundattract.integration.csgrenades.FireFleeBehaviour<PathfinderMob> idleBehaviour =
+                    new com.example.soundattract.integration.csgrenades.FireFleeBehaviour<>();
+            addBehaviour(brain, Integer.MAX_VALUE, net.minecraft.world.entity.schedule.Activity.CORE, idleBehaviour);
+
+            boolean attached = net.tslat.smartbrainlib.util.BrainUtils.getAllBehaviours(mob.getBrain())
+                    .anyMatch(behaviour -> behaviour != null && behaviour.getClass().getName().equals(FIRE_FLEE_BEHAVIOUR_CLASS));
+            if (attached && DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CS_GRENADES)) {
+                SoundAttractMod.LOGGER.debug("[CSGrenades] Attached SmartBrainLib fire flee behavior to {}", mob.getUUID());
+            }
+            return attached;
+        }
 
         private static boolean tryAttach(Mob mob) {
             if (!(mob instanceof net.minecraft.world.entity.PathfinderMob pathfinder)) {

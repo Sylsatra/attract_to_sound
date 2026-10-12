@@ -34,17 +34,18 @@ public class FleeFromFireGoal extends Goal {
             return false;
         }
 
-        Vec3 firePos = CsGrenadesTracker.nearestActiveFire(
-                mob.level(), mob.position(),
-                Integer.MAX_VALUE,
-                mob.level().getGameTime()
-        );
+        long currentTick = mob.level().getGameTime();
+        Vec3 firePos = CsGrenadesEventHandler.recentFireHitPosition(mob, currentTick);
+        boolean recentlyHitByFire = firePos != null;
+        if (!recentlyHitByFire) {
+            firePos = CsGrenadesTracker.nearestActiveFire(mob.level(), mob.position(), Integer.MAX_VALUE, currentTick);
+        }
         if (firePos == null) {
             return false;
         }
 
         double dangerRadius = SoundAttractConfig.COMMON.fireFleeDangerRadius.get();
-        if (mob.position().distanceToSqr(firePos) > dangerRadius * dangerRadius) {
+        if (!recentlyHitByFire && mob.position().distanceToSqr(firePos) > dangerRadius * dangerRadius) {
             return false;
         }
 
@@ -67,16 +68,17 @@ public class FleeFromFireGoal extends Goal {
         if (!mob.getNavigation().isInProgress()) {
             return false;
         }
-        Vec3 firePos = CsGrenadesTracker.nearestActiveFire(
-                mob.level(), mob.position(),
-                Integer.MAX_VALUE,
-                mob.level().getGameTime()
-        );
+        long currentTick = mob.level().getGameTime();
+        Vec3 firePos = CsGrenadesEventHandler.recentFireHitPosition(mob, currentTick);
+        boolean recentlyHitByFire = firePos != null;
+        if (!recentlyHitByFire) {
+            firePos = CsGrenadesTracker.nearestActiveFire(mob.level(), mob.position(), Integer.MAX_VALUE, currentTick);
+        }
         if (firePos == null) {
             return false;
         }
         double dangerRadius = SoundAttractConfig.COMMON.fireFleeDangerRadius.get();
-        return mob.position().distanceToSqr(firePos) <= dangerRadius * dangerRadius;
+        return recentlyHitByFire || mob.position().distanceToSqr(firePos) <= dangerRadius * dangerRadius;
     }
 
     @Override
