@@ -12629,8 +12629,19 @@ public final class LivingWallCoordinator {
     static int requiredLayerCountForTilt(SitePlan plan, double horizontalTouchStep, double verticalTouchStep) {
         if (plan == null) return Integer.MAX_VALUE;
         BlockPos structuralEnd = tiltStructuralEnd(plan);
+        double adjustedVerticalTouchStep = wallLedgeArcAdjustedVerticalTouchStep(
+                plan.pivot(), structuralEnd, verticalTouchStep);
         return requiredLayerCountForTilt(horizontalDistance(plan.pivot(), structuralEnd),
-                Math.abs(structuralEnd.getY() - plan.pivot().getY()), horizontalTouchStep, verticalTouchStep);
+                Math.abs(structuralEnd.getY() - plan.pivot().getY()), horizontalTouchStep, adjustedVerticalTouchStep);
+    }
+
+    private static double wallLedgeArcAdjustedVerticalTouchStep(BlockPos pivot, BlockPos end, double verticalTouchStep) {
+        if (pivot == null || end == null || end.getY() <= pivot.getY()) return verticalTouchStep;
+        // The configured touch step includes CONTACT_EPSILON, which permits a
+        // small visible gap. Use the actual body height, then reserve for the
+        // maximum extra rise from the upward arc between adjacent layers.
+        double bodyHeight = Math.max(0.05D, verticalTouchStep - CONTACT_EPSILON);
+        return bodyHeight / (1.0D + 0.3D * Math.PI);
     }
 
     private static BlockPos tiltStructuralEnd(SitePlan plan) {
@@ -12647,7 +12658,8 @@ public final class LivingWallCoordinator {
                                                  double horizontalTouchStep, double verticalTouchStep) {
         if (pivot == null || spanEnd == null) return Integer.MAX_VALUE;
         return requiredLayerCountForTilt(horizontalDistance(pivot, spanEnd),
-                Math.abs(spanEnd.getY() - pivot.getY()), horizontalTouchStep, verticalTouchStep);
+                Math.abs(spanEnd.getY() - pivot.getY()), horizontalTouchStep,
+                wallLedgeArcAdjustedVerticalTouchStep(pivot, spanEnd, verticalTouchStep));
     }
 
     static double tiltRouteLength(SitePlan plan) {

@@ -340,7 +340,7 @@ public class IntegrationConfig {
                 .comment("Minimum ticks between re-triggering flee for the same mob.")
                 .defineInRange("fireFleeCooldownTicks", 40, 1, 600);
         FLEE_FROM_FIRE_ELIGIBLE_MOBS = BUILDER
-                .comment("Entity IDs eligible to receive FleeFromFireGoal. mob.fireImmune()==true is always excluded.")
+                .comment("Entity IDs eligible to receive FleeFromFireGoal. TACZ Hostiles and TACZ NPC entities are also included automatically. mob.fireImmune()==true is always excluded.")
                 .defineList("fleeFromFireEligibleMobs", java.util.Arrays.asList(
                         "minecraft:zombie","minecraft:husk","minecraft:drowned","minecraft:skeleton",
                         "minecraft:stray","minecraft:creeper","minecraft:spider","minecraft:cave_spider",

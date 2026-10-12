@@ -182,11 +182,12 @@ public class CsGrenadesEventHandler {
             }
             if (isGrenadeActivated(grenade)) {
                 UUID id = grenade.getUUID();
-                if (PROCESSED_FLASHBANGS.asMap().putIfAbsent(id, Boolean.TRUE) == null
-                        && "FlashBangEntity".equals(grenade.getClass().getSimpleName())) {
-                    processExplodedFlashbang(grenade, level);
+                if ("FlashBangEntity".equals(grenade.getClass().getSimpleName())) {
+                    if (PROCESSED_FLASHBANGS.asMap().putIfAbsent(id, Boolean.TRUE) == null) {
+                        processExplodedFlashbang(grenade, level);
+                    }
+                    TRACKED_GRENADES.remove(grenade);
                 }
-                TRACKED_GRENADES.remove(grenade);
             } else if (!grenade.isAlive()) {
                 TRACKED_GRENADES.remove(grenade);
             }
@@ -260,9 +261,9 @@ public class CsGrenadesEventHandler {
             return;
         }
 
-        Set<String> eligible = SoundAttractConfig.FLEE_FROM_FIRE_ELIGIBLE_SET;
         String entityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).toString();
-        if (!eligible.contains(entityId)) {
+        if (!SoundAttractConfig.FLEE_FROM_FIRE_ELIGIBLE_SET.contains(entityId)
+                && !isTaczCombatNpc(mob)) {
             return;
         }
 
@@ -271,6 +272,12 @@ public class CsGrenadesEventHandler {
         if (!hasGoal) {
             mob.goalSelector.addGoal(1, new FleeFromFireGoal(mob));
         }
+    }
+
+    private static boolean isTaczCombatNpc(PathfinderMob mob) {
+        String className = mob.getClass().getName();
+        return className.startsWith("com.corrinedev.tachostiles.")
+                || className.startsWith("com.corrinedev.tacznpcs.");
     }
 
     @SubscribeEvent
