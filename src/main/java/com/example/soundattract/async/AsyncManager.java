@@ -40,7 +40,6 @@ public final class AsyncManager {
     private static final BlockingQueue<DelayedTask<?>> DELAYED_TASKS = new ArrayBlockingQueue<>(DELAYED_QUEUE_CAPACITY);
     private static final Object WORK_LIFECYCLE_LOCK = new Object();
     private static final AtomicBoolean ACCEPTING_WORK = new AtomicBoolean(true);
-    private static final AtomicBoolean DRAIN_SCHEDULED = new AtomicBoolean(false);
     private static volatile MinecraftServer serverRef;
     private static volatile MinecraftServer stoppedServer;
 
@@ -136,10 +135,6 @@ public final class AsyncManager {
                     return false;
                 }
             }
-            MinecraftServer server = serverRef;
-            if (server != null) {
-                scheduleBudgetedDrain(server);
-            }
             return true;
         }
     }
@@ -183,7 +178,6 @@ public final class AsyncManager {
         }
         DELAYED_TASKS.clear();
         serverRef = null;
-        DRAIN_SCHEDULED.set(false);
         RejectedExecutionException stopped = new RejectedExecutionException("SoundAttract server stopped");
         pendingMain.forEach(future -> future.completeExceptionally(stopped));
         pendingDelayed.forEach(future -> future.completeExceptionally(stopped));
@@ -222,25 +216,6 @@ public final class AsyncManager {
             task.start();
             return true;
         });
-    }
-
-    private static void scheduleBudgetedDrain(MinecraftServer server) {
-        if (server == null) return;
-        if (!DRAIN_SCHEDULED.compareAndSet(false, true)) return;
-        try {
-            server.execute(() -> {
-                DRAIN_SCHEDULED.set(false);
-                if (serverRef != server || !ACCEPTING_WORK.get()) {
-                    return;
-                }
-                drainBudgeted(server);
-                if (!MAIN_THREAD_QUEUE.isEmpty()) {
-                    scheduleBudgetedDrain(server);
-                }
-            });
-        } catch (Throwable ignored) {
-            DRAIN_SCHEDULED.set(false);
-        }
     }
 
     private static void drainBudgeted(MinecraftServer server) {

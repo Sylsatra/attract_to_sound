@@ -19,6 +19,11 @@ mixin {
     dumpTargetOnFailure = true
 }
 
+// Keep Caffeine as its own Forge Jar-in-Jar module. Expanding its classes into
+// this mod's module creates a split-package conflict when another mod also
+// exposes Caffeine (for example, Apoli).
+jarJar.enable()
+
 base {
     archivesName = "forge_${project.property('mod_id')}_${project.property('minecraft_version')}"
 }
@@ -145,6 +150,9 @@ dependencies {
     implementation("com.eliotlash.mclib:mclib:20")
     implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
     minecraftLibrary("com.github.ben-manes.caffeine:caffeine:3.1.8")
+    jarJar(group: 'com.github.ben-manes.caffeine', name: 'caffeine', version: '[3.1.8,4.0)') {
+        jarJar.pin(it, '3.1.8')
+    }
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
 }
 
@@ -210,14 +218,6 @@ tasks.matching { it.name == 'runGameTestServer' }.configureEach {
 }
 
 tasks.named('jar', Jar).configure {
-    // Caffeine is used by the hot hazard classifier and must travel with the
-    // mod; the Forge development runtime supplies it automatically, but a
-    // normal players' mods folder does not.
-    from {
-        configurations.runtimeClasspath
-                .filter { it.name.startsWith('caffeine-') }
-                .collect { zipTree(it).matching { exclude 'META-INF/**' } }
-    }
     manifest {
         attributes([
                 'Specification-Title'     : project.property('mod_id'),
@@ -236,7 +236,7 @@ tasks.named('jar', Jar).configure {
 publishing {
     publications {
         register('mavenJava', MavenPublication) {
-            artifact jar
+            artifact tasks.named('jarJar')
         }
     }
     repositories {
