@@ -46,8 +46,9 @@ public class PlasmoIntegration implements AddonInitializer {
                 return;
             }
 
-            Object mcPlayerObj = event.getPlayer().getInstance();
-            if (!(mcPlayerObj instanceof ServerPlayer mcPlayer)) {
+            var voicePlayer = event.getPlayer();
+            ServerPlayer mcPlayer = resolveMinecraftPlayer(voicePlayer == null ? null : voicePlayer.getInstance());
+            if (mcPlayer == null) {
                 return;
             }
 
@@ -57,8 +58,11 @@ public class PlasmoIntegration implements AddonInitializer {
             net.minecraft.core.BlockPos pos = mcPlayer.blockPosition();
             String dimString = mcPlayer.serverLevel().dimension().location().toString();
 
-            mcPlayer.getServer().execute(() -> SoundTracker.addSound(null, pos, dimString,
-                    range, weight, lifetime, SoundMessage.VOICE_CHAT_SOUND_ID.toString()));
+            var minecraftServer = mcPlayer.getServer();
+            if (minecraftServer != null) {
+                minecraftServer.execute(() -> SoundTracker.addSound(null, pos, dimString,
+                        range, weight, lifetime, SoundMessage.VOICE_CHAT_SOUND_ID.toString()));
+            }
         }
 
         @EventSubscribe
@@ -78,29 +82,7 @@ public class PlasmoIntegration implements AddonInitializer {
                 if (voicePlayer == null) {
                     return;
                 }
-                Object playerObj = voicePlayer.getInstance();
-                if (playerObj == null) {
-                    return;
-                }
-
-                ServerPlayer mcPlayer = null;
-                if (playerObj instanceof ServerPlayer sp) {
-                    mcPlayer = sp;
-                } else {
-                    String[] candidateMethods = new String[]{"getPlayer", "getMinecraftPlayer", "getHandle", "getInstance"};
-                    for (String methodName : candidateMethods) {
-                        try {
-                            var m = playerObj.getClass().getMethod(methodName);
-                            Object inner = m.invoke(playerObj);
-                            if (inner instanceof ServerPlayer sp2) {
-                                mcPlayer = sp2;
-                                break;
-                            }
-                        } catch (Throwable ignored) {
-                        }
-                    }
-                }
-
+                ServerPlayer mcPlayer = resolveMinecraftPlayer(voicePlayer.getInstance());
                 if (mcPlayer == null) {
                     return;
                 }
@@ -125,6 +107,28 @@ public class PlasmoIntegration implements AddonInitializer {
             } catch (Throwable t) {
                 Soundattract.LOGGER.error("[PlasmoIntegration] Exception in onServerSourceAudio", t);
             }
+        }
+
+        private static ServerPlayer resolveMinecraftPlayer(Object playerObj) {
+            if (playerObj instanceof ServerPlayer player) {
+                return player;
+            }
+            if (playerObj == null) {
+                return null;
+            }
+
+            String[] candidateMethods = {"getPlayer", "getMinecraftPlayer", "getHandle", "getInstance"};
+            for (String methodName : candidateMethods) {
+                try {
+                    Object inner = playerObj.getClass().getMethod(methodName).invoke(playerObj);
+                    if (inner instanceof ServerPlayer player) {
+                        return player;
+                    }
+                } catch (ReflectiveOperationException | SecurityException ignored) {
+
+                }
+            }
+            return null;
         }
     }
 }

@@ -5,7 +5,8 @@ public enum ScentSourceType {
     ARROW_ORIGIN,
     ARROW_PATH,
     MOB_PROJECTILE_ORIGIN,
-    MOB_PROJECTILE_PATH;
+    MOB_PROJECTILE_PATH,
+    PLAYER_WIND;
 
     public static ScentSourceType fromNameOrDefault(String name) {
         if (name == null || name.isEmpty()) return PLAYER_WALK;

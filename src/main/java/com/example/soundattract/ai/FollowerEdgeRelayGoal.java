@@ -108,7 +108,8 @@ public class FollowerEdgeRelayGoal extends Goal {
     private void moveToThrottled(BlockPos dest, double speed, boolean force) {
         if (dest == null) return;
         if (force) {
-            this.mob.getNavigation().moveTo(dest.getX(), dest.getY(), dest.getZ(), speed);
+            com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(
+                    this.mob, net.minecraft.world.phys.Vec3.atCenterOf(dest), speed);
             this.lastIssuedNavTarget = dest;
             this.repathCooldown = REPATH_COOLDOWN_TICKS;
             return;
@@ -123,7 +124,8 @@ public class FollowerEdgeRelayGoal extends Goal {
         double distSq = dest.distSqr(this.mob.blockPosition());
         double thresholdSq = 4.0;
         if (destChanged || navDoneOrStuck || distSq > thresholdSq) {
-            this.mob.getNavigation().moveTo(dest.getX(), dest.getY(), dest.getZ(), speed);
+            com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(
+                    this.mob, net.minecraft.world.phys.Vec3.atCenterOf(dest), speed);
             this.lastIssuedNavTarget = dest;
             this.repathCooldown = REPATH_COOLDOWN_TICKS;
         }
@@ -131,6 +133,7 @@ public class FollowerEdgeRelayGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return false;
         if (this.mob.isVehicle() || this.mob.isSleeping()) {
             return false;
         }
@@ -211,6 +214,7 @@ public class FollowerEdgeRelayGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return false;
         if (this.mob.getTarget() != null && this.mob.getTarget().isAlive()) {
             double threshold = SoundAttractConfig.COMMON.highSoundWeightTargetOverride.get();
             SoundTracker.SoundRecord bestNow = getCachedNearestSound();
@@ -311,6 +315,7 @@ public class FollowerEdgeRelayGoal extends Goal {
 
     @Override
     public void tick() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return;
 
         if (this.blockBreakerGoal != null && ((MobAccessor) this.mob).getGoalSelector().getRunningGoals().anyMatch(g -> g.getGoal() == this.blockBreakerGoal)) {
             SoundTracker.SoundRecord bestPossibleSound = getCachedNearestSound();

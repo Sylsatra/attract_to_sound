@@ -57,10 +57,36 @@ dependencies {
     modImplementation files('libs/geckolib-fabric-1.20.1-4.8.3.jar')
 	implementation("com.eliotlash.mclib:mclib:20")
 	modImplementation files('libs/ForgeConfigAPIPort-v8.0.3-1.20.1-Fabric.jar')
-	modImplementation files('libs/CustomNPCs-Unofficial-Fabric-1.20.1.20251214.jar')
+	def customNpcsJar = files('libs/CustomNPCs-Unofficial-Fabric-1.20.1.20251214.jar')
+	if (project.hasProperty('excludeCustomNpcsRuntime')) {
+		modCompileOnly customNpcsJar
+	} else {
+		modImplementation customNpcsJar
+	}
 	modImplementation files('libs/architectury-9.2.14-fabric.jar')
-	modImplementation files('libs/SmartBrainLib-fabric-1.20.1-1.15.jar')
+	def smartBrainLibJar = files('libs/SmartBrainLib-fabric-1.20.1-1.15.jar')
+	if (project.hasProperty('excludeSmartBrainLibRuntime')) {
+		modCompileOnly smartBrainLibJar
+	} else {
+		modImplementation smartBrainLibJar
+	}
 	modImplementation files('libs/quantified api-omni-2.2.3.jar')
+	def toughAsNailsJar = files('libs/ToughAsNails-fabric-1.20.1-9.2.0.171.jar')
+	modCompileOnly toughAsNailsJar
+	if (project.hasProperty('includeToughAsNailsRuntime')) {
+		modRuntimeOnly toughAsNailsJar
+		modRuntimeOnly files('build/optional-profile/tough-as-nails/GlitchCore-fabric-1.20.1-0.0.1.1.jar')
+		// GlitchCore declares these as nested jars, but Loom's dev GameTest launch
+		// does not put them on its runtime classpath. Add its embedded libraries
+		// explicitly for the optional Tough As Nails verification profile.
+		runtimeOnly files(fileTree('build/optional-profile/tough-as-nails/embedded') { include '*.jar' })
+	}
+	modRuntimeOnly files('libs/From-The-Fog-1.20-v1.9.2-Forge-Fabric.jar')
+	// Development-only runtime profile for the optional Spoiled scent integration GameTest.
+	if (!project.hasProperty('excludeSpoiledRuntime')) {
+		modRuntimeOnly files('libs/Spoiled-fabric-1.20.1-2.2.2.jar')
+		modRuntimeOnly "maven.modrinth:9s6osm5g:2xQdCMyG" // Cloth Config 11.1.136+fabric, required by Spoiled.
+	}
 	include implementation('com.github.ben-manes.caffeine:caffeine:3.1.8')
 	modCompileOnly files('libs/TACZ-Refabricated-1.20.1-0.5.1-forge1.1.7-hotfix2.jar')
 
@@ -70,6 +96,71 @@ dependencies {
 	include(modImplementation("dev.onyxstudios.cardinal-components-api:cardinal-components-world:${project.cca_version}"))
 	testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+}
+
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = "soundattract-gametest"
+		enableGameTests = true
+		enableClientGameTests = true
+		eula = true
+	}
+}
+
+// Opt-in offscreen client regression for the GeckoLib/manual-spritesheet conflict.
+// This starts at the title screen, captures the real GPU output, and exits without opening a world.
+loom {
+	runs {
+		textureProbe {
+			client()
+			source sourceSets.gametest
+			runDir 'build/run/mob-alert-texture-probe'
+			vmArg '-Dsoundattract.textureProbe=true'
+			vmArg "-Dsoundattract.textureProbeOutput=${file('build/diagnostics/marker-texture-fix').absolutePath}"
+			programArgs '--width', '640', '--height', '480'
+		}
+	}
+}
+
+tasks.named('runTextureProbe').configure {
+	def resultFile = file('build/diagnostics/marker-texture-fix/runtime-result.txt')
+	doFirst {
+		if (resultFile.exists() && !resultFile.delete()) {
+			throw new GradleException('Cannot clear the previous texture probe result')
+		}
+	}
+	doLast {
+		if (!resultFile.exists() || !resultFile.text.contains('PASS:')) {
+			throw new GradleException('Mob-alert texture probe failed; inspect build/diagnostics/marker-texture-fix/runtime-result.txt')
+		}
+	}
+}
+
+tasks.named('processGametestResources', ProcessResources).configure {
+	def includeSmartBrainLibTests = !project.hasProperty('excludeSmartBrainLibRuntime')
+	def includeSpoiledTests = !project.hasProperty('excludeSpoiledRuntime')
+	def overheadOnly = project.hasProperty('overheadOnly')
+	inputs.property('includeSmartBrainLibTests', includeSmartBrainLibTests)
+	inputs.property('includeSpoiledTests', includeSpoiledTests)
+	inputs.property('overheadOnly', overheadOnly)
+	def testEntrypoints = ['com.example.soundattract.event.OverheadAlertGameTests']
+	if (!overheadOnly) {
+		testEntrypoints.addAll([
+			'com.example.soundattract.gametest.SoundAttractGameTests',
+			'com.example.soundattract.event.AwarenessServerGameTests',
+			'com.example.soundattract.tracking.SoundTrackerGameTests',
+			'com.example.soundattract.ai.MobGroupGameTests',
+			'com.example.soundattract.scents.ScentBiomeGameTests',
+			'com.example.soundattract.raid.RaidReinforcementGameTests',
+			'com.example.soundattract.raid.RaidDimensionGameTests'
+		])
+		if (includeSmartBrainLibTests) testEntrypoints.add('com.example.soundattract.gametest.SmartBrainLibGameTests')
+		if (includeSpoiledTests) testEntrypoints.add('com.example.soundattract.integration.spoiled.SpoiledScentGameTests')
+	}
+	filesMatching('fabric.mod.json') {
+		expand 'gameTestEntrypoints': testEntrypoints.collect { '"' + it + '"' }.join(',\n      ')
+	}
 }
 
 test {

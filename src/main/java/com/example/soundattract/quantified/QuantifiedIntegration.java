@@ -29,10 +29,10 @@ public final class QuantifiedIntegration {
         }
 
         try {
-            if (!QuantifiedOptionalBridge.register(Soundattract.MOD_ID)) {
-                throw new IllegalStateException("Quantified API registration failed");
+            if (!QuantifiedOptionalBridge.registerV2(Soundattract.MOD_ID)) {
+                throw new IllegalStateException("Quantified API V2 registration failed");
             }
-            Soundattract.LOGGER.info("[Quantified] Mandatory Quantified API integration initialized");
+            Soundattract.LOGGER.info("[Quantified] Mandatory Quantified API V2 integration initialized");
         } catch (Throwable t) {
             throw new IllegalStateException("Mandatory Quantified API initialization failed", t);
         }

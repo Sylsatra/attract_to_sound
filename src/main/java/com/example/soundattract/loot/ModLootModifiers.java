@@ -1,64 +1,43 @@
 package com.example.soundattract.loot;
 
-import com.example.soundattract.enchantment.ModEnchantments;
 import net.fabricmc.fabric.api.loot.v2.LootTableEvents;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.item.Items;
-import net.minecraft.world.level.storage.loot.LootPool;
-import net.minecraft.world.level.storage.loot.entries.LootItem;
-import net.minecraft.world.level.storage.loot.functions.SetEnchantmentsFunction;
-import net.minecraft.world.level.storage.loot.predicates.LootItemRandomChanceCondition;
-import net.minecraft.world.level.storage.loot.providers.number.ConstantValue;
-
+import net.minecraft.world.level.storage.loot.LootTable;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class ModLootModifiers {
-
-    private static final Set<ResourceLocation> ADD_CONCEAL_BOOK_TABLES = Set.of(
-            new ResourceLocation("minecraft", "chests/ancient_city"),
-            new ResourceLocation("minecraft", "chests/end_city_treasure"),
-            new ResourceLocation("minecraft", "chests/stronghold_library"),
-            new ResourceLocation("minecraft", "chests/woodland_mansion"),
-            new ResourceLocation("minecraft", "chests/buried_treasure"),
-            new ResourceLocation("minecraft", "chests/desert_pyramid")
-    );
-
-    private static final Set<ResourceLocation> ENCHANT_ARMOR_TABLES = Set.of(
-            new ResourceLocation("minecraft", "chests/ancient_city"),
-            new ResourceLocation("minecraft", "chests/bastion_treasure"),
-            new ResourceLocation("minecraft", "chests/nether_bridge")
-    );
-
-    private static final Set<ResourceLocation> ENCHANT_TOOL_TABLES = Set.of(
-            new ResourceLocation("minecraft", "chests/ancient_city"),
-            new ResourceLocation("minecraft", "chests/end_city_treasure"),
-            new ResourceLocation("minecraft", "chests/stronghold_crossing"),
-            new ResourceLocation("minecraft", "chests/bastion_other")
-    );
+    private static final Set<ResourceLocation> MODIFIED_MARKER_TABLES = ConcurrentHashMap.newKeySet();
+    private static final ConcurrentHashMap<ResourceLocation, AtomicLong> MARKER_CALLBACK_COUNTS = new ConcurrentHashMap<>();
 
     public static void register() {
+        LootTableMarkerFunction.register();
         LootTableEvents.MODIFY.register((resourceManager, lootManager, id, tableBuilder, source) -> {
-            if (!source.isBuiltin()) return;
-
-            if (ADD_CONCEAL_BOOK_TABLES.contains(id)) {
-                tableBuilder.pool(concealBookPool());
-            }
-            if (ENCHANT_ARMOR_TABLES.contains(id)) {
-                tableBuilder.pool(concealBookPool());
-            }
-            if (ENCHANT_TOOL_TABLES.contains(id)) {
-                tableBuilder.pool(concealBookPool());
+            if (applyMarker(id, tableBuilder)) {
+                MODIFIED_MARKER_TABLES.add(id);
+                MARKER_CALLBACK_COUNTS.computeIfAbsent(id, ignored -> new AtomicLong()).incrementAndGet();
             }
         });
     }
 
-    private static LootPool concealBookPool() {
-        return LootPool.lootPool()
-                .setRolls(ConstantValue.exactly(1))
-                .add(LootItem.lootTableItem(Items.ENCHANTED_BOOK)
-                        .apply(new SetEnchantmentsFunction.Builder()
-                                .withEnchantment(ModEnchantments.CONCEAL, ConstantValue.exactly(1))))
-                .when(LootItemRandomChanceCondition.randomChance(0.05f))
-                .build();
+    /** Test/diagnostic evidence that Fabric's real table-load callback handled this ID. */
+    public static boolean wasMarkerTableModified(ResourceLocation id) {
+        return id != null && MODIFIED_MARKER_TABLES.contains(id);
+    }
+
+    /** Number of times Fabric's real loot reload callback has marked a table. */
+    public static long markerCallbackCount(ResourceLocation id) {
+        AtomicLong count = id == null ? null : MARKER_CALLBACK_COUNTS.get(id);
+        return count == null ? 0L : count.get();
+    }
+
+    /** Shared by the reload callback and GameTests to exercise the production marker decision. */
+    public static boolean applyMarker(ResourceLocation id, LootTable.Builder tableBuilder) {
+        if (LootModifierTables.isMarkerTable(id)) {
+            tableBuilder.apply(LootTableMarkerFunction.builder(id));
+            return true;
+        }
+        return false;
     }
 }

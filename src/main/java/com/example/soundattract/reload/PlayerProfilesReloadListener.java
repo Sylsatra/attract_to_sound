@@ -3,15 +3,12 @@ package com.example.soundattract.reload;
 import com.example.soundattract.Soundattract;
 import com.example.soundattract.config.PlayerProfile2;
 import com.example.soundattract.config.SoundAttractConfig;
-import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.mojang.logging.LogUtils;
 import com.mojang.serialization.JsonOps;
-import net.minecraft.core.RegistryAccess;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 import org.slf4j.Logger;
 
@@ -19,18 +16,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-public class PlayerProfilesReloadListener extends SimpleJsonResourceReloadListener {
+public class PlayerProfilesReloadListener extends IdentifiedJsonReloadListener {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private final RegistryOps<JsonElement> ops;
-
-    public PlayerProfilesReloadListener(RegistryAccess registryAccess) {
-
-        super(new Gson(), "player_profiles");
-        this.ops = RegistryOps.create(JsonOps.INSTANCE, registryAccess);
+    public PlayerProfilesReloadListener() {
+        super("player_profiles", "player_profiles", true);
     }
 
     @Override
-    protected void apply(Map<ResourceLocation, JsonElement> objects, ResourceManager resourceManager, ProfilerFiller profiler) {
+    protected void applyElements(Map<ResourceLocation, JsonElement> objects, ResourceManager resourceManager, ProfilerFiller profiler) {
+        RegistryOps<JsonElement> ops = RegistryOps.create(JsonOps.INSTANCE, Soundattract.getServer().registryAccess());
         List<PlayerProfile2> profiles = new ArrayList<>();
 
         for (Map.Entry<ResourceLocation, JsonElement> entry : objects.entrySet()) {

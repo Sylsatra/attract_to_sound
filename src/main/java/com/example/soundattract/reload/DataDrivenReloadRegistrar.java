@@ -1,17 +1,26 @@
 package com.example.soundattract.reload;
 
-import com.example.soundattract.Soundattract;
+import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.server.packs.PackType;
-import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
-import net.minecraft.util.profiling.ProfilerFiller;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
+import java.util.List;
 
-public class DataDrivenReloadRegistrar {
+/** Registers the datapack-backed configuration listeners on Fabric. */
+public final class DataDrivenReloadRegistrar {
+    private DataDrivenReloadRegistrar() {
+    }
 
     public static void register() {
-        Soundattract.LOGGER.info("[DataDrivenReloadRegistrar] Registering resource reload listeners");
+        ResourceManagerHelper helper = ResourceManagerHelper.get(PackType.SERVER_DATA);
+        List<IdentifiedJsonReloadListener> listeners = List.of(
+                new SoundDefinitionsReloadListener(),
+                new ArmorColorsReloadListener(),
+                new MobProfilesReloadListener(),
+                new PlayerProfilesReloadListener(),
+                new TaczGunsReloadListener(),
+                new PointBlankGunsReloadListener());
+        listeners.forEach(helper::registerReloadListener);
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> listeners.forEach(listener -> listener.applyPending(server)));
     }
 }

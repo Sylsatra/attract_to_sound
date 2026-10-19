@@ -22,18 +22,26 @@ public class ScentQueryHelper {
      */
     public static ScentQueryCache.Result computeFreshScentInfo(Mob mob, int maxAgeTicks, double radius) {
         if (mob == null || mob.level() == null || mob.level().isClientSide) return ScentQueryCache.Result.EMPTY;
+        return computeFreshScentInfo(mob, ScentManager.getForLevel(mob.level()), maxAgeTicks, radius);
+    }
+
+    /** Same production query with an explicit manager, useful for isolated level fixtures. */
+    public static ScentQueryCache.Result computeFreshScentInfo(
+            Mob mob,
+            ScentManager manager,
+            int maxAgeTicks,
+            double radius) {
+        if (mob == null || mob.level() == null || mob.level().isClientSide) return ScentQueryCache.Result.EMPTY;
         if (SoundAttractConfig.COMMON == null) return ScentQueryCache.Result.EMPTY;
 
         long now = mob.level().getGameTime();
         int ttl = SoundAttractConfig.COMMON.scentQueryCacheTtlTicks.get();
-        ScentQueryCache.Result cached = ScentQueryCache.getCached(mob.getUUID(), now, ttl);
+        net.minecraft.resources.ResourceLocation dimension = mob.level().dimension().location();
+        ScentQueryCache.Result cached = ScentQueryCache.getCached(mob.getUUID(), dimension, now, ttl);
         if (cached != null) return cached;
 
         ScentQueryCache.Result computed;
         try {
-            // Stub: ScentManager.INSTANCE capability not available in Fabric
-            // Use ScentManager.getForLevel() instead
-            ScentManager manager = ScentManager.getForLevel(mob.level());
             if (manager == null) {
                 computed = ScentQueryCache.Result.EMPTY;
             } else {
@@ -71,7 +79,7 @@ public class ScentQueryHelper {
             computed = ScentQueryCache.Result.EMPTY;
         }
 
-        ScentQueryCache.put(mob.getUUID(), computed);
+        ScentQueryCache.put(mob.getUUID(), dimension, computed);
         return computed;
     }
 }

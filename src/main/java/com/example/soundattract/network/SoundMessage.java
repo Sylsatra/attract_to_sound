@@ -38,7 +38,7 @@ public record SoundMessage(
     private static final java.util.Set<String> KNOWN_ACTIONS = java.util.Set.of(
             "CRAWLING", "SNEAKING", "WALKING", "SPRINTING", "SPRINT_JUMPING");
 
-    // Compact constructors for common use cases
+
     public SoundMessage {
         action = (action != null && KNOWN_ACTIONS.contains(action)) ? action : null;
         intensity01 = Float.isFinite(intensity01) ? Math.max(0f, Math.min(1f, intensity01)) : 0f;
@@ -61,7 +61,7 @@ public record SoundMessage(
         this(soundId, x, y, z, dimension, sourcePlayerUUID, null, intensity01, whispering, null, null, null);
     }
 
-    // 1.20.1: Static write method instead of StreamCodec
+
     public static void write(FriendlyByteBuf buf, SoundMessage msg) {
         buf.writeResourceLocation(msg.soundId);
         buf.writeDouble(msg.x);
@@ -82,7 +82,7 @@ public record SoundMessage(
         if (msg.pointBlankType != null) buf.writeUtf(msg.pointBlankType);
     }
 
-    // 1.20.1: Static read method instead of StreamCodec
+
     public static SoundMessage read(FriendlyByteBuf buf) {
         ResourceLocation soundId = buf.readResourceLocation();
         double x = buf.readDouble();
@@ -104,6 +104,9 @@ public record SoundMessage(
         try {
             ResourceLocation loc = msg.soundId;
             boolean isIntegration = (msg.taczType != null) || (msg.pointBlankType != null);
+            if (sender != null) {
+                com.example.soundattract.ai.LivingWallCoordinator.recordCombatThreat(sender.serverLevel(), sender);
+            }
             if (!SoundAttractConfig.SOUND_ID_WHITELIST_CACHE.isEmpty()
                     && (loc == null || !SoundAttractConfig.SOUND_ID_WHITELIST_CACHE.contains(loc))
                     && !msg.soundId.equals(VOICE_CHAT_SOUND_ID)
@@ -154,6 +157,12 @@ public record SoundMessage(
                 }
                 range = r;
                 weight = w;
+                if (sender != null) {
+                    double multiplier = com.example.soundattract.integration.toughasnails.ToughAsNailsStateCache
+                            .soundMultiplier(sender, serverLevel.getGameTime());
+                    range *= multiplier;
+                    weight *= multiplier;
+                }
             } else if (msg.soundId.equals(VOICE_CHAT_SOUND_ID)) {
                 int baseRange = msg.whispering
                         ? SoundAttractConfig.SERVER.voiceChatWhisperRange.get()

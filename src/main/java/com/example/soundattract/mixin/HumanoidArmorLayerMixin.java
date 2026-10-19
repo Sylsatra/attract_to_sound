@@ -54,7 +54,8 @@ public abstract class HumanoidArmorLayerMixin {
 
     @Inject(method = "renderArmorPiece", at = @At("HEAD"), cancellable = true)
     private void soundattract$startRecording(PoseStack poseStack, MultiBufferSource buffer, LivingEntity entity, EquipmentSlot slot, int packedLight, HumanoidModel<?> armorModel, CallbackInfo ci) {
-        if (entity.isInvisible() && SoundAttractConfig.shouldHideWornGearWhileInvisible()) {
+        if (entity.isInvisible() && !com.example.soundattract.client.FromTheFogVisualCompat.shouldKeepInvisibleEquipment(entity)
+                && SoundAttractConfig.shouldHideWornGearWhileInvisible()) {
             ci.cancel();
             return;
         }

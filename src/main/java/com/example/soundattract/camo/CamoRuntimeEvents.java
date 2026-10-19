@@ -10,10 +10,10 @@ import net.minecraft.world.entity.LivingEntity;
 public class CamoRuntimeEvents {
 
     public static void register() {
-        // Stub: Register camo runtime events
+
     }
 
     public static void onRenderLivingPost(LivingEntityRenderer<?, ?> renderer, LivingEntity entity, float partialTick) {
-        // Stub: Handle render living post for camo
+
     }
 }

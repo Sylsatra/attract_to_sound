@@ -10,14 +10,21 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.MobSpawnType;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 public final class RaidReinforcementManager {
     private RaidReinforcementManager() {}
 
-    private static final Map<Mob, RaidSpawnState> STATES = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final int MAX_RUNTIME_REINFORCEMENTS = 65536;
+    private static final Cache<Mob, RaidSpawnState> STATES = Caffeine.newBuilder()
+            .weakKeys()
+            .maximumSize(8192)
+            .expireAfterAccess(10, TimeUnit.MINUTES)
+            .build();
 
     private static volatile Map<net.minecraft.resources.ResourceLocation, Integer> cachedCaps = null;
     private static volatile long cachedCapsTick = -1;
@@ -25,24 +32,40 @@ public final class RaidReinforcementManager {
     private static final class RaidSpawnState {
         long lastSpawnTick;
         final Map<EntityType<?>, Integer> spawnedCounts = new HashMap<>();
+        final List<UUID> spawnedEntityUuids = new ArrayList<>();
         int totalSpawned;
     }
 
     public static void trySpawnReinforcement(ServerLevel level, Mob leader, BlockPos raidTarget) {
-        try {
-            if (!SoundAttractConfig.COMMON.enableRaidReinforcements.get()) return;
-        } catch (Throwable ignored) { return; }
+        trySpawnReinforcement(level, leader, raidTarget, null, false);
+    }
+
+    static void trySpawnReinforcement(ServerLevel level, Mob leader, BlockPos raidTarget,
+                                      EntityType<?> selectedTypeForDeterministicCall) {
+        trySpawnReinforcement(level, leader, raidTarget, selectedTypeForDeterministicCall, true);
+    }
+
+    private static void trySpawnReinforcement(ServerLevel level, Mob leader, BlockPos raidTarget,
+                                              EntityType<?> selectedTypeForDeterministicCall,
+                                              boolean deterministicCall) {
+        if (level == null || leader == null || raidTarget == null || leader.isRemoved() || !leader.isAlive()) return;
+        if (!deterministicCall) {
+            try {
+                if (!SoundAttractConfig.COMMON.enableRaidReinforcements.get()) return;
+            } catch (Throwable ignored) { return; }
+        }
 
         long now = level.getGameTime();
-        RaidSpawnState state = STATES.computeIfAbsent(leader, k -> new RaidSpawnState());
+        RaidSpawnState state = STATES.get(leader, k -> new RaidSpawnState());
 
         int interval = 40;
-        try { interval = Math.max(1, SoundAttractConfig.COMMON.raidReinforcementInterval.get()); } catch (Throwable ignored) {}
+        try { interval = Math.max(20, SoundAttractConfig.COMMON.raidReinforcementInterval.get()); } catch (Throwable ignored) { interval = 20; }
         if (now - state.lastSpawnTick < interval) return;
         state.lastSpawnTick = now;
 
         int maxTotal = 80;
-        try { maxTotal = Math.max(0, SoundAttractConfig.COMMON.raidMaxTotalMobs.get()); } catch (Throwable ignored) {}
+        try { maxTotal = Math.max(0, Math.min(MAX_RUNTIME_REINFORCEMENTS,
+                SoundAttractConfig.COMMON.raidMaxTotalMobs.get())); } catch (Throwable ignored) {}
         if (state.totalSpawned >= maxTotal) return;
 
         double diffMult = 1.0;
@@ -57,8 +80,9 @@ public final class RaidReinforcementManager {
 
         if (nearbyMobs.isEmpty()) return;
 
-        Mob template = nearbyMobs.get(level.getRandom().nextInt(nearbyMobs.size()));
-        EntityType<?> type = template.getType();
+        EntityType<?> type = selectedTypeForDeterministicCall != null
+                ? selectedTypeForDeterministicCall
+                : nearbyMobs.get(level.getRandom().nextInt(nearbyMobs.size())).getType();
         ResourceLocation typeId = BuiltInRegistries.ENTITY_TYPE.getKey(type);
 
         Integer capForType = caps.get(typeId);
@@ -80,11 +104,12 @@ public final class RaidReinforcementManager {
             spawned.moveTo(spawnPos.getX() + 0.5, spawnPos.getY(), spawnPos.getZ() + 0.5, level.getRandom().nextFloat() * 360.0F, 0.0F);
             spawned.finalizeSpawn(level, level.getCurrentDifficultyAt(spawnPos), MobSpawnType.EVENT, null, null);
             spawned.setPersistenceRequired();
-            level.addFreshEntity(spawned);
+            if (!level.addFreshEntity(spawned)) return;
             
             com.example.soundattract.ai.RaidManager.registerPersistentRaidMob(leader, spawned);
 
             state.spawnedCounts.merge(type, 1, Integer::sum);
+            state.spawnedEntityUuids.add(spawned.getUUID());
             state.totalSpawned++;
 
             if (SoundAttractConfig.COMMON.debugLogging.get()) {
@@ -99,7 +124,30 @@ public final class RaidReinforcementManager {
     }
 
     public static void clearState(Mob leader) {
-        STATES.remove(leader);
+        STATES.invalidate(leader);
+    }
+
+    public static void clearLevel(ServerLevel level) {
+        if (level == null) return;
+        STATES.asMap().keySet().removeIf(mob -> mob.level() == level);
+        cachedCaps = null;
+        cachedCapsTick = -1;
+    }
+
+    public static void clearAll() {
+        STATES.invalidateAll();
+        cachedCaps = null;
+        cachedCapsTick = -1;
+    }
+
+    static List<Mob> spawnedEntitiesForTesting(ServerLevel level, Mob leader) {
+        RaidSpawnState state = STATES.getIfPresent(leader);
+        if (state == null) return List.of();
+        return state.spawnedEntityUuids.stream()
+                .map(level::getEntity)
+                .filter(Mob.class::isInstance)
+                .map(Mob.class::cast)
+                .toList();
     }
 
     private static BlockPos findSpawnPos(ServerLevel level, BlockPos near) {

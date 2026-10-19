@@ -15,10 +15,15 @@
     "CustomNpcsUpdateTasksMixin",
     "ItemStackMixin",
     "LivingEntityMixin",
+    "CustomNpcStealthTargetMixin",
     "EntityMixin",
+    "LevelChunkMixin",
+    "WalkNodeEvaluatorMixin",
+    "LivingBridgePathNavigationMixin",
     "SnowballMixin",
     "ThrownPotionMixin",
     "MobAccessor",
+    "LootTableMixin",
     "ProjectileMixin"
   ],
   "client": [

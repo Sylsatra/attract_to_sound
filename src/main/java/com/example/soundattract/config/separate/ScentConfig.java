@@ -16,6 +16,25 @@ public class ScentConfig {
     public static final ForgeConfigSpec.DoubleValue SCENT_PARTICLE_RENDER_DISTANCE;
     public static final ForgeConfigSpec.IntValue SCENT_NODE_DURATION_TICKS;
     public static final ForgeConfigSpec.DoubleValue SCENT_CREATION_INTERVAL_BLOCKS;
+    public static final ForgeConfigSpec.IntValue PLAYER_ODOR_SCAN_INTERVAL_TICKS;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> PLAYER_ODOR_ITEM_VALUES;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_WIND_SCENT;
+    public static final ForgeConfigSpec.DoubleValue WIND_SCENT_ACTIVATION_THRESHOLD;
+    public static final ForgeConfigSpec.DoubleValue WIND_SCENT_DEACTIVATION_THRESHOLD;
+    public static final ForgeConfigSpec.IntValue WIND_SCENT_UPDATE_INTERVAL_TICKS;
+    public static final ForgeConfigSpec.IntValue WIND_SCENT_MAXIMUM_DISTANCE;
+    public static final ForgeConfigSpec.IntValue WIND_SCENT_MAXIMUM_PARCELS;
+    public static final ForgeConfigSpec.BooleanValue WIND_SCENT_RAIN_DECAY;
+    public static final ForgeConfigSpec.DoubleValue WIND_SCENT_SPREAD_FACTOR;
+    public static final ForgeConfigSpec.DoubleValue WIND_SCENT_BARRIER_LEAKAGE;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_WIND_SCENT_PARTICLES;
+    public static final ForgeConfigSpec.IntValue WIND_SCENT_PARTICLE_INTERVAL_TICKS;
+    public static final ForgeConfigSpec.IntValue WIND_SCENT_PARTICLE_MAX_PER_VIEWER;
+    public static final ForgeConfigSpec.DoubleValue WINDSHIELD_SCENT_REDUCTION;
+    public static final ForgeConfigSpec.IntValue WINDSHIELD_SCAN_DISTANCE;
+    public static final ForgeConfigSpec.DoubleValue WINDSHIELD_MINIMUM_WIND_SPEED;
+    public static final ForgeConfigSpec.DoubleValue WINDSHIELD_ACTIVATION_THRESHOLD;
+    public static final ForgeConfigSpec.DoubleValue WINDSHIELD_DEACTIVATION_THRESHOLD;
     
     public static final ForgeConfigSpec.DoubleValue TEMP_HEAVY_DECAY_THRESHOLD;
     public static final ForgeConfigSpec.DoubleValue TEMP_FREEZE_THRESHOLD;
@@ -69,6 +88,38 @@ public class ScentConfig {
 
         SCENT_CREATION_INTERVAL_BLOCKS = BUILDER.comment("Distance in blocks the player must move to create a new scent node.")
                 .defineInRange("scentCreationIntervalBlocks", 5.0, 1.0, 64.0);
+
+        BUILDER.push("player_odor");
+        PLAYER_ODOR_SCAN_INTERVAL_TICKS = BUILDER.defineInRange("scanIntervalTicks", 1200, 20, 12000);
+        PLAYER_ODOR_ITEM_VALUES = BUILDER.defineList("itemValues", Arrays.asList(
+                "minecraft:rotten_flesh=0.25", "minecraft:beef=0.1", "minecraft:porkchop=0.1",
+                "minecraft:chicken=0.1", "minecraft:mutton=0.1", "minecraft:rabbit=0.1",
+                "minecraft:cod=0.05", "minecraft:salmon=0.05"),
+                value -> value instanceof String && ((String) value).contains("="));
+        BUILDER.pop();
+
+        BUILDER.push("windshield");
+        WINDSHIELD_SCENT_REDUCTION = BUILDER.defineInRange("windshieldScentReduction", 0.90, 0.0, 1.0);
+        WINDSHIELD_SCAN_DISTANCE = BUILDER.defineInRange("windshieldScanDistance", 4, 1, 16);
+        WINDSHIELD_MINIMUM_WIND_SPEED = BUILDER.defineInRange("windshieldMinimumWindSpeed", 0.1, 0.0, 1.0);
+        WINDSHIELD_ACTIVATION_THRESHOLD = BUILDER.defineInRange("windshieldActivationThreshold", 0.34, 0.0, 1.0);
+        WINDSHIELD_DEACTIVATION_THRESHOLD = BUILDER.defineInRange("windshieldDeactivationThreshold", 0.25, 0.0, 1.0);
+        BUILDER.pop();
+
+        BUILDER.push("wind_scent");
+        ENABLE_WIND_SCENT = BUILDER.define("enableWindScent", true);
+        WIND_SCENT_ACTIVATION_THRESHOLD = BUILDER.defineInRange("activationThreshold", 0.80, 0.50, 1.0);
+        WIND_SCENT_DEACTIVATION_THRESHOLD = BUILDER.defineInRange("deactivationThreshold", 0.65, 0.0, 0.95);
+        WIND_SCENT_UPDATE_INTERVAL_TICKS = BUILDER.defineInRange("updateIntervalTicks", 30, 1, 100);
+        WIND_SCENT_MAXIMUM_DISTANCE = BUILDER.defineInRange("maximumDistance", 32, 4, 128);
+        WIND_SCENT_MAXIMUM_PARCELS = BUILDER.defineInRange("maximumParcels", 16, 1, 64);
+        WIND_SCENT_RAIN_DECAY = BUILDER.define("rainDecay", true);
+        WIND_SCENT_SPREAD_FACTOR = BUILDER.defineInRange("spreadFactor", 0.2, 0.0, 1.0);
+        WIND_SCENT_BARRIER_LEAKAGE = BUILDER.defineInRange("barrierLeakage", 0.35, 0.0, 1.0);
+        ENABLE_WIND_SCENT_PARTICLES = BUILDER.define("enableWindScentParticles", true);
+        WIND_SCENT_PARTICLE_INTERVAL_TICKS = BUILDER.defineInRange("windScentParticleIntervalTicks", 20, 5, 100);
+        WIND_SCENT_PARTICLE_MAX_PER_VIEWER = BUILDER.defineInRange("windScentParticleMaxPerViewer", 32, 1, 128);
+        BUILDER.pop();
 
         BUILDER.push("environmental_logic");
         TEMP_HEAVY_DECAY_THRESHOLD = BUILDER.comment("Biome temperature above which scent decays faster (Hot).")

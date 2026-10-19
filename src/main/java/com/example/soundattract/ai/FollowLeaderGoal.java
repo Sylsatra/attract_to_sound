@@ -36,6 +36,7 @@ public class FollowLeaderGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return false;
         if (this.mob.getTarget() != null && this.mob.getTarget().isAlive()) {
             if (!shouldMemberDropTargetForHighWeightSound()) return false;
             if (com.example.soundattract.config.SoundAttractConfig.COMMON.debugLogging.get()) {
@@ -85,6 +86,7 @@ public class FollowLeaderGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return false;
         if (this.mob.getTarget() != null && this.mob.getTarget().isAlive()) {
             if (!shouldMemberDropTargetForHighWeightSound()) return false;
             this.mob.setTarget(null);
@@ -127,6 +129,7 @@ public class FollowLeaderGoal extends Goal {
 
     @Override
     public void tick() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return;
         if (leader == null) return;
 
         boolean debug = com.example.soundattract.config.SoundAttractConfig.COMMON.debugLogging.get();
@@ -140,7 +143,7 @@ public class FollowLeaderGoal extends Goal {
             }
             if (!mob.isSprinting()) mob.setSprinting(true);
             double sprintMult = com.example.soundattract.config.SoundAttractConfig.COMMON.groupSprintMultiplier.get();
-            mob.getNavigation().moveTo(leader.getX(), leader.getY(), leader.getZ(), moveSpeed * sprintMult);
+            com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, leader.position(), moveSpeed * sprintMult);
             return;
         }
 

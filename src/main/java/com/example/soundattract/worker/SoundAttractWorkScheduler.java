@@ -10,7 +10,11 @@ public interface SoundAttractWorkScheduler {
 
     Future<?> submitSoundScore(List<WorkerScheduler.SoundScoreRequest> batch);
 
+    default void flushPendingSoundScores() {}
+
     List<WorkerScheduler.GroupComputeResult> drainGroupResults();
 
     List<WorkerScheduler.SoundScoreResult> drainSoundScoreResults();
+
+    default void clearResults() {}
 }

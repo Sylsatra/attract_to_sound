@@ -36,6 +36,14 @@ public class TeleportToSoundGoal extends Goal {
     private int unreachableTime;
     private int cooldown;
     private int teleportTick;
+    private boolean mobWasNoGravity;
+    private boolean mobWasInvisible;
+    private boolean targetWasNoGravity;
+    private boolean targetWasInvisible;
+    private boolean mobSpeedFreezeApplied;
+    private boolean targetSpeedFreezeApplied;
+    private boolean mobHidden;
+    private boolean targetHidden;
 
     private SoundTracker.SoundRecord targetSound;
 
@@ -99,6 +107,7 @@ public class TeleportToSoundGoal extends Goal {
 
     @Override
     public void stop() {
+        restoreHiddenEntities(false);
         this.toTeleport = null;
         this.unreachableTime = 0;
         this.targetSound = null;
@@ -122,16 +131,19 @@ public class TeleportToSoundGoal extends Goal {
             if (this.mob.getNavigation().isDone())
                 this.mob.getNavigation().moveTo(this.toTeleport, 1.5f);
             if (this.mob.distanceToSqr(this.toTeleport) <= 4f) {
-                hide(this.mob);
-                hide(this.toTeleport);
+                hide(this.mob, true);
+                hide(this.toTeleport, false);
                 this.teleportTick = this.adjustedTickDelay(30);
             }
         }
         else {
             if (--this.teleportTick <= 0) {
-                show(this.mob);
-                teleportSafely(this.toTeleport, soundPos.getX() + 0.5, soundPos.getY(), soundPos.getZ() + 0.5);
-                show(this.toTeleport);
+                restoreMob(true);
+                try {
+                    teleportSafely(this.toTeleport, soundPos.getX() + 0.5, soundPos.getY(), soundPos.getZ() + 0.5);
+                } finally {
+                    restoreTarget(true);
+                }
                 this.cooldown = this.adjustedTickDelay(SoundAttractConfig.COMMON.teleportCooldownTicks.get());
                 this.stop();
                 return;
@@ -143,8 +155,18 @@ public class TeleportToSoundGoal extends Goal {
         }
     }
 
-    private void hide(LivingEntity entity) {
-        applySpeedFreeze(entity);
+    private void hide(LivingEntity entity, boolean isMob) {
+        if (isMob) {
+            mobHidden = true;
+            mobWasNoGravity = entity.isNoGravity();
+            mobWasInvisible = entity.isInvisible();
+            mobSpeedFreezeApplied = applySpeedFreeze(entity);
+        } else {
+            targetHidden = true;
+            targetWasNoGravity = entity.isNoGravity();
+            targetWasInvisible = entity.isInvisible();
+            targetSpeedFreezeApplied = applySpeedFreeze(entity);
+        }
         if (entity.level() instanceof ServerLevel serverLevel) {
             serverLevel.sendParticles(ParticleTypes.PORTAL, entity.getX(), entity.getEyeY(), entity.getZ(), 200, 0.5, 0.5, 0.5, 0.5);
         }
@@ -153,18 +175,44 @@ public class TeleportToSoundGoal extends Goal {
         entity.setInvisible(true);
     }
 
-    private void show(LivingEntity entity) {
-        removeSpeedFreeze(entity);
-        entity.setNoGravity(false);
-        entity.setInvisible(false);
-        entity.playSound(SoundEvents.ENDERMAN_TELEPORT, 1f, 2f);
+    private void restoreHiddenEntities(boolean playSound) {
+        restoreMob(playSound);
+        restoreTarget(playSound);
     }
 
-    private void applySpeedFreeze(LivingEntity entity) {
+    private void restoreMob(boolean playSound) {
+        if (mobHidden) restoreEntity(this.mob, mobWasNoGravity, mobWasInvisible, mobSpeedFreezeApplied, playSound);
+        mobSpeedFreezeApplied = false;
+        mobWasNoGravity = false;
+        mobWasInvisible = false;
+        mobHidden = false;
+    }
+
+    private void restoreTarget(boolean playSound) {
+        if (toTeleport != null && targetHidden) {
+            restoreEntity(this.toTeleport, targetWasNoGravity, targetWasInvisible, targetSpeedFreezeApplied, playSound);
+        }
+        targetSpeedFreezeApplied = false;
+        targetWasNoGravity = false;
+        targetWasInvisible = false;
+        targetHidden = false;
+    }
+
+    private void restoreEntity(LivingEntity entity, boolean wasNoGravity, boolean wasInvisible,
+                               boolean removeFreeze, boolean playSound) {
+        if (removeFreeze) removeSpeedFreeze(entity);
+        entity.setNoGravity(wasNoGravity);
+        entity.setInvisible(wasInvisible);
+        if (playSound) entity.playSound(SoundEvents.ENDERMAN_TELEPORT, 1f, 2f);
+    }
+
+    private boolean applySpeedFreeze(LivingEntity entity) {
         AttributeInstance inst = entity.getAttribute(Attributes.MOVEMENT_SPEED);
         if (inst != null && inst.getModifier(MOVEMENT_SPEED_MODIFIER_UUID) == null) {
             inst.addTransientModifier(new AttributeModifier(MOVEMENT_SPEED_MODIFIER_UUID, "TeleportToSound freeze", -1.0, AttributeModifier.Operation.MULTIPLY_TOTAL));
+            return true;
         }
+        return false;
     }
 
     private void removeSpeedFreeze(LivingEntity entity) {

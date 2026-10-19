@@ -2,7 +2,6 @@ package com.example.soundattract.reload;
 
 import com.example.soundattract.Soundattract;
 import com.example.soundattract.config.SoundAttractConfig;
-import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.core.Holder;
@@ -11,21 +10,20 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.item.Item;
 
 import java.util.HashMap;
 import java.util.Map;
 
-public class ArmorColorsReloadListener extends SimpleJsonResourceReloadListener {
+public class ArmorColorsReloadListener extends IdentifiedJsonReloadListener {
 
     public ArmorColorsReloadListener() {
-        super(new Gson(), "camo/armor_colors");
+        super("camo/armor_colors", "armor_colors", true);
     }
 
     @Override
-    protected void apply(Map<ResourceLocation, JsonElement> elements, ResourceManager resourceManager, ProfilerFiller profiler) {
+    protected void applyElements(Map<ResourceLocation, JsonElement> elements, ResourceManager resourceManager, ProfilerFiller profiler) {
         Map<ResourceLocation, Integer> colors = new HashMap<>();
 
         for (Map.Entry<ResourceLocation, JsonElement> entry : elements.entrySet()) {

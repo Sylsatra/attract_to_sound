@@ -4,7 +4,7 @@ import com.example.soundattract.Soundattract;
 import com.example.soundattract.async.AsyncManager;
 import com.example.soundattract.event.config.ConfigReloadListener;
 import com.example.soundattract.network.CamoSyncMessage;
-import com.example.soundattract.util.ScentQueryCache;
+import com.example.soundattract.worker.WorkSchedulerManager;
 import dev.architectury.event.EventResult;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -27,12 +27,19 @@ public class SoundAttractFabricEvents {
 
     public static void register() {
         Soundattract.LOGGER.info("Registering SoundAttract Fabric events...");
+        WindScentEvents.register();
 
         ServerTickEvents.START_SERVER_TICK.register(server -> {
+            com.example.soundattract.los.OptimizedLOS.onServerTick(server);
             StealthDetectionEvents.onServerTick(server);
             AsyncManager.onServerTick(server);
             SoundAttractionEvents.onServerTick(server);
-            ArrowInvestigationEvents.onServerTick(server.overworld());
+        });
+
+        ServerTickEvents.END_SERVER_TICK.register(server ->
+        {
+            WorkSchedulerManager.flushPendingSoundScores();
+            com.example.soundattract.pathfinding.FlowFieldManager.onEndServerTick();
         });
 
         ServerTickEvents.START_WORLD_TICK.register(level -> {
@@ -40,10 +47,13 @@ public class SoundAttractFabricEvents {
                 ServerLevel serverLevel = (ServerLevel) level;
                 ScentEvents.onLevelTick(serverLevel);
                 ScentEvents.onLevelTickCleanup(serverLevel);
-                SoundAttractionEvents.onLevelTick(serverLevel);
-                ArrowScentEvents.onLevelTick(serverLevel);
             }
         });
+
+
+
+
+        ServerTickEvents.END_WORLD_TICK.register(SoundAttractionEvents::onLevelTick);
 
         ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
             if (entity instanceof Mob && world instanceof ServerLevel) {
@@ -63,6 +73,7 @@ public class SoundAttractFabricEvents {
             if (entity instanceof Mob) {
                 Mob mob = (Mob) entity;
                 ScentEvents.onEntityLeaveScentCache(mob);
+                if (world instanceof ServerLevel) SoundTracker.onMobUnload(mob.getUUID(), world);
             }
             ArrowInvestigationEvents.onEntityLeave(entity);
         });
@@ -73,13 +84,30 @@ public class SoundAttractFabricEvents {
         });
 
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
-            SoundTracker.clearCaches();
-            ScentQueryCache.clear();
+            AsyncManager.onServerStopped();
+            com.example.soundattract.los.OptimizedLOS.onServerStopped();
+            WorkSchedulerManager.clearResults();
+            SoundAttractionEvents.onServerStopped();
+            com.example.soundattract.ai.RaidManager.onServerStopped(server);
+            com.example.soundattract.ai.MobGroupManager.onServerStopped();
+            com.example.soundattract.pathfinding.FlowFieldManager.onServerStopped();
+            SoundTracker.onServerStopped();
+            ScentEvents.onServerStopped(server);
             ArrowInvestigationEvents.onServerStopping();
             FloorCreekEvents.onServerStopping();
         });
 
+        ServerWorldEvents.UNLOAD.register((server, level) -> {
+            com.example.soundattract.ai.RaidManager.onLevelUnload(level);
+            com.example.soundattract.ai.MobGroupManager.onLevelUnload(level);
+            com.example.soundattract.pathfinding.FlowFieldManager.onLevelUnload(level);
+            SoundTracker.onLevelUnload(level);
+            ScentEvents.onLevelUnload(level);
+        });
+
         ServerLifecycleEvents.SERVER_STARTING.register(server -> {
+            com.example.soundattract.los.OptimizedLOS.onServerStarting();
+            com.example.soundattract.pathfinding.FlowFieldManager.onServerStarting();
             ConfigReloadListener.onConfigLoad();
         });
 

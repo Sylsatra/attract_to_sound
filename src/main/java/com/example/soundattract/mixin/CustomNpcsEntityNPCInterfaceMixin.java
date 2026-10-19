@@ -132,7 +132,7 @@ public abstract class CustomNpcsEntityNPCInterfaceMixin {
     @Inject(method = "readSpawnData(Lnet/minecraft/nbt/CompoundTag;)V", at = @At("TAIL"))
     private void soundattract$onReadSpawnData(CallbackInfo ci) {
         if (SoundAttractConfig.COMMON == null || !SoundAttractConfig.COMMON.enableCustomNpcsIntegration.get()) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (SoundAttractConfig.COMMON != null && SoundAttractConfig.COMMON.debugLogging.get()) {
                 Soundattract.LOGGER.info("[CustomNPCs] Integration disabled, skipping readSpawnData");
             }
             return;

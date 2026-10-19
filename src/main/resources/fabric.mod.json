@@ -22,6 +22,9 @@
 		"client": [
 			"com.example.soundattract.SoundAttractClient"
 		],
+		"voicechat": [
+			"com.example.soundattract.integration.voicechat.VoiceChatIntegration"
+		],
 		"cardinal-components-entity": [
 			"com.example.soundattract.component.EntityComponents"
 		],
@@ -35,7 +38,8 @@
 	"custom": {
 		"cardinal-components": [
 			"soundattract:camouflage",
-			"soundattract:scent"
+			"soundattract:scent",
+			"soundattract:living_bridge_data"
 		]
 	},
 	"depends": {

@@ -4,12 +4,10 @@ import com.example.soundattract.Soundattract;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.config.SoundAttractConfig.SoundDefaultEntry;
 import com.example.soundattract.event.SoundAttractionEvents;
-import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.core.Holder;
@@ -22,14 +20,14 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-public class SoundDefinitionsReloadListener extends SimpleJsonResourceReloadListener {
+public class SoundDefinitionsReloadListener extends IdentifiedJsonReloadListener {
 
     public SoundDefinitionsReloadListener() {
-        super(new Gson(), "sounds");
+        super("sounds", "sound_definitions", true);
     }
 
     @Override
-    protected void apply(Map<ResourceLocation, JsonElement> elements, ResourceManager resourceManager, ProfilerFiller profiler) {
+    protected void applyElements(Map<ResourceLocation, JsonElement> elements, ResourceManager resourceManager, ProfilerFiller profiler) {
         Set<ResourceLocation> whitelist = new HashSet<>();
         Map<ResourceLocation, SoundDefaultEntry> defaults = new HashMap<>();
 

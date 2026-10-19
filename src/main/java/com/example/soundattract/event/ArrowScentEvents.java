@@ -38,13 +38,15 @@ public class ArrowScentEvents {
         ArrowInvestigationEvents.ARROWS.entrySet().removeIf(entry -> {
             ArrowInvestigationEvents.ArrowState state = entry.getValue();
             if (state == null) return true;
+            ArrowInvestigationEvents.ArrowKey key = entry.getKey();
+            if (key == null || !level.dimension().location().equals(key.dimension())) return false;
             if (now - state.spawnTick > 1200L) return true;
 
-            Projectile projectile = (Projectile) level.getEntity(entry.getKey());
+            if (!(level.getEntity(key.entityId()) instanceof Projectile projectile)) return true;
             if (projectile == null || !projectile.isAlive()) return true;
 
             Vec3 curr = projectile.position();
-            state.distanceSinceLastScent += state.prevPos.distanceTo(curr);
+            state.distanceSinceLastScent += state.prevScentPos.distanceTo(curr);
 
             if (state.lastScentTick == -1 || state.distanceSinceLastScent >= interval) {
                 if (GlobalScentRateLimiter.tryConsume(state.shooterUuid)) {
@@ -67,17 +69,18 @@ public class ArrowScentEvents {
                 }
             }
 
-            state.prevPos = curr;
+            state.prevScentPos = curr;
             return false;
         });
 
-        ArrowInvestigationEvents.ARROWS.forEach((id, state) -> {
+        ArrowInvestigationEvents.ARROWS.forEach((key, state) -> {
+            if (key == null || !level.dimension().location().equals(key.dimension())) return;
             if (state == null) return;
             if (!state.isMobShooter) return;
             if (now - state.spawnTick < 20 || now - state.spawnTick > 200) return;
             if (state.notifiedMobIds == null || state.notifiedMobIds.isEmpty()) return;
 
-            Projectile projectile = (Projectile) level.getEntity(id);
+            Projectile projectile = (Projectile) level.getEntity(key.entityId());
             if (projectile == null) return;
             Vec3 curr = projectile.position();
             BlockPos emissionPos = snapToGround(level, curr);

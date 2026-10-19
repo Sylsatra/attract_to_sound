@@ -600,9 +600,6 @@ public class StealthDetectionEvents {
 
     public static boolean canMobDetectLivingEntity(Mob mob, LivingEntity target) {
         if (mob == null || target == null) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
-                Soundattract.LOGGER.warn("[CanDetect] Called with null mob or target. Defaulting to detectable.");
-            }
             return true;
         }
 
@@ -727,6 +724,50 @@ public class StealthDetectionEvents {
     @Deprecated
     public static boolean canMobDetectPlayer(Mob mob, Player player) {
         return canMobDetectLivingEntity(mob, player);
+    }
+
+    /**
+     * Checks awareness visibility against the exact range already computed for the current snapshot.
+     * Keeping this separate from the general targeting query prevents range-dependent state from being
+     * recalculated with a different result while an alert snapshot is being assembled.
+     */
+    public static boolean canMobDetectPlayerWithRange(Mob mob, Player player, double detectionRange) {
+        if (mob == null || player == null) {
+            return true;
+        }
+        if (SoundAttractConfig.isStealthBypassed(mob)) {
+            return true;
+        }
+        if (player.isCreative() || player.isSpectator() || !player.isAlive()) {
+            return true;
+        }
+        if (!SoundAttractConfig.COMMON.enableStealthMechanics.get()) {
+            return true;
+        }
+        if (shouldUseVanillaTargeting(mob.level())) {
+            return true;
+        }
+        if (SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) {
+            try {
+                Mob leader = com.example.soundattract.ai.MobGroupManager.getLeader(mob);
+                if (leader != null && leader != mob) {
+                    boolean isEdge = com.example.soundattract.ai.MobGroupManager.isEdgeMob(mob);
+                    boolean isDeserter = com.example.soundattract.ai.MobGroupManager.isDeserter(mob);
+                    if (!isEdge && !isDeserter) {
+                        return false;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        double xrayRange = getEffectiveXrayRange(mob);
+        if (xrayRange > 0.0 && mob.distanceToSqr(player) <= xrayRange * xrayRange) {
+            return true;
+        }
+        if (mob.distanceToSqr(player) > detectionRange * detectionRange) {
+            return false;
+        }
+        return FovEvents.isTargetInFov(mob, player, true);
     }
 
     private static boolean canMobDetectTargetNoEdgeSuppression(Mob mob, LivingEntity target) {

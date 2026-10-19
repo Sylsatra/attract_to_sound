@@ -18,71 +18,169 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.Set;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
 public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler {
-    private final BlockingQueue<WorkerScheduler.GroupComputeResult> groupResults = new LinkedBlockingQueue<>();
-    private final BlockingQueue<WorkerScheduler.SoundScoreResult> soundResults = new LinkedBlockingQueue<>();
+    private static final long MAX_SOUND_SCORE_SLICE_CACHE_ENTRIES = 65_536L;
+    private static final int RESULT_QUEUE_CAPACITY = 4096;
+    private static final int MAX_IN_FLIGHT_TASKS = 256;
+    private static final int SOUND_BATCH_QUEUE_CAPACITY = 4096;
+    private static final int MAX_SOUND_REQUESTS_PER_FLUSH = 256;
+    private final BlockingQueue<WorkerScheduler.GroupComputeResult> groupResults = new ArrayBlockingQueue<>(RESULT_QUEUE_CAPACITY);
+    private final BlockingQueue<WorkerScheduler.SoundScoreResult> soundResults = new ArrayBlockingQueue<>(RESULT_QUEUE_CAPACITY);
+    private final BlockingQueue<PendingSoundScore> pendingSoundScores = new ArrayBlockingQueue<>(SOUND_BATCH_QUEUE_CAPACITY);
+    private final Map<SoundRequestKey, PendingSoundScore> pendingSoundByKey = new ConcurrentHashMap<>();
+    private final Set<CompletableFuture<?>> inFlight = ConcurrentHashMap.newKeySet();
+    private final AtomicInteger reservedTasks = new AtomicInteger();
+    private final Object lifecycleLock = new Object();
 
     private final LocalWorkScheduler fallback = new LocalWorkScheduler();
+    private volatile boolean acceptingResults = true;
+
+    private record SoundRequestKey(UUID mobUuid, String dimensionKey) {}
+    private record PendingSoundScore(SoundRequestKey key, WorkerScheduler.SoundScoreRequest request,
+                                     CompletableFuture<Void> completion) {}
 
     public QuantifiedWorkScheduler() {
-        if (!QuantifiedOptionalBridge.register(Soundattract.MOD_ID)) {
-            throw new RuntimeException("Failed to initialize QuantifiedWorkScheduler");
-        }
     }
 
     @Override
     public Future<?> submitGroupCompute(List<WorkerScheduler.MobSnapshot> mobs, WorkerScheduler.ConfigSnapshot cfg, ResourceLocation dimension) {
+        if (!acceptingResults || mobs == null || mobs.isEmpty() || cfg == null || dimension == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        if (!reserveTask()) return CompletableFuture.completedFuture(null);
+        List<WorkerScheduler.MobSnapshot> snapshot = List.copyOf(mobs);
         long deadlineMs = computeDeadlineMs();
         Duration timeout = computeTimeout();
 
         CompletableFuture<?> future = submitFuture(
             "soundattract_group_compute",
-            () -> WorkerComputations.computeGroups(mobs, cfg, deadlineMs, dimension),
+            () -> WorkerComputations.computeGroups(snapshot, cfg, deadlineMs, dimension),
             timeout
         );
-        return future.handle((result, throwable) -> {
+        track(future);
+        CompletableFuture<?> handled = future.handle((result, throwable) -> {
+            if (!acceptingResults) return null;
             if (throwable != null || result == null) {
-                return this.fallback.submitGroupCompute(mobs, cfg, dimension);
+                return this.fallback.submitGroupCompute(snapshot, cfg, dimension);
             }
             if (result instanceof WorkerScheduler.GroupComputeResult r && r.dimension() != null) {
                 this.groupResults.offer(r);
             }
             return null;
         });
+        return handled;
     }
 
     @Override
     public Future<?> submitSoundScore(List<WorkerScheduler.SoundScoreRequest> batch) {
-        if (batch == null || batch.isEmpty()) return CompletableFuture.completedFuture(null);
+        if (!acceptingResults || batch == null || batch.isEmpty()) return CompletableFuture.completedFuture(null);
+        List<CompletableFuture<Void>> completions = new ArrayList<>(batch.size());
+        synchronized (lifecycleLock) {
+            if (!acceptingResults) return CompletableFuture.completedFuture(null);
+            for (WorkerScheduler.SoundScoreRequest request : batch) {
+                if (request == null) continue;
+                SoundRequestKey key = new SoundRequestKey(request.mobUuid, request.dimensionKey);
+                CompletableFuture<Void> completion = new CompletableFuture<>();
+                PendingSoundScore pending = new PendingSoundScore(key, request, completion);
+                PendingSoundScore existing = pendingSoundByKey.putIfAbsent(key, pending);
+                if (existing != null) {
+                    completions.add(existing.completion());
+                } else if (!pendingSoundScores.offer(pending)) {
+                    pendingSoundByKey.remove(key, pending);
+                    completion.completeExceptionally(new RejectedExecutionException("SoundAttract sound-score queue is full"));
+                    completions.add(completion);
+                } else {
+                    completions.add(completion);
+                }
+            }
+        }
+        if (completions.isEmpty()) return CompletableFuture.completedFuture(null);
+        return CompletableFuture.allOf(completions.toArray(new CompletableFuture<?>[0]));
+    }
+
+    @Override
+    public void flushPendingSoundScores() {
+        if (!acceptingResults) return;
+        List<PendingSoundScore> pending = new ArrayList<>(MAX_SOUND_REQUESTS_PER_FLUSH);
+        pendingSoundScores.drainTo(pending, MAX_SOUND_REQUESTS_PER_FLUSH);
+        if (pending.isEmpty()) return;
+        List<WorkerScheduler.SoundScoreRequest> batch = new ArrayList<>(pending.size());
+        for (PendingSoundScore item : pending) {
+            pendingSoundByKey.remove(item.key(), item);
+            batch.add(item.request());
+        }
+        CompletableFuture<?> submitted = submitSoundScoreNow(batch);
+        if (submitted == null) {
+            requeuePendingSoundScores(pending);
+            return;
+        }
+        submitted.whenComplete((value, throwable) -> {
+            for (PendingSoundScore item : pending) {
+                if (throwable == null) item.completion().complete(null);
+                else item.completion().completeExceptionally(throwable);
+            }
+        });
+    }
+
+    private void requeuePendingSoundScores(List<PendingSoundScore> pending) {
+        synchronized (lifecycleLock) {
+            for (PendingSoundScore item : pending) {
+                if (!acceptingResults) {
+                    item.completion().completeExceptionally(new RejectedExecutionException("SoundAttract server stopped"));
+                    continue;
+                }
+                PendingSoundScore existing = pendingSoundByKey.putIfAbsent(item.key(), item);
+                if (existing != null || !pendingSoundScores.offer(item)) {
+                    if (existing == null) pendingSoundByKey.remove(item.key(), item);
+                    item.completion().completeExceptionally(new RejectedExecutionException("SoundAttract sound-score queue is full"));
+                }
+            }
+        }
+    }
+
+    private CompletableFuture<?> submitSoundScoreNow(List<WorkerScheduler.SoundScoreRequest> batch) {
+        if (!acceptingResults || batch == null || batch.isEmpty()) return CompletableFuture.completedFuture(null);
+        if (!reserveTask()) return null;
+        List<WorkerScheduler.SoundScoreRequest> snapshot = List.copyOf(batch);
 
         long deadlineMs = computeDeadlineMs();
         Duration timeout = computeTimeout();
 
         CompletableFuture<?> future;
-        CompletableFuture<List<WorkerScheduler.SoundScoreResult>> parallel = ParallelComputeBridge.trySubmitSoundScores(batch, deadlineMs, timeout);
+        CompletableFuture<List<WorkerScheduler.SoundScoreResult>> parallel = QuantifiedGpuSoundScoreBridge.trySubmit(snapshot, deadlineMs, timeout);
+        if (parallel == null) {
+            parallel = ParallelComputeBridge.trySubmitSoundScores(snapshot, deadlineMs, timeout);
+        }
         if (parallel != null) {
             future = parallel;
         } else {
             future = submitFuture(
                 "soundattract_sound_score",
-                () -> WorkerComputations.computeSoundScores(batch, deadlineMs),
+                () -> WorkerComputations.computeSoundScores(snapshot, deadlineMs),
                 timeout
             );
         }
-        return future.handle((result, throwable) -> {
+        track(future);
+        CompletableFuture<?> handled = future.handle((result, throwable) -> {
+            if (!acceptingResults) return null;
             if (throwable != null) {
-                return this.fallback.submitSoundScore(batch);
+                return this.fallback.submitSoundScore(snapshot);
             }
             if (result == null) {
-                return this.fallback.submitSoundScore(batch);
+                return this.fallback.submitSoundScore(snapshot);
             }
             if (result instanceof List<?> list) {
                 for (Object o : list) {
@@ -93,6 +191,7 @@ public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler 
             }
             return null;
         });
+        return handled;
     }
 
     @Override
@@ -109,6 +208,55 @@ public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler 
         this.soundResults.drainTo(out);
         out.addAll(WorkerScheduler.drainSoundScoreResults());
         return out;
+    }
+
+    @Override
+    public void clearResults() {
+        Set<CompletableFuture<?>> toCancel;
+        synchronized (lifecycleLock) {
+            this.acceptingResults = false;
+            toCancel = Set.copyOf(inFlight);
+            inFlight.clear();
+            reservedTasks.set(0);
+            this.groupResults.clear();
+            this.soundResults.clear();
+            PendingSoundScore pending;
+            while ((pending = pendingSoundScores.poll()) != null) {
+                pendingSoundByKey.remove(pending.key(), pending);
+                pending.completion().completeExceptionally(new RejectedExecutionException("SoundAttract server stopped"));
+            }
+            pendingSoundByKey.clear();
+        }
+        for (CompletableFuture<?> future : toCancel) future.cancel(false);
+        WorkerScheduler.clearResults();
+    }
+
+    private boolean reserveTask() {
+        while (acceptingResults) {
+            int current = reservedTasks.get();
+            if (current >= MAX_IN_FLIGHT_TASKS) return false;
+            if (reservedTasks.compareAndSet(current, current + 1)) return true;
+        }
+        return false;
+    }
+
+    private void releaseTask() {
+        reservedTasks.updateAndGet(value -> Math.max(0, value - 1));
+    }
+
+    private void track(CompletableFuture<?> future) {
+        synchronized (lifecycleLock) {
+            if (!acceptingResults) {
+                releaseTask();
+                future.cancel(false);
+                return;
+            }
+            inFlight.add(future);
+        }
+        future.whenComplete((value, throwable) -> {
+            inFlight.remove(future);
+            releaseTask();
+        });
     }
 
     private CompletableFuture<?> submitFuture(String taskName, java.util.function.Supplier<?> work, Duration timeout) {
@@ -153,6 +301,7 @@ public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler 
             .append(req.switchRatio).append('|')
             .append(req.noveltyBonus).append('|')
             .append(req.noveltyTicks).append('|')
+            .append(req.dimensionKey == null ? "" : req.dimensionKey).append('|')
             .append(req.gameTime / 5L);
         List<WorkerScheduler.SoundCandidate> normalized = new ArrayList<>(req.candidates);
         normalized.sort(Comparator
@@ -188,6 +337,7 @@ public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler 
             writeNullableUuid(out, result.mobUuid());
             writeNullableString(out, result.soundId());
             out.writeDouble(result.score());
+            writeNullableString(out, result.dimensionKey());
             out.flush();
             return bytes.toByteArray();
         } catch (Throwable ignored) {
@@ -204,7 +354,8 @@ public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler 
             UUID mobUuid = readNullableUuid(in);
             String soundId = readNullableString(in);
             double score = in.readDouble();
-            return new WorkerScheduler.SoundScoreResult(mobUuid, soundId, score);
+            String dimensionKey = in.available() > 0 ? readNullableString(in) : null;
+            return new WorkerScheduler.SoundScoreResult(mobUuid, soundId, score, dimensionKey);
         } catch (Throwable ignored) {
             return new WorkerScheduler.SoundScoreResult(null, null, 0.0);
         }
@@ -288,7 +439,8 @@ public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler 
                     try {
                         return WorkerComputations.computeSoundScore(req, deadlineMs);
                     } catch (Throwable t) {
-                        return new WorkerScheduler.SoundScoreResult(req == null ? null : req.mobUuid, null, 0.0);
+                        return new WorkerScheduler.SoundScoreResult(req == null ? null : req.mobUuid, null, 0.0,
+                                req == null ? null : req.dimensionKey);
                     }
                 };
                 if (!QuantifiedOptionalBridge.trySetParallelSliceExecutor(builder, scorer)) {
@@ -303,7 +455,9 @@ public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler 
                     useSliceCache = SoundAttractConfig.COMMON.enableQuantifiedSoundScoreSliceCache.get();
                     persistentSliceCache = SoundAttractConfig.COMMON.quantifiedSoundScoreSliceCachePersistent.get();
                     sliceCacheTtlTicks = Math.max(1L, SoundAttractConfig.COMMON.quantifiedSoundScoreSliceCacheTtlTicks.get().longValue());
-                    sliceCacheMaxEntries = Math.max(64L, SoundAttractConfig.COMMON.quantifiedSoundScoreSliceCacheMaxEntries.get().longValue());
+                    sliceCacheMaxEntries = Math.min(
+                            MAX_SOUND_SCORE_SLICE_CACHE_ENTRIES,
+                            Math.max(64L, SoundAttractConfig.COMMON.quantifiedSoundScoreSliceCacheMaxEntries.get().longValue()));
                 } catch (Throwable ignored) {
                 }
                 if (useSliceCache) {

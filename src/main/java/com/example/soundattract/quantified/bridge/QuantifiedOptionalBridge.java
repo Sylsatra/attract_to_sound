@@ -26,16 +26,16 @@ public final class QuantifiedOptionalBridge {
         return resolved != null && resolved.submitTaskMethod != null;
     }
 
-    public static boolean register(String modId) {
+    public static boolean registerV2(String modId) {
         if (modId == null || modId.isBlank()) {
             return false;
         }
         Handles resolved = resolveHandles();
-        if (resolved == null || resolved.registerMethod == null) {
+        if (resolved == null || resolved.registerV2Method == null) {
             return false;
         }
         try {
-            return (boolean) resolved.registerMethod.invoke(modId);
+            return (boolean) resolved.registerV2Method.invoke(modId);
         } catch (Throwable ignored) {
             return false;
         }
@@ -200,7 +200,7 @@ public final class QuantifiedOptionalBridge {
     }
 
     public static Object tryFetchCacheManager(String modId) {
-        if (!register(modId)) {
+        if (modId == null) {
             return null;
         }
         Handles resolved = resolveHandles();
@@ -208,7 +208,7 @@ public final class QuantifiedOptionalBridge {
             return null;
         }
         try {
-            return resolved.getCacheManagerMethod.invoke();
+            return resolved.getCacheManagerMethod.invoke(modId);
         } catch (Throwable ignored) {
             return null;
         }
@@ -222,18 +222,20 @@ public final class QuantifiedOptionalBridge {
                                      Duration ttl,
                                      long maxSize,
                                      boolean persistence) {
-        if (loader == null || cacheName == null || key == null) {
-            return null;
-        }
-        if (!register(modId)) {
+        if (loader == null || modId == null || cacheName == null || key == null) {
             return null;
         }
         Handles resolved = resolveHandles();
-        if (resolved == null || resolved.getCachedMethod == null) {
+        if (resolved == null || resolved.cacheRequestFactory == null || resolved.cacheGetMethod == null) {
             return null;
         }
         try {
-            return (T) resolved.getCachedMethod.invoke(cacheName, key, loader, ttl, maxSize, persistence);
+            Object request = resolved.cacheRequestFactory.invoke(modId, cacheName);
+            if (request == null) return null;
+            if (ttl != null && resolved.cacheTtlMethod != null) resolved.cacheTtlMethod.invoke(request, ttl);
+            if (maxSize > 0L && resolved.cacheMaxEntriesMethod != null) resolved.cacheMaxEntriesMethod.invoke(request, maxSize);
+            if (persistence && resolved.cachePersistMethod != null) resolved.cachePersistMethod.invoke(request);
+            return (T) resolved.cacheGetMethod.invoke(request, key, loader);
         } catch (Throwable ignored) {
             return null;
         }
@@ -309,13 +311,14 @@ public final class QuantifiedOptionalBridge {
             Class<?> apiClass = classResolver.resolve("org.admany.quantified.api.QuantifiedAPI");
             Class<?> taskClass = classResolver.resolve("org.admany.quantified.api.model.QuantifiedTask");
             Class<?> taskBuilderClass = classResolver.resolve("org.admany.quantified.api.model.QuantifiedTask$Builder");
+            Class<?> cacheRequestClass = classResolver.resolve("org.admany.quantified.api.CacheRequest");
             Class<?> parallelComputeClass = classResolver.resolve("org.admany.quantified.api.parallel.ParallelCompute");
             Class<?> parallelBuilderClass = classResolver.resolve("org.admany.quantified.api.parallel.ParallelCompute$Builder");
             Class<?> managerInterface = classResolver.resolve("org.admany.quantified.api.interfaces.ModCacheManager");
 
             Handles loaded = new Handles();
             loaded.available = true;
-            loaded.registerMethod = lookup.findStatic(apiClass, "register", MethodType.methodType(boolean.class, String.class));
+            loaded.registerV2Method = lookup.findStatic(apiClass, "registerV2", MethodType.methodType(boolean.class, String.class));
             loaded.taskBuilderFactory = lookup.findStatic(taskClass, "builder", MethodType.methodType(taskBuilderClass, String.class, String.class, Supplier.class));
             loaded.submitTaskMethod = lookup.findStatic(apiClass, "submit", MethodType.methodType(CompletableFuture.class, taskBuilderClass));
             loaded.threadSafeMethod = lookup.findVirtual(taskBuilderClass, "threadSafe", MethodType.methodType(taskBuilderClass, boolean.class));
@@ -330,8 +333,12 @@ public final class QuantifiedOptionalBridge {
             loaded.parallelMemorySliceCacheMethod = lookup.findVirtual(parallelBuilderClass, "memorySliceCache", MethodType.methodType(parallelBuilderClass, String.class, Function.class, Function.class, Function.class, Duration.class, long.class));
             loaded.parallelPersistentSliceCacheMethod = lookup.findVirtual(parallelBuilderClass, "persistentSliceCache", MethodType.methodType(parallelBuilderClass, String.class, Function.class, Function.class, Function.class, Duration.class, long.class, boolean.class));
             loaded.parallelSubmitMethod = lookup.findVirtual(parallelBuilderClass, "submit", MethodType.methodType(CompletableFuture.class));
-            loaded.getCacheManagerMethod = lookup.findStatic(apiClass, "getCacheManager", MethodType.methodType(managerInterface));
-            loaded.getCachedMethod = lookup.findStatic(apiClass, "getCached", MethodType.methodType(Object.class, String.class, String.class, Supplier.class, Duration.class, long.class, boolean.class));
+            loaded.getCacheManagerMethod = lookup.findStatic(apiClass, "getCacheManager", MethodType.methodType(managerInterface, String.class));
+            loaded.cacheRequestFactory = lookup.findStatic(apiClass, "cache", MethodType.methodType(cacheRequestClass, String.class, String.class));
+            loaded.cacheTtlMethod = lookup.findVirtual(cacheRequestClass, "ttl", MethodType.methodType(cacheRequestClass, Duration.class));
+            loaded.cacheMaxEntriesMethod = lookup.findVirtual(cacheRequestClass, "maxEntries", MethodType.methodType(cacheRequestClass, long.class));
+            loaded.cachePersistMethod = lookup.findVirtual(cacheRequestClass, "persistent", MethodType.methodType(cacheRequestClass));
+            loaded.cacheGetMethod = lookup.findVirtual(cacheRequestClass, "get", MethodType.methodType(Object.class, String.class, Supplier.class));
             loaded.setMemoryLimitMethod = lookup.findVirtual(managerInterface, "setMemoryLimitMB", MethodType.methodType(void.class, long.class));
             loaded.isMemoryPressureHighMethod = lookup.findVirtual(managerInterface, "isMemoryPressureHigh", MethodType.methodType(boolean.class));
             loaded.triggerCleanupMethod = lookup.findVirtual(managerInterface, "triggerMemoryPressureCleanup", MethodType.methodType(void.class));
@@ -351,7 +358,7 @@ public final class QuantifiedOptionalBridge {
 
     private static final class Handles {
         private boolean available;
-        private MethodHandle registerMethod;
+        private MethodHandle registerV2Method;
         private MethodHandle taskBuilderFactory;
         private MethodHandle submitTaskMethod;
         private MethodHandle threadSafeMethod;
@@ -369,7 +376,11 @@ public final class QuantifiedOptionalBridge {
         private MethodHandle parallelPersistentSliceCacheMethod;
         private MethodHandle parallelSubmitMethod;
         private MethodHandle getCacheManagerMethod;
-        private MethodHandle getCachedMethod;
+        private MethodHandle cacheRequestFactory;
+        private MethodHandle cacheTtlMethod;
+        private MethodHandle cacheMaxEntriesMethod;
+        private MethodHandle cachePersistMethod;
+        private MethodHandle cacheGetMethod;
         private MethodHandle setMemoryLimitMethod;
         private MethodHandle isMemoryPressureHighMethod;
         private MethodHandle triggerCleanupMethod;

@@ -17,6 +17,9 @@ public class ConfigHelper {
 
     public static void register(ForgeConfigRegistry registry) {
 
+        migrateLegacyConfigFileNames();
+        migrateDebugLogging();
+
         registry.register(Soundattract.MOD_ID, ModConfig.Type.COMMON, GeneralConfig.SPEC, "soundattract/general.toml");
         registry.register(Soundattract.MOD_ID, ModConfig.Type.COMMON, StealthConfig.SPEC, "soundattract/stealth.toml");
         registry.register(Soundattract.MOD_ID, ModConfig.Type.COMMON, GunsConfig.SPEC, "soundattract/guns.toml");
@@ -26,12 +29,98 @@ public class ConfigHelper {
         registry.register(Soundattract.MOD_ID, ModConfig.Type.COMMON, PerformanceConfig.SPEC, "soundattract/performance.toml");
         registry.register(Soundattract.MOD_ID, ModConfig.Type.COMMON, RaidConfig.SPEC, "soundattract/raid.toml");
         registry.register(Soundattract.MOD_ID, ModConfig.Type.COMMON, PathfindingConfig.SPEC, "soundattract/pathfinding.toml");
+        registry.register(Soundattract.MOD_ID, ModConfig.Type.COMMON, LivingWallConfig.SPEC, "soundattract/living_wall.toml");
+        registry.register(Soundattract.MOD_ID, ModConfig.Type.COMMON, DebugLoggingConfig.SPEC, "soundattract/debug_logging.toml");
         registry.register(Soundattract.MOD_ID, ModConfig.Type.SERVER, SoundAttractConfig.SERVER_SPEC, "soundattract/server-rules.toml");
+        registry.register(Soundattract.MOD_ID, ModConfig.Type.CLIENT, ClientConfig.SPEC, "soundattract/awareness.toml");
 
 
         Path oldConfigPath = FabricLoader.getInstance().getConfigDir().resolve(Soundattract.MOD_ID + "-common.toml");
         if (Files.exists(oldConfigPath)) {
             migrateOldConfig(oldConfigPath);
+        }
+    }
+
+    private static void migrateLegacyConfigFileNames() {
+        Path configDirectory = FabricLoader.getInstance().getConfigDir().resolve(Soundattract.MOD_ID);
+        migrateConfigFileName(configDirectory.resolve("living-wall.toml"), configDirectory.resolve("living_wall.toml"));
+        migrateConfigFileName(configDirectory.resolve("debug-logging.toml"), configDirectory.resolve("debug_logging.toml"));
+    }
+
+    private static void migrateConfigFileName(Path oldPath, Path newPath) {
+        if (!Files.isRegularFile(oldPath) || Files.exists(newPath)) {
+            return;
+        }
+        try {
+            Files.createDirectories(newPath.getParent());
+            Files.move(oldPath, newPath);
+            Soundattract.LOGGER.info("Migrated config file {} to {}", oldPath.getFileName(), newPath.getFileName());
+        } catch (IOException e) {
+            Soundattract.LOGGER.error("Failed to migrate config file {} to {}", oldPath, newPath, e);
+        }
+    }
+
+    private static void migrateDebugLogging() {
+        Path configDirectory = FabricLoader.getInstance().getConfigDir().resolve("soundattract");
+        Path generalPath = configDirectory.resolve("general.toml");
+        Path debugPath = configDirectory.resolve("debug_logging.toml");
+        Path legacyPath = FabricLoader.getInstance().getConfigDir().resolve(Soundattract.MOD_ID + "-common.toml");
+        try {
+            Boolean legacyValue = readLegacyDebugLogging(generalPath);
+            if (!Files.exists(debugPath) && legacyValue == null) {
+                legacyValue = readLegacyDebugLogging(legacyPath);
+            }
+            if (!Files.exists(debugPath) && legacyValue != null) {
+                Files.createDirectories(configDirectory);
+                try (CommentedFileConfig newConfig = CommentedFileConfig.builder(debugPath)
+                        .sync().writingMode(WritingMode.REPLACE).build()) {
+                    newConfig.load();
+                    DebugLoggingConfig.SPEC.correct(newConfig);
+                    newConfig.save();
+                }
+                Soundattract.LOGGER.info("Migrated general.debugLogging to feature switches in debug_logging.toml; all switches remain disabled");
+            }
+            if (Files.exists(debugPath)) {
+                removeLegacyAllSwitch(debugPath);
+                removeLegacyDebugLogging(generalPath);
+            }
+        } catch (IOException | RuntimeException e) {
+            Soundattract.LOGGER.error("Failed to migrate general.debugLogging to debug_logging.toml", e);
+        }
+    }
+
+    private static void removeLegacyAllSwitch(Path path) {
+        try (CommentedFileConfig config = CommentedFileConfig.builder(path).sync().build()) {
+            config.load();
+            if (config.contains("debug_logging.all")) {
+                config.remove("debug_logging.all");
+                DebugLoggingConfig.SPEC.correct(config);
+                config.save();
+            }
+        }
+    }
+
+    private static Boolean readLegacyDebugLogging(Path path) {
+        if (!Files.isRegularFile(path)) {
+            return null;
+        }
+        try (CommentedFileConfig config = CommentedFileConfig.builder(path).sync().build()) {
+            config.load();
+            Object value = config.getRaw("general.debugLogging");
+            return value instanceof Boolean enabled ? enabled : null;
+        }
+    }
+
+    private static void removeLegacyDebugLogging(Path path) {
+        if (!Files.isRegularFile(path)) {
+            return;
+        }
+        try (CommentedFileConfig config = CommentedFileConfig.builder(path).sync().build()) {
+            config.load();
+            if (config.contains("general.debugLogging")) {
+                config.remove("general.debugLogging");
+                config.save();
+            }
         }
     }
 
@@ -45,7 +134,6 @@ public class ConfigHelper {
 
 
         migrateToSpec(oldConfig, GeneralConfig.SPEC, FabricLoader.getInstance().getConfigDir().resolve("soundattract/general.toml"), List.of(
-                new Mapping("general.debugLogging", "general.debugLogging"),
                 new Mapping("general.enableDataDriven", "general.enableDataDriven"),
                 new Mapping("general.datapackPriority", "general.datapackPriority"),
                 new Mapping("mobs.attractedEntities", "mobs.attractedEntities"),

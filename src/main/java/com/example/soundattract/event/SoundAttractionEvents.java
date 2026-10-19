@@ -6,7 +6,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 import com.example.soundattract.ai.AttractionGoal;
@@ -25,6 +24,8 @@ import com.example.soundattract.worker.WorkSchedulerManager;
 import com.example.soundattract.integration.smartbrainlib.SmartBrainLibCompat;
 import com.example.soundattract.tracking.SoundTracker;
 import com.example.soundattract.integration.relentlessundead.RelentlessUndeadIntegration;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -39,10 +40,16 @@ import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.phys.AABB;
 import com.example.soundattract.mixin.MobAccessor;
 import net.fabricmc.loader.api.FabricLoader;
+import java.time.Duration;
 
 public class SoundAttractionEvents {
 
-    private static final Map<Mob, List<GoalDefinition>> PENDING_GOAL_ADDITIONS = new ConcurrentHashMap<>();
+    private static final Cache<Mob, List<GoalDefinition>> PENDING_GOAL_ADDITIONS = Caffeine.newBuilder()
+            .weakKeys()
+            .maximumSize(8192)
+            .expireAfterWrite(Duration.ofSeconds(5))
+            .build();
+    private static final int MAX_PENDING_GOALS_PER_MOB = 16;
 
     private static long serverTickCounter = 0;
     private static boolean initialDelayHasPassed = false;
@@ -93,7 +100,24 @@ public class SoundAttractionEvents {
     }
 
     private static void scheduleAddGoal(Mob mob, int priority, Goal goal) {
-        PENDING_GOAL_ADDITIONS.computeIfAbsent(mob, k -> new ArrayList<>()).add(new GoalDefinition(priority, goal));
+        if (mob == null || goal == null || mob.isRemoved()) return;
+        PENDING_GOAL_ADDITIONS.asMap().compute(mob, (key, pending) -> {
+            List<GoalDefinition> goals = pending == null ? new ArrayList<>() : pending;
+            Class<?> goalClass = goal.getClass();
+            for (GoalDefinition existing : goals) {
+                if (existing.goalClass == goalClass) return goals;
+            }
+            if (goals.size() >= MAX_PENDING_GOALS_PER_MOB) return goals;
+            goals.add(new GoalDefinition(priority, goal));
+            return goals;
+        });
+    }
+
+    public static void onServerStopped() {
+        PENDING_GOAL_ADDITIONS.invalidateAll();
+        serverTickCounter = 0L;
+        initialDelayHasPassed = false;
+        invalidateCachedEntityTypes();
     }
 
     private static long lastMobCountUpdateTime_ServerTick = -1;
@@ -316,8 +340,8 @@ public class SoundAttractionEvents {
                     Soundattract.LOGGER.error("[SoundAttractionEvents] Applying group results failed", t);
                 }
             }
-            if (!PENDING_GOAL_ADDITIONS.isEmpty()) {
-                Iterator<Map.Entry<Mob, List<GoalDefinition>>> iterator = PENDING_GOAL_ADDITIONS.entrySet().iterator();
+            if (!PENDING_GOAL_ADDITIONS.asMap().isEmpty()) {
+                Iterator<Map.Entry<Mob, List<GoalDefinition>>> iterator = PENDING_GOAL_ADDITIONS.asMap().entrySet().iterator();
                 while (iterator.hasNext()) {
                     Map.Entry<Mob, List<GoalDefinition>> entry = iterator.next();
                     Mob mob = entry.getKey();

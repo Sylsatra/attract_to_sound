@@ -1,19 +1,24 @@
 package com.example.soundattract.scents;
 
 import com.example.soundattract.config.SoundAttractConfig;
-import com.example.soundattract.quantified.QuantifiedCacheCompat;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
+import com.example.soundattract.util.BiomeClimateAccess;
 
 public class ScentBiomeModifier {
 
     public static float getDurationModifier(Level level, BlockPos pos) {
         if (!(level instanceof ServerLevel)) return 1.0f;
+        return getDurationModifier(level, pos, level.isRainingAt(pos));
+    }
+
+    static float getDurationModifier(Level level, BlockPos pos, boolean rainingAtPosition) {
+        if (!(level instanceof ServerLevel)) return 1.0f;
 
         float weatherMod = 1.0f;
-        if (level.isRainingAt(pos)) {
+        if (rainingAtPosition) {
             weatherMod /= (float) SoundAttractConfig.COMMON.rainDecayMultiplier.get().doubleValue(); 
         }
 
@@ -26,24 +31,28 @@ public class ScentBiomeModifier {
         
         float biomeMod = 1.0f;
         float temp = biome.getBaseTemperature();
-        float humidity = 0.5f;
+        float humidity = BiomeClimateAccess.getDownfall(biome);
 
         double hotThresh = SoundAttractConfig.COMMON.tempHeavyDecayThreshold.get();
         double coldThresh = SoundAttractConfig.COMMON.tempFreezeThreshold.get();
         double humidThresh = SoundAttractConfig.COMMON.humidityPreserveThreshold.get();
 
         if (temp > hotThresh) {
-            biomeMod *= 0.5f; 
+            biomeMod *= 0.5f;
         } else if (temp < coldThresh) {
             biomeMod *= 1.5f;
         }
 
         if (humidity > humidThresh) {
             biomeMod *= 1.3f;
-        } else if (humidity < 0.2f && temp > 0.5f) { 
-             biomeMod *= 0.8f;
+        } else if (humidity < 0.2f && temp > 0.5f) {
+            biomeMod *= 0.8f;
         }
 
         return weatherMod * biomeMod;
+    }
+
+    public static float getDurationModifierForTesting(Level level, BlockPos pos, boolean rainingAtPosition) {
+        return getDurationModifier(level, pos, rainingAtPosition);
     }
 }

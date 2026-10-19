@@ -96,9 +96,6 @@ public class SoundAttractClientEvents {
         ClientPlayNetworking.send(SoundAttractNetwork.SOUND_MESSAGE_ID, buf);
     }
 
-    public static void registerVoiceChatIntegration() {
-    }
-
     public enum PlayerAction {
         IDLE,
         CRAWLING,

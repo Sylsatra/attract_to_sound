@@ -20,6 +20,8 @@ public class SoundAttractNetwork {
     public static final ResourceLocation SOUND_MESSAGE_ID = new ResourceLocation(Soundattract.MOD_ID, "sound_message");
     public static final ResourceLocation CAMO_SYNC_ID = new ResourceLocation(Soundattract.MOD_ID, "camo_sync");
     public static final ResourceLocation CAMO_REMOVAL_ID = new ResourceLocation(Soundattract.MOD_ID, "camo_removal");
+    public static final ResourceLocation AWARENESS_SNAPSHOT_ID = new ResourceLocation(Soundattract.MOD_ID, "awareness_snapshot");
+    public static final ResourceLocation FROM_THE_FOG_MARKER_ID = new ResourceLocation(Soundattract.MOD_ID, "from_the_fog_marker");
 
     public static void register() {
         ServerPlayNetworking.registerGlobalReceiver(SOUND_MESSAGE_ID, (server, player, handler, buf, responseSender) -> {
@@ -46,6 +48,15 @@ public class SoundAttractNetwork {
         if (entity instanceof ServerPlayer self) {
             ServerPlayNetworking.send(self, CAMO_SYNC_ID, buf);
         }
+    }
+
+    public static void sendAwarenessSnapshot(ServerPlayer player, AwarenessSnapshotMessage message) {
+        if (player == null || !ServerPlayNetworking.canSend(player, AWARENESS_SNAPSHOT_ID)) {
+            return;
+        }
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        AwarenessSnapshotMessage.encode(message, buf);
+        ServerPlayNetworking.send(player, AWARENESS_SNAPSHOT_ID, buf);
     }
 
     @Environment(EnvType.CLIENT)

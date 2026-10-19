@@ -6,6 +6,10 @@ import com.example.soundattract.Soundattract;
 import net.minecraft.world.entity.Mob;
 import net.fabricmc.loader.api.FabricLoader;
 
+import java.lang.reflect.Field;
+import java.util.Map;
+import java.util.Optional;
+
 public final class SmartBrainLibCompat {
     private static final boolean IS_SBL_LOADED = FabricLoader.getInstance().isModLoaded("smartbrainlib");
 
@@ -46,7 +50,7 @@ public final class SmartBrainLibCompat {
 
             net.tslat.smartbrainlib.util.BrainUtils.removeBehaviour(pathfinder, (priority, activity, behaviour, parent) -> behaviour != null && behaviour.getClass().getName().equals(OLD_BEHAVIOUR_CLASS));
 
-            net.tslat.smartbrainlib.util.BrainUtils.addMemories(pathfinder.getBrain(),
+            registerBrainMemories(brain,
                 net.minecraft.world.entity.ai.memory.MemoryModuleType.WALK_TARGET,
                 net.minecraft.world.entity.ai.memory.MemoryModuleType.LOOK_TARGET,
                 com.example.soundattract.integration.sbl.SoundAttractSensor.SOUND_ATTRACT_TARGET,
@@ -65,6 +69,28 @@ public final class SmartBrainLibCompat {
             addBehaviour(brain, 5, net.minecraft.world.entity.schedule.Activity.IDLE, scentBehaviour);
 
             return true;
+        }
+
+        /**
+         * SmartBrainLib's BrainUtils.addMemories only probes the vanilla brain's
+         * existing memory entries; it does not add missing entries. Sensors
+         * attached after a mob's brain has been created therefore need their
+         * custom memory modules registered explicitly before they can write to
+         * them.
+         */
+        @SuppressWarnings("unchecked")
+        private static void registerBrainMemories(Object brain, net.minecraft.world.entity.ai.memory.MemoryModuleType<?>... modules) {
+            try {
+                Class<?> brainClass = Class.forName("net.minecraft.world.entity.ai.Brain");
+                Field memoriesField = brainClass.getDeclaredField("memories");
+                memoriesField.setAccessible(true);
+                Map<Object, Optional<?>> memories = (Map<Object, Optional<?>>) memoriesField.get(brain);
+                for (net.minecraft.world.entity.ai.memory.MemoryModuleType<?> module : modules) {
+                    memories.putIfAbsent(module, Optional.empty());
+                }
+            } catch (ReflectiveOperationException exception) {
+                throw new IllegalStateException("Could not register Sound Attract memories on SmartBrainLib brain", exception);
+            }
         }
 
         private static boolean isSmartBrain(Object brain) {
