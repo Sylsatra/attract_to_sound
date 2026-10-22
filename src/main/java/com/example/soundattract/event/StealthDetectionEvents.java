@@ -4,6 +4,7 @@ import com.example.soundattract.Soundattract;
 import com.example.soundattract.config.PlayerStance;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.util.CamoUtil;
+import com.example.soundattract.util.EnvironmentalCamoColor;
 import com.example.soundattract.enchantment.ModEnchantments;
 import com.example.soundattract.ai.MobGroupManager;
 import com.example.soundattract.ai.RaidManager;
@@ -36,7 +37,6 @@ import net.minecraft.world.item.ArmorMaterials;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.state.BlockState;
@@ -47,7 +47,8 @@ import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.phys.Vec3;
 import com.example.soundattract.los.OptimizedLOS; 
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.world.item.enchantment.ItemEnchantments;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 import com.example.soundattract.camo.CamouflageCapability;
 import com.example.soundattract.camo.CamoMaterialRegistry;
@@ -110,11 +111,10 @@ public class StealthDetectionEvents {
     private static void updateEstimatedTps(MinecraftServer server) {
         if (server == null) return;
         try {
-            float avgTicksPerSecond = 20.0f;
-            if (Float.isNaN(avgTicksPerSecond) || avgTicksPerSecond <= 0.0f) {
+            float avgMs = server.getAverageTickTimeNanos() / 1_000_000.0f;
+            if (Float.isNaN(avgMs) || avgMs <= 0.0f) {
                 return;
             }
-            float avgMs = 1000.0f / avgTicksPerSecond;
             double tps = 1000.0 / Math.max(1.0, (double) avgMs);
             if (tps > 20.0) tps = 20.0;
             if (tps < 0.0) tps = 0.0;
@@ -200,15 +200,10 @@ public class StealthDetectionEvents {
         return SoundAttractConfig.COMMON.stealthCheckInterval.get();
     }
     private static boolean hasConcealmentEnchant(ItemStack stack) {
-        if (stack == null || stack.isEmpty()) {
-            return false;
-        }
-
-        net.minecraft.world.item.enchantment.ItemEnchantments enchantments = stack.get(DataComponents.ENCHANTMENTS);
-        if (enchantments == null) {
-            return false;
-        }
-        return enchantments.keySet().stream().anyMatch(holder -> holder.is(com.example.soundattract.enchantment.ModEnchantments.CONCEAL));
+        if (stack.isEmpty() || !stack.isEnchanted()) return false;
+        return stack.getOrDefault(DataComponents.ENCHANTMENTS, ItemEnchantments.EMPTY).entrySet().stream()
+                .anyMatch(entry -> entry.getIntValue() > 0 && entry.getKey().unwrapKey()
+                        .map(key -> key.equals(ModEnchantments.CONCEAL)).orElse(false));
     }
     public static class GunshotInfo {
         public final long timestamp;
@@ -303,7 +298,8 @@ public class StealthDetectionEvents {
 
         if (!skipExpensive && SoundAttractConfig.COMMON.enableEnvironmentalCamouflage.get()) {
             int finalColor = CamoUtil.getFinalPerceptionColor(target);
-            java.util.Optional<Integer> envColorOpt = getAverageEnvironmentalColor(target, level);
+            java.util.Optional<Integer> envColorOpt = EnvironmentalCamoColor.getEnvironmentalColor(
+                    target, looker, level, () -> getAverageEnvironmentalColor(target, level));
             
             if (envColorOpt.isPresent()) {
                 int envColor = envColorOpt.get();
@@ -597,9 +593,6 @@ public class StealthDetectionEvents {
 
     public static boolean canMobDetectLivingEntity(Mob mob, LivingEntity target) {
         if (mob == null || target == null) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
-                Soundattract.LOGGER.warn("[CanDetect] Called with null mob or target. Defaulting to detectable.");
-            }
             return true;
         }
 
@@ -724,6 +717,50 @@ public class StealthDetectionEvents {
     @Deprecated
     public static boolean canMobDetectPlayer(Mob mob, Player player) {
         return canMobDetectLivingEntity(mob, player);
+    }
+
+    /**
+     * Checks awareness visibility against the exact range already computed for the current snapshot.
+     * Keeping this separate from the general targeting query prevents range-dependent state from being
+     * recalculated with a different result while an alert snapshot is being assembled.
+     */
+    public static boolean canMobDetectPlayerWithRange(Mob mob, Player player, double detectionRange) {
+        if (mob == null || player == null) {
+            return true;
+        }
+        if (SoundAttractConfig.isStealthBypassed(mob)) {
+            return true;
+        }
+        if (player.isCreative() || player.isSpectator() || !player.isAlive()) {
+            return true;
+        }
+        if (!SoundAttractConfig.COMMON.enableStealthMechanics.get()) {
+            return true;
+        }
+        if (shouldUseVanillaTargeting(mob.level())) {
+            return true;
+        }
+        if (SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) {
+            try {
+                Mob leader = com.example.soundattract.ai.MobGroupManager.getLeader(mob);
+                if (leader != null && leader != mob) {
+                    boolean isEdge = com.example.soundattract.ai.MobGroupManager.isEdgeMob(mob);
+                    boolean isDeserter = com.example.soundattract.ai.MobGroupManager.isDeserter(mob);
+                    if (!isEdge && !isDeserter) {
+                        return false;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        double xrayRange = getEffectiveXrayRange(mob);
+        if (xrayRange > 0.0 && mob.distanceToSqr(player) <= xrayRange * xrayRange) {
+            return true;
+        }
+        if (mob.distanceToSqr(player) > detectionRange * detectionRange) {
+            return false;
+        }
+        return FovEvents.isTargetInFov(mob, player, true);
     }
 
     private static boolean canMobDetectTargetNoEdgeSuppression(Mob mob, LivingEntity target) {
@@ -1245,7 +1282,8 @@ public class StealthDetectionEvents {
 
         if (SoundAttractConfig.COMMON.enableEnvironmentalCamouflage.get()) {
             int finalColor = CamoUtil.getFinalPerceptionColor(player);
-            java.util.Optional<Integer> envColorOpt = getAverageEnvironmentalColor(player, level);
+            java.util.Optional<Integer> envColorOpt = EnvironmentalCamoColor.getEnvironmentalColor(
+                    player, mob, level, () -> getAverageEnvironmentalColor(player, level));
 
             if (envColorOpt.isPresent()) {
                 int envColor = envColorOpt.get();
@@ -1586,3 +1624,6 @@ public class StealthDetectionEvents {
         return false;
     }
 }
+
+
+

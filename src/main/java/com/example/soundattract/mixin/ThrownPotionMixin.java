@@ -20,7 +20,7 @@ public abstract class ThrownPotionMixin {
         ThrownPotion potion = (ThrownPotion) (Object) this;
         AABB aabb = potion.getBoundingBox().inflate(4.0D, 2.0D, 4.0D);
         List<LivingEntity> nearbyEntities = potion.level().getEntitiesOfClass(LivingEntity.class, aabb);
-
+        
         for (LivingEntity entity : nearbyEntities) {
             CamouflageCapability.getCapability(entity).ifPresent(camo -> {
                 camo.onWaterSplashed(entity, true);

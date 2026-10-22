@@ -13,10 +13,10 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 public final class FloorCreekEvents {
@@ -25,7 +25,9 @@ public final class FloorCreekEvents {
             TagKey.create(net.minecraft.core.registries.Registries.BLOCK,
                     ResourceLocation.fromNamespaceAndPath("soundattract", "floor_creek_blocks"));
 
-    private static final Map<UUID, State> STATES = new ConcurrentHashMap<>();
+    private static final Cache<UUID, State> STATES = Caffeine.newBuilder()
+            .maximumSize(4096)
+            .build();
 
     public static double poseProbability(boolean visuallySwimming,
                                          boolean inWater,
@@ -44,12 +46,12 @@ public final class FloorCreekEvents {
 
     public static void onPlayerLogout(ServerPlayer player) {
         if (player != null) {
-            STATES.remove(player.getUUID());
+            STATES.invalidate(player.getUUID());
         }
     }
 
     public static void onServerStopping() {
-        STATES.clear();
+        STATES.invalidateAll();
     }
 
     public static void onPlayerTick(ServerPlayer serverPlayer) {
@@ -59,7 +61,7 @@ public final class FloorCreekEvents {
         if (!serverPlayer.isAlive() || serverPlayer.isSpectator()) return;
 
         UUID id = serverPlayer.getUUID();
-        State state = STATES.computeIfAbsent(id, k -> new State(serverPlayer.position(), serverPlayer.onGround()));
+        State state = STATES.get(id, k -> new State(serverPlayer.position(), serverPlayer.onGround()));
 
         Vec3 curr = serverPlayer.position();
         boolean onGroundNow = serverPlayer.onGround();

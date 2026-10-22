@@ -645,6 +645,18 @@ public class SoundAttractConfig {
         public final ForgeConfigSpec.IntValue envColorSampleRadius = StealthConfig.ENV_COLOR_SAMPLE_RADIUS;
         public final ForgeConfigSpec.IntValue envColorSampleYOffsetStart = StealthConfig.ENV_COLOR_SAMPLE_Y_OFFSET_START;
         public final ForgeConfigSpec.IntValue envColorSampleYOffsetEnd = StealthConfig.ENV_COLOR_SAMPLE_Y_OFFSET_END;
+        public final ForgeConfigSpec.ConfigValue<String> environmentalCamouflageSamplingMode = StealthConfig.ENVIRONMENTAL_CAMOUFLAGE_SAMPLING_MODE;
+        public final ForgeConfigSpec.IntValue envBackdropMaxDistance = StealthConfig.ENV_BACKDROP_MAX_DISTANCE;
+        public final ForgeConfigSpec.IntValue envBackdropSampleRays = StealthConfig.ENV_BACKDROP_SAMPLE_RAYS;
+        public final ForgeConfigSpec.IntValue envBackdropMinSamples = StealthConfig.ENV_BACKDROP_MIN_SAMPLES;
+        public final ForgeConfigSpec.IntValue envBackdropViewerCellSize = StealthConfig.ENV_BACKDROP_VIEWER_CELL_SIZE;
+        public final ForgeConfigSpec.IntValue envBackdropCacheTtlTicks = StealthConfig.ENV_BACKDROP_CACHE_TTL_TICKS;
+        public final ForgeConfigSpec.DoubleValue envBackdropMinTps = StealthConfig.ENV_BACKDROP_MIN_TPS;
+        public final ForgeConfigSpec.DoubleValue envBackdropRecoveryTps = StealthConfig.ENV_BACKDROP_RECOVERY_TPS;
+        public final ForgeConfigSpec.BooleanValue envBackdropUseSkyColor = StealthConfig.ENV_BACKDROP_USE_SKY_COLOR;
+        public final ForgeConfigSpec.ConfigValue<String> envBackdropDaySkyColor = StealthConfig.ENV_BACKDROP_DAY_SKY_COLOR;
+        public final ForgeConfigSpec.ConfigValue<String> envBackdropNightSkyColor = StealthConfig.ENV_BACKDROP_NIGHT_SKY_COLOR;
+        public final ForgeConfigSpec.ConfigValue<String> envBackdropRainSkyColor = StealthConfig.ENV_BACKDROP_RAIN_SKY_COLOR;
         public final ForgeConfigSpec.BooleanValue enableEnvironmentalMismatchPenalty = StealthConfig.ENABLE_ENVIRONMENTAL_MISMATCH_PENALTY;
         public final ForgeConfigSpec.DoubleValue environmentalMismatchPenaltyFactor = StealthConfig.ENVIRONMENTAL_MISMATCH_PENALTY_FACTOR;
         public final ForgeConfigSpec.IntValue environmentalMismatchThreshold = StealthConfig.ENVIRONMENTAL_MISMATCH_THRESHOLD;
@@ -757,6 +769,22 @@ public class SoundAttractConfig {
         public final ForgeConfigSpec.DoubleValue immersiveMelodiesDefaultWeight = IntegrationConfig.IMMERSIVE_MELODIES_DEFAULT_WEIGHT;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> immersiveMelodiesInstrumentMultipliers = IntegrationConfig.IMMERSIVE_MELODIES_INSTRUMENT_MULTIPLIERS;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> immersiveMelodiesMelodyOverrides = IntegrationConfig.IMMERSIVE_MELODIES_MELODY_OVERRIDES;
+        public final ForgeConfigSpec.BooleanValue enableSpoiledFoodScent = IntegrationConfig.ENABLE_SPOILED_FOOD_SCENT;
+        public final ForgeConfigSpec.DoubleValue spoiledFoodOdorPerItem = IntegrationConfig.SPOILED_FOOD_ODOR_PER_ITEM;
+        public final ForgeConfigSpec.BooleanValue enableToughAsNailsIntegration = IntegrationConfig.ENABLE_TOUGH_AS_NAILS_INTEGRATION;
+        public final ForgeConfigSpec.IntValue toughAsNailsPollIntervalTicks = IntegrationConfig.TOUGH_AS_NAILS_POLL_INTERVAL_TICKS;
+        public final ForgeConfigSpec.ConfigValue<List<? extends String>> toughAsNailsTemperatureScentMultipliers = IntegrationConfig.TOUGH_AS_NAILS_TEMPERATURE_SCENT_MULTIPLIERS;
+        public final ForgeConfigSpec.DoubleValue toughAsNailsHyperthermiaScentMultiplier = IntegrationConfig.TOUGH_AS_NAILS_HYPERTHERMIA_SCENT_MULTIPLIER;
+        public final ForgeConfigSpec.DoubleValue toughAsNailsHyperthermiaSoundMultiplier = IntegrationConfig.TOUGH_AS_NAILS_HYPERTHERMIA_SOUND_MULTIPLIER;
+        public final ForgeConfigSpec.DoubleValue toughAsNailsThirstScentMultiplierAtEmpty = IntegrationConfig.TOUGH_AS_NAILS_THIRST_SCENT_MULTIPLIER_AT_EMPTY;
+        public final ForgeConfigSpec.DoubleValue toughAsNailsThirstSoundMultiplierAtEmpty = IntegrationConfig.TOUGH_AS_NAILS_THIRST_SOUND_MULTIPLIER_AT_EMPTY;
+        public final ForgeConfigSpec.DoubleValue toughAsNailsWoolArmorSoundMultiplierPerPiece = IntegrationConfig.TOUGH_AS_NAILS_WOOL_ARMOR_SOUND_MULTIPLIER_PER_PIECE;
+        public final ForgeConfigSpec.DoubleValue toughAsNailsWoolArmorMinimumSoundMultiplier = IntegrationConfig.TOUGH_AS_NAILS_WOOL_ARMOR_MINIMUM_SOUND_MULTIPLIER;
+        public final ForgeConfigSpec.DoubleValue toughAsNailsWoolWarmScentMultiplierPerPiece = IntegrationConfig.TOUGH_AS_NAILS_WOOL_WARM_SCENT_MULTIPLIER_PER_PIECE;
+        public final ForgeConfigSpec.DoubleValue toughAsNailsWoolHotScentMultiplierPerPiece = IntegrationConfig.TOUGH_AS_NAILS_WOOL_HOT_SCENT_MULTIPLIER_PER_PIECE;
+        public final ForgeConfigSpec.DoubleValue toughAsNailsWoolHeatMaximumScentMultiplier = IntegrationConfig.TOUGH_AS_NAILS_WOOL_HEAT_MAXIMUM_SCENT_MULTIPLIER;
+        public final ForgeConfigSpec.DoubleValue toughAsNailsLeafArmorScentMultiplierPerPiece = IntegrationConfig.TOUGH_AS_NAILS_LEAF_ARMOR_SCENT_MULTIPLIER_PER_PIECE;
+        public final ForgeConfigSpec.DoubleValue toughAsNailsLeafArmorMinimumScentMultiplier = IntegrationConfig.TOUGH_AS_NAILS_LEAF_ARMOR_MINIMUM_SCENT_MULTIPLIER;
 
         public final ForgeConfigSpec.BooleanValue enableScentSystem = ScentConfig.ENABLE_SCENT_SYSTEM;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> scentEligibleMobs = ScentConfig.SCENT_ELIGIBLE_MOBS;
@@ -766,6 +794,25 @@ public class SoundAttractConfig {
         public final ForgeConfigSpec.DoubleValue scentParticleRenderDistance = ScentConfig.SCENT_PARTICLE_RENDER_DISTANCE;
         public final ForgeConfigSpec.IntValue scentNodeDurationTicks = ScentConfig.SCENT_NODE_DURATION_TICKS;
         public final ForgeConfigSpec.DoubleValue scentCreationIntervalBlocks = ScentConfig.SCENT_CREATION_INTERVAL_BLOCKS;
+        public final ForgeConfigSpec.IntValue playerOdorScanIntervalTicks = ScentConfig.PLAYER_ODOR_SCAN_INTERVAL_TICKS;
+        public final ForgeConfigSpec.ConfigValue<List<? extends String>> playerOdorItemValues = ScentConfig.PLAYER_ODOR_ITEM_VALUES;
+        public final ForgeConfigSpec.BooleanValue enableWindScent = ScentConfig.ENABLE_WIND_SCENT;
+        public final ForgeConfigSpec.DoubleValue windScentActivationThreshold = ScentConfig.WIND_SCENT_ACTIVATION_THRESHOLD;
+        public final ForgeConfigSpec.DoubleValue windScentDeactivationThreshold = ScentConfig.WIND_SCENT_DEACTIVATION_THRESHOLD;
+        public final ForgeConfigSpec.IntValue windScentUpdateIntervalTicks = ScentConfig.WIND_SCENT_UPDATE_INTERVAL_TICKS;
+        public final ForgeConfigSpec.IntValue windScentMaximumDistance = ScentConfig.WIND_SCENT_MAXIMUM_DISTANCE;
+        public final ForgeConfigSpec.IntValue windScentMaximumParcels = ScentConfig.WIND_SCENT_MAXIMUM_PARCELS;
+        public final ForgeConfigSpec.BooleanValue windScentRainDecay = ScentConfig.WIND_SCENT_RAIN_DECAY;
+        public final ForgeConfigSpec.DoubleValue windScentSpreadFactor = ScentConfig.WIND_SCENT_SPREAD_FACTOR;
+        public final ForgeConfigSpec.DoubleValue windScentBarrierLeakage = ScentConfig.WIND_SCENT_BARRIER_LEAKAGE;
+        public final ForgeConfigSpec.BooleanValue enableWindScentParticles = ScentConfig.ENABLE_WIND_SCENT_PARTICLES;
+        public final ForgeConfigSpec.IntValue windScentParticleIntervalTicks = ScentConfig.WIND_SCENT_PARTICLE_INTERVAL_TICKS;
+        public final ForgeConfigSpec.IntValue windScentParticleMaxPerViewer = ScentConfig.WIND_SCENT_PARTICLE_MAX_PER_VIEWER;
+        public final ForgeConfigSpec.DoubleValue windshieldScentReduction = ScentConfig.WINDSHIELD_SCENT_REDUCTION;
+        public final ForgeConfigSpec.IntValue windshieldScanDistance = ScentConfig.WINDSHIELD_SCAN_DISTANCE;
+        public final ForgeConfigSpec.DoubleValue windshieldMinimumWindSpeed = ScentConfig.WINDSHIELD_MINIMUM_WIND_SPEED;
+        public final ForgeConfigSpec.DoubleValue windshieldActivationThreshold = ScentConfig.WINDSHIELD_ACTIVATION_THRESHOLD;
+        public final ForgeConfigSpec.DoubleValue windshieldDeactivationThreshold = ScentConfig.WINDSHIELD_DEACTIVATION_THRESHOLD;
         public final ForgeConfigSpec.DoubleValue tempHeavyDecayThreshold = ScentConfig.TEMP_HEAVY_DECAY_THRESHOLD;
         public final ForgeConfigSpec.DoubleValue tempFreezeThreshold = ScentConfig.TEMP_FREEZE_THRESHOLD;
         public final ForgeConfigSpec.DoubleValue humidityPreserveThreshold = ScentConfig.HUMIDITY_PRESERVE_THRESHOLD;
@@ -794,6 +841,16 @@ public class SoundAttractConfig {
 
         }
 
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> void moveConfigValue(com.electronwill.nightconfig.core.UnmodifiableConfig config, String oldPath, net.minecraftforge.common.ForgeConfigSpec.ConfigValue<T> newValue) {
+        if (config.contains(oldPath)) {
+            Object oldValue = config.get(oldPath);
+
+            newValue.set((T) oldValue);
+            Soundattract.LOGGER.info("Migrated config value '{}' -> '{}'", oldPath, String.join(".", newValue.getPath()));
+        }
     }
 
     public static void bakeConfig() {

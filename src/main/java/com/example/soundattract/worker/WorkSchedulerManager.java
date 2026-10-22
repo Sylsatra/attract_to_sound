@@ -1,15 +1,9 @@
 package com.example.soundattract.worker;
 
-import com.example.soundattract.Soundattract;
-import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.quantified.QuantifiedWorkScheduler;
-
-import net.fabricmc.loader.api.FabricLoader;
 
 public final class WorkSchedulerManager {
     private static volatile SoundAttractWorkScheduler INSTANCE;
-    private static volatile boolean QUANTIFIED_INIT_FAILED = false;
-
     private WorkSchedulerManager() {}
 
     public static SoundAttractWorkScheduler get() {
@@ -24,30 +18,25 @@ public final class WorkSchedulerManager {
 
     public static void refresh() {
         synchronized (WorkSchedulerManager.class) {
-            QUANTIFIED_INIT_FAILED = false;
+            if (INSTANCE != null) INSTANCE.clearResults();
             INSTANCE = build();
         }
     }
 
+    public static void clearResults() {
+        synchronized (WorkSchedulerManager.class) {
+            if (INSTANCE != null) INSTANCE.clearResults();
+            INSTANCE = null;
+            WorkerScheduler.clearResults();
+        }
+    }
+
+    public static void flushPendingSoundScores() {
+        SoundAttractWorkScheduler scheduler = INSTANCE;
+        if (scheduler != null) scheduler.flushPendingSoundScores();
+    }
+
     private static SoundAttractWorkScheduler build() {
-        boolean quantifiedLoaded = FabricLoader.getInstance().isModLoaded("quantified");
-        boolean enableQuantifiedIntegration = true;
-        try {
-            enableQuantifiedIntegration = SoundAttractConfig.COMMON.enableQuantifiedIntegration.get();
-        } catch (Throwable ignored) {
-        }
-
-        if (quantifiedLoaded && enableQuantifiedIntegration && !QUANTIFIED_INIT_FAILED) {
-            try {
-                return new QuantifiedWorkScheduler();
-            } catch (Throwable t) {
-                QUANTIFIED_INIT_FAILED = true;
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
-                    Soundattract.LOGGER.warn("[WorkSchedulerManager] Failed to initialize QuantifiedWorkScheduler, falling back to LocalWorkScheduler", t);
-                }
-            }
-        }
-
-        return new LocalWorkScheduler();
+        return new QuantifiedWorkScheduler();
     }
 }

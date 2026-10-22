@@ -71,7 +71,7 @@ public class RelentlessUndeadIntegration {
          static boolean getZombiesCanStack() { return false; }
          static double getZombieFallDamageMultiplier() { return 1.0; }
          static boolean isMobEligible(Mob mob) {
-            net.minecraft.tags.TagKey<net.minecraft.world.entity.EntityType<?>> hordeTag = net.minecraft.tags.TagKey.create(net.minecraft.core.registries.Registries.ENTITY_TYPE, ResourceLocation.fromNamespaceAndPath("forge", "hordes"));
+             net.minecraft.tags.TagKey<net.minecraft.world.entity.EntityType<?>> hordeTag = net.minecraft.tags.TagKey.create(net.minecraft.core.registries.Registries.ENTITY_TYPE, ResourceLocation.fromNamespaceAndPath("forge", "hordes"));
              return mob.getType().is(hordeTag);
          }
     }

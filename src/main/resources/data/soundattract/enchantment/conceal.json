@@ -11,12 +11,17 @@
     "per_level_above_first": 0
   },
   "max_cost": {
-    "base": 75,
+    "base": 50,
     "per_level_above_first": 0
   },
   "anvil_cost": 8,
   "slots": [
-    "any"
+    "mainhand",
+    "offhand",
+    "head",
+    "chest",
+    "legs",
+    "feet"
   ],
   "effects": {}
 }

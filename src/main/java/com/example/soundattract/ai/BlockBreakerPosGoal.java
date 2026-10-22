@@ -302,7 +302,7 @@ public class BlockBreakerPosGoal extends Goal {
     private float getDigSpeed() {
         float digSpeed = this.miner.getOffhandItem().getDestroySpeed(this.blockState);
         if (digSpeed > 1.0F) {
-            int efficiencyLevel = 0;
+            int efficiencyLevel = net.minecraft.world.item.enchantment.EnchantmentHelper.getEnchantmentLevel(this.miner.level().registryAccess().lookupOrThrow(net.minecraft.core.registries.Registries.ENCHANTMENT).getOrThrow(net.minecraft.world.item.enchantment.Enchantments.EFFICIENCY), this.miner);
             ItemStack itemstack = this.miner.getOffhandItem();
             if (efficiencyLevel > 0 && !itemstack.isEmpty()) {
                 digSpeed += (float) (efficiencyLevel * efficiencyLevel + 1);
@@ -327,7 +327,7 @@ public class BlockBreakerPosGoal extends Goal {
             digSpeed *= miningFatigueAmplifier;
         }
 
-        if (this.miner.isEyeInFluid(net.minecraft.tags.FluidTags.WATER)) {
+        if (this.miner.isInWater() && net.minecraft.world.item.enchantment.EnchantmentHelper.getEnchantmentLevel(this.miner.level().registryAccess().lookupOrThrow(net.minecraft.core.registries.Registries.ENCHANTMENT).getOrThrow(net.minecraft.world.item.enchantment.Enchantments.AQUA_AFFINITY), this.miner) == 0) {
             digSpeed /= 5.0F;
         }
 
@@ -353,3 +353,5 @@ public class BlockBreakerPosGoal extends Goal {
     }
 
 }
+
+

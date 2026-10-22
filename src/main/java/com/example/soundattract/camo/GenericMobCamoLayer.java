@@ -166,3 +166,4 @@ public class GenericMobCamoLayer<T extends LivingEntity, M extends HumanoidModel
         }
     }
 }
+

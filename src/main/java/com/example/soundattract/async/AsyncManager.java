@@ -4,13 +4,14 @@ import com.example.soundattract.Soundattract;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.quantified.bridge.QuantifiedOptionalBridge;
 import java.util.Queue;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -24,19 +25,17 @@ public final class AsyncManager {
         LOW
     }
 
-    private static final Queue<Runnable> MAIN_THREAD_QUEUE = new ConcurrentLinkedQueue<>();
+    private static final int MAIN_THREAD_QUEUE_CAPACITY = 4096;
+    private static final int FALLBACK_QUEUE_CAPACITY = 1024;
+    private static final Queue<Runnable> MAIN_THREAD_QUEUE = new ArrayBlockingQueue<>(MAIN_THREAD_QUEUE_CAPACITY);
+    private static final Object MAIN_THREAD_LIFECYCLE_LOCK = new Object();
     private static final AtomicBoolean DRAIN_SCHEDULED = new AtomicBoolean(false);
     private static volatile MinecraftServer serverRef;
 
-    private static final ExecutorService FALLBACK_EXECUTOR = Executors.newFixedThreadPool(
-        Math.max(2, Integer.getInteger("soundattract.async.fallbackThreads",
-            Math.max(2, Runtime.getRuntime().availableProcessors() / 2))),
-        newNamedDaemonFactory("SoundAttract-Async")
-    );
+    private static final ExecutorService FALLBACK_EXECUTOR = createFallbackExecutor();
 
-    private static final ScheduledExecutorService TIMER = Executors.newSingleThreadScheduledExecutor(
-        newNamedDaemonFactory("SoundAttract-Timer")
-    );
+    private static final ScheduledExecutorService TIMER = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+        newNamedDaemonFactory("SoundAttract-Timer"));
 
     private AsyncManager() {}
 
@@ -68,7 +67,13 @@ public final class AsyncManager {
             }
             Soundattract.LOGGER.debug("[AsyncManager] Quantified submit bridge unavailable or failed for '{}'", taskName);
         }
-        return CompletableFuture.supplyAsync(supplier, FALLBACK_EXECUTOR);
+        try {
+            return CompletableFuture.supplyAsync(supplier, FALLBACK_EXECUTOR);
+        } catch (RejectedExecutionException rejected) {
+            CompletableFuture<T> failed = new CompletableFuture<>();
+            failed.completeExceptionally(rejected);
+            return failed;
+        }
     }
 
     public static CompletableFuture<Void> submit(String taskName, Runnable task, Priority priority, boolean threadSafe) {
@@ -100,29 +105,50 @@ public final class AsyncManager {
 
     public static void syncToMain(Runnable action) {
         if (action == null) return;
-        MAIN_THREAD_QUEUE.add(action);
-        MinecraftServer server = serverRef;
-        if (server != null) {
-            scheduleBudgetedDrain(server);
+        if (!enqueueMainThreadAction(action)) {
+            Soundattract.LOGGER.warn("[AsyncManager] Main-thread queue is full; dropping a fire-and-forget action");
         }
     }
 
+    private static boolean enqueueMainThreadAction(Runnable action) {
+        MinecraftServer server;
+        synchronized (MAIN_THREAD_LIFECYCLE_LOCK) {
+            server = serverRef;
+            if (server == null || !MAIN_THREAD_QUEUE.offer(action)) return false;
+        }
+        if (server != null) {
+            scheduleBudgetedDrain(server);
+        }
+        return true;
+    }
+
     public static <T> CompletableFuture<T> callOnMain(Supplier<T> supplier) {
-        CompletableFuture<T> future = new CompletableFuture<>();
-        syncToMain(() -> {
-            try {
-                future.complete(supplier.get());
-            } catch (Throwable t) {
-                future.completeExceptionally(t);
-            }
-        });
-        return future;
+        MainThreadCall<T> call = new MainThreadCall<>(supplier);
+        if (!enqueueMainThreadAction(call)) {
+            call.reject(new RejectedExecutionException("SoundAttract main-thread queue is full"));
+        }
+        return call.future;
     }
 
     public static void onServerTick(MinecraftServer server) {
-        serverRef = server;
+        synchronized (MAIN_THREAD_LIFECYCLE_LOCK) {
+            serverRef = server;
+        }
         if (MAIN_THREAD_QUEUE.isEmpty()) return;
         drainBudgeted(server);
+    }
+
+    public static void onServerStopped() {
+        synchronized (MAIN_THREAD_LIFECYCLE_LOCK) {
+            serverRef = null;
+            DRAIN_SCHEDULED.set(false);
+            Runnable action;
+            while ((action = MAIN_THREAD_QUEUE.poll()) != null) {
+                if (action instanceof MainThreadCall<?> call) {
+                    call.reject(new RejectedExecutionException("SoundAttract server stopped"));
+                }
+            }
+        }
     }
 
     private static void scheduleBudgetedDrain(MinecraftServer server) {
@@ -171,5 +197,36 @@ public final class AsyncManager {
             thread.setDaemon(true);
             return thread;
         };
+    }
+
+    private static ExecutorService createFallbackExecutor() {
+        int requested = Integer.getInteger("soundattract.async.fallbackThreads",
+                Math.max(2, Runtime.getRuntime().availableProcessors() / 2));
+        int threads = Math.max(2, Math.min(32, requested));
+        return new ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(FALLBACK_QUEUE_CAPACITY),
+                newNamedDaemonFactory("SoundAttract-Async"), new ThreadPoolExecutor.AbortPolicy());
+    }
+
+    private static final class MainThreadCall<T> implements Runnable {
+        private final Supplier<T> supplier;
+        private final CompletableFuture<T> future = new CompletableFuture<>();
+
+        private MainThreadCall(Supplier<T> supplier) {
+            this.supplier = supplier;
+        }
+
+        @Override
+        public void run() {
+            try {
+                future.complete(supplier.get());
+            } catch (Throwable throwable) {
+                future.completeExceptionally(throwable);
+            }
+        }
+
+        private void reject(Throwable throwable) {
+            future.completeExceptionally(throwable);
+        }
     }
 }

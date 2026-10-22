@@ -92,6 +92,7 @@ public class SoundClimbGoal extends Goal {
     }
 
     public boolean canUse() {
+        if (LivingWallCoordinator.isControlled(this.mob) || LivingWallCoordinator.shouldDeferSoundClimb(this.mob)) return false;
         if (this.mob.getTarget() != null && this.mob.getTarget().isAlive()) {
             return false;
         }
@@ -187,9 +188,14 @@ public class SoundClimbGoal extends Goal {
     public void stop() {
         super.stop();
         this.mob.getNavigation().stop();
+        if (LivingWallCoordinator.isControlled(this.mob) || LivingWallCoordinator.shouldDeferSoundClimb(this.mob)) {
+            Vec3 movement = this.mob.getDeltaMovement();
+            this.mob.setDeltaMovement(movement.x, Math.min(0.0D, movement.y), movement.z);
+        }
     }
 
     public boolean canContinueToUse() {
+        if (LivingWallCoordinator.isControlled(this.mob) || LivingWallCoordinator.shouldDeferSoundClimb(this.mob)) return false;
         if (this.forceStop) {
             return false;
         }
@@ -215,6 +221,7 @@ public class SoundClimbGoal extends Goal {
     }
 
     public void tick() {
+        if (LivingWallCoordinator.isControlled(this.mob) || LivingWallCoordinator.shouldDeferSoundClimb(this.mob)) return;
         if (this.targetSoundPos == null) return;
 
         if (this.checkBestSoundTicker++ > 10) {

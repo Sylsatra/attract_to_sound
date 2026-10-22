@@ -6,10 +6,9 @@ import com.example.soundattract.async.AsyncManager;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.tracking.SoundTracker;
 
-import java.util.Queue;
+import java.util.ArrayDeque;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -18,9 +17,12 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.core.registries.BuiltInRegistries;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
@@ -34,6 +36,8 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 public final class OptimizedLOS {
 
     private static final double TIE_EPS = 1.0e-12;
+    private static final int MAX_RUNTIME_LOS_QUEUE_SIZE = 16_384;
+    private static final int MAX_RUNTIME_PAIR_CACHE_SIZE = 65_536;
 
     private static final AtomicInteger DEBUG_CANSEE_CALLS = new AtomicInteger(0);
     private static final AtomicInteger DEBUG_HASLOS_CALLS = new AtomicInteger(0);
@@ -51,9 +55,11 @@ public final class OptimizedLOS {
     private record LosRequest(Level level, Mob looker, Entity target, LosPairKey key) {
     }
 
-    private static final Queue<LosRequest> LOS_QUEUE = new ConcurrentLinkedQueue<>();
+    private static final ArrayDeque<LosRequest> LOS_QUEUE = new ArrayDeque<>();
     private static final ConcurrentHashMap<LosPairKey, CompletableFuture<Boolean>> LOS_IN_FLIGHT = new ConcurrentHashMap<>();
-    private static final AtomicInteger LOS_QUEUE_SIZE = new AtomicInteger(0);
+    private static final Object LOS_QUEUE_LOCK = new Object();
+    private static int losQueueSize;
+    private static volatile boolean acceptingRequests = true;
 
     private OptimizedLOS() {
     }
@@ -96,7 +102,7 @@ public final class OptimizedLOS {
                             Boolean.valueOf(enableOptimized),
                             Boolean.valueOf(enablePairCache),
                             Integer.valueOf(LOS_PAIR_CACHE.size()),
-                            Integer.valueOf(LOS_QUEUE_SIZE.get()),
+                            Integer.valueOf(getQueuedRequestCount()),
                             Integer.valueOf(LOS_IN_FLIGHT.size()));
                 }
             }
@@ -129,7 +135,7 @@ public final class OptimizedLOS {
 
         if (enablePairCache) {
             LOS_PAIR_CACHE.put(key, new LosPairEntry(result, now));
-            int maxEntries = Math.max(512, pairCacheMax);
+            int maxEntries = Math.min(MAX_RUNTIME_PAIR_CACHE_SIZE, Math.max(512, pairCacheMax));
             if (LOS_PAIR_CACHE.size() > maxEntries) {
                 LOS_PAIR_CACHE.entrySet().removeIf(e -> (now - e.getValue().gameTime()) > 1L);
                 if (LOS_PAIR_CACHE.size() > maxEntries) {
@@ -176,29 +182,34 @@ public final class OptimizedLOS {
             return existing;
         }
 
-        if (LOS_IN_FLIGHT.size() >= Math.max(64, queueMax)) {
-            return AsyncManager.callOnMain(() -> Boolean.valueOf(canSee(looker, target))).thenApply(Boolean::booleanValue);
+        if (!acceptingRequests) {
+            return CompletableFuture.completedFuture(false);
         }
 
-        if (LOS_QUEUE_SIZE.get() >= Math.max(64, queueMax)) {
+        int queueCapacity = Math.min(MAX_RUNTIME_LOS_QUEUE_SIZE, Math.max(64, queueMax));
+        if (LOS_IN_FLIGHT.size() >= queueCapacity) {
             return AsyncManager.callOnMain(() -> Boolean.valueOf(canSee(looker, target))).thenApply(Boolean::booleanValue);
         }
 
         CompletableFuture<Boolean> created = new CompletableFuture<>();
-        CompletableFuture<Boolean> prior = LOS_IN_FLIGHT.putIfAbsent(key, created);
-        if (prior != null) {
-            return prior;
+        synchronized (LOS_QUEUE_LOCK) {
+            if (!acceptingRequests) return CompletableFuture.completedFuture(false);
+            CompletableFuture<Boolean> prior = LOS_IN_FLIGHT.get(key);
+            if (prior != null) return prior;
+            if (losQueueSize >= queueCapacity) {
+                return AsyncManager.callOnMain(() -> Boolean.valueOf(canSee(looker, target))).thenApply(Boolean::booleanValue);
+            }
+            LOS_IN_FLIGHT.put(key, created);
+            LOS_QUEUE.addLast(new LosRequest(level, looker, target, key));
+            losQueueSize++;
         }
-
-        LOS_QUEUE.add(new LosRequest(level, looker, target, key));
-        LOS_QUEUE_SIZE.incrementAndGet();
         return created;
     }
 
-        public static void onServerTick(MinecraftServer server) {
-        if (true) return;
+    public static void onServerTick(MinecraftServer server) {
+        if (server == null || !acceptingRequests) return;
         resetMufflingBudget();
-        if (LOS_QUEUE.isEmpty()) return;
+        if (getQueuedRequestCount() == 0) return;
 
         int budget = 64;
         try {
@@ -208,11 +219,14 @@ public final class OptimizedLOS {
         budget = Math.max(1, budget);
 
         for (int i = 0; i < budget; i++) {
-            LosRequest req = LOS_QUEUE.poll();
+            LosRequest req;
+            synchronized (LOS_QUEUE_LOCK) {
+                req = LOS_QUEUE.pollFirst();
+                if (req != null) losQueueSize--;
+            }
             if (req == null) {
                 break;
             }
-            LOS_QUEUE_SIZE.decrementAndGet();
 
             CompletableFuture<Boolean> future = LOS_IN_FLIGHT.remove(req.key());
             if (future == null || future.isDone()) {
@@ -240,7 +254,40 @@ public final class OptimizedLOS {
         }
     }
 
-    public static boolean hasLineOfSight(Level level, Vec3 start, Vec3 end, Mob looker) {
+    public static void onServerStarting() {
+        synchronized (LOS_QUEUE_LOCK) {
+            acceptingRequests = false;
+            for (CompletableFuture<Boolean> future : LOS_IN_FLIGHT.values()) {
+                future.complete(false);
+            }
+            losQueueSize = 0;
+            LOS_QUEUE.clear();
+            LOS_PAIR_CACHE.clear();
+            LOS_IN_FLIGHT.clear();
+            acceptingRequests = true;
+        }
+    }
+
+    public static void onServerStopped() {
+        synchronized (LOS_QUEUE_LOCK) {
+            acceptingRequests = false;
+            LOS_QUEUE.clear();
+            losQueueSize = 0;
+            LOS_PAIR_CACHE.clear();
+            for (CompletableFuture<Boolean> future : LOS_IN_FLIGHT.values()) {
+                future.complete(false);
+            }
+            LOS_IN_FLIGHT.clear();
+        }
+    }
+
+    private static int getQueuedRequestCount() {
+        synchronized (LOS_QUEUE_LOCK) {
+            return losQueueSize;
+        }
+    }
+
+    public static boolean hasLineOfSight(Level level, Vec3 start, Vec3 end, LivingEntity looker) {
         if (level == null || start == null || end == null) {
             return false;
         }
@@ -287,7 +334,7 @@ public final class OptimizedLOS {
         }
     }
 
-    private static boolean hasLineOfSightDda(Level level, Vec3 start, Vec3 end, Mob looker) {
+    private static boolean hasLineOfSightDda(Level level, Vec3 start, Vec3 end, LivingEntity looker) {
 
         try {
             if (SoundAttractConfig.COMMON.debugLogging.get()) {
@@ -396,7 +443,21 @@ public final class OptimizedLOS {
         return hasLineOfSightVanillaIgnoringNonBlocking(level, start, end, looker);
     }
 
-    private static boolean hasLineOfSightVanillaIgnoringNonBlocking(Level level, Vec3 start, Vec3 end, Mob looker) {
+    private static BlockHitResult clip(Level level, Vec3 start, Vec3 end, LivingEntity looker) {
+        if (looker != null) {
+            return level.clip(new ClipContext(start, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, looker));
+        }
+        return BlockGetter.traverseBlocks(start, end, null, (ignored, pos) -> {
+            BlockState state = level.getBlockState(pos);
+            VoxelShape shape = state.getCollisionShape(level, pos, CollisionContext.empty());
+            return shape.clip(start, end, pos);
+        }, (ignored) -> {
+            Vec3 diff = start.subtract(end);
+            return BlockHitResult.miss(end, Direction.getNearest(diff.x, diff.y, diff.z), BlockPos.containing(end));
+        });
+    }
+
+    private static boolean hasLineOfSightVanillaIgnoringNonBlocking(Level level, Vec3 start, Vec3 end, LivingEntity looker) {
         if (level == null || start == null || end == null) {
             return false;
         }
@@ -407,8 +468,7 @@ public final class OptimizedLOS {
                 return true;
             }
 
-            BlockHitResult hit = level.clip(new ClipContext(currentStart, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE,
-                    looker));
+            BlockHitResult hit = clip(level, currentStart, end, looker);
             if (hit.getType() == HitResult.Type.MISS) {
                 return true;
             }
@@ -616,7 +676,10 @@ public final class OptimizedLOS {
             }
 
             if (state.isAir()) {
-                if (factorAir >= 1.0) continue;
+                if (factorAir >= 1.0) {
+                    if (x == endX && y == endY && z == endZ) break;
+                    continue;
+                }
                 currentRange  *= factorAir;
                 currentWeight *= factorAir;
                 blocksHit++;

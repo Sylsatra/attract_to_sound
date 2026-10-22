@@ -76,8 +76,7 @@ public class AttractionClientEvents {
             action = "WALKING";
         }
 
-        ResourceLocation virtualSoundId = ResourceLocation.fromNamespaceAndPath(
-                "soundattract", "player_action." + action.toLowerCase(Locale.ROOT));
+        ResourceLocation virtualSoundId = ResourceLocation.fromNamespaceAndPath("soundattract", "player_action." + action.toLowerCase(Locale.ROOT));
 
         SoundMessage msg = new SoundMessage(
                 virtualSoundId,
@@ -86,6 +85,6 @@ public class AttractionClientEvents {
                 Optional.of(player.getUUID()),
                 action
         );
-        ClientPlayNetworking.send(msg);
+        SoundAttractNetwork.sendSoundToServer(msg);
     }
 }

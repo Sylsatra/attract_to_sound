@@ -32,10 +32,9 @@ public abstract class SimpleTextureMixin {
      * Targets Searge, MCP, and Mojang names to ensure compatibility.
      */
     @Inject(
-        method = {"upload", "doLoad", "m_118136_"}, 
+        method = "doLoad(Lcom/mojang/blaze3d/platform/NativeImage;ZZ)V",
         at = @At("HEAD"), 
-        remap = false, 
-        require = 0
+        require = 1
     )
     private void soundattract$onUpload(NativeImage img, boolean blur, boolean clamp, CallbackInfo ci) {
         ResourceLocation loc = this.soundattract$capturedLoc;
@@ -50,13 +49,4 @@ public abstract class SimpleTextureMixin {
         }
     }
 
-    /**
-     * Cleans up the captured mask ONLY when the texture is actually closed by the game.
-     */
-    @Inject(method = "close", at = @At("HEAD"), remap = false, require = 0)
-    private void soundattract$onClose(CallbackInfo ci) {
-        if (this.soundattract$capturedLoc != null) {
-            CamoTextureGenerator.releaseCapturedMask(this.soundattract$capturedLoc);
-        }
-    }
 }

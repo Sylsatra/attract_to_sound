@@ -16,14 +16,13 @@ public final class WorkerComputations {
     private WorkerComputations() {}
 
     public static WorkerScheduler.GroupComputeResult computeGroups(List<WorkerScheduler.MobSnapshot> mobs, WorkerScheduler.ConfigSnapshot cfg, long deadlineMs, ResourceLocation dimension) {
-        if (mobs == null || mobs.isEmpty()) return null;
+        if (mobs == null || mobs.isEmpty() || cfg == null || dimension == null) return null;
         List<WorkerScheduler.MobSnapshot> candidates = new ArrayList<>(mobs.size());
         Map<UUID, WorkerScheduler.MobSnapshot> mobLookup = new HashMap<>((int) (mobs.size() / 0.75f) + 1);
-        
+
         for (WorkerScheduler.MobSnapshot m : mobs) {
-            if (m.alive()) {
+            if (isUsableMobSnapshot(m) && mobLookup.putIfAbsent(m.uuid(), m) == null) {
                 candidates.add(m);
-                mobLookup.put(m.uuid(), m);
             }
         }
         if (candidates.isEmpty()) return null;
@@ -173,7 +172,7 @@ public final class WorkerComputations {
             if (!assigned.contains(m.uuid())) deserters.add(m.uuid());
         }
 
-        return new WorkerScheduler.GroupComputeResult(dimension, mobToLeader, edgeByLeader, deserters);
+        return new WorkerScheduler.GroupComputeResult(dimension, mobToLeader, edgeByLeader, deserters, cfg.generation());
     }
 
     public static List<WorkerScheduler.SoundScoreResult> computeSoundScores(List<WorkerScheduler.SoundScoreRequest> batch, long deadlineMs) {
@@ -191,12 +190,13 @@ public final class WorkerComputations {
             return new WorkerScheduler.SoundScoreResult(null, null, 0.0);
         }
         if (req.candidates == null || req.candidates.isEmpty()) {
-            return new WorkerScheduler.SoundScoreResult(req.mobUuid, null, 0.0);
+            return new WorkerScheduler.SoundScoreResult(req.mobUuid, null, 0.0, req.dimensionKey);
         }
 
         Double currentScore = null;
         if (req.currentTargetSoundId != null) {
             for (WorkerScheduler.SoundCandidate c : req.candidates) {
+                if (c == null) continue;
                 if (req.currentTargetSoundId.equals(c.soundId)) {
                     currentScore = scoreCandidate(req, c);
                     break;
@@ -209,14 +209,15 @@ public final class WorkerComputations {
         double bestScore = Double.NEGATIVE_INFINITY;
         double bestDist = Double.MAX_VALUE;
         for (WorkerScheduler.SoundCandidate c : req.candidates) {
+            if (c == null) continue;
             double dx = req.mobX - c.x;
             double dz = req.mobZ - c.z;
-            double dist = Math.hypot(dx, dz);
-            double s = scoreCandidate(req, c);
-            if (s > bestScore || (Math.abs(s - bestScore) < 0.001 && dist < bestDist)) {
+            double distSq = dx * dx + dz * dz;
+            double s = scoreCandidate(req, c, distSq);
+            if (s > bestScore || (Math.abs(s - bestScore) < 0.001 && distSq < bestDist)) {
                 bestScore = s;
                 bestId = c.soundId;
-                bestDist = dist;
+                bestDist = distSq;
             }
             if (System.currentTimeMillis() > deadlineMs) break;
         }
@@ -228,15 +229,22 @@ public final class WorkerComputations {
             }
         }
 
-        return new WorkerScheduler.SoundScoreResult(req.mobUuid, bestId, bestScore == Double.NEGATIVE_INFINITY ? 0.0 : bestScore);
+        return new WorkerScheduler.SoundScoreResult(req.mobUuid, bestId, bestScore == Double.NEGATIVE_INFINITY ? 0.0 : bestScore, req.dimensionKey);
     }
 
     private static double scoreCandidate(WorkerScheduler.SoundScoreRequest req, WorkerScheduler.SoundCandidate c) {
+        if (req == null || c == null) return Double.NEGATIVE_INFINITY;
         double dx = req.mobX - c.x;
         double dz = req.mobZ - c.z;
-        double dist = Math.hypot(dx, dz);
+        return scoreCandidate(req, c, dx * dx + dz * dz);
+    }
+
+    private static double scoreCandidate(WorkerScheduler.SoundScoreRequest req,
+                                         WorkerScheduler.SoundCandidate c,
+                                         double distSq) {
+        if (req == null || c == null) return Double.NEGATIVE_INFINITY;
         double effectiveRange = Math.max(0.0001, c.range);
-        if (dist > effectiveRange) return Double.NEGATIVE_INFINITY;
+        if (distSq > effectiveRange * effectiveRange) return Double.NEGATIVE_INFINITY;
 
         double score = c.weight;
         long ageTicks = Math.max(0L, req.gameTime - c.gameTime);
@@ -244,6 +252,16 @@ public final class WorkerComputations {
             score += req.noveltyBonus;
         }
         return score;
+    }
+
+    private static boolean isUsableMobSnapshot(WorkerScheduler.MobSnapshot snapshot) {
+        return snapshot != null
+                && snapshot.uuid() != null
+                && snapshot.alive()
+                && Double.isFinite(snapshot.x())
+                && Double.isFinite(snapshot.y())
+                && Double.isFinite(snapshot.z())
+                && Double.isFinite(snapshot.health());
     }
 
     private static double distanceSq(WorkerScheduler.MobSnapshot a, WorkerScheduler.MobSnapshot b) {

@@ -46,7 +46,7 @@ public record PacketCamoRemoval(
                     tag.remove("soundattract:CamoStrength");
                     tag.remove("soundattract:CamoColor");
                     tag.remove("soundattract:CamoSeed");
-
+                    stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
                     player.inventoryMenu.broadcastChanges();
                 }
             }

@@ -77,7 +77,7 @@ public class EnhancedAICompat {
                 java.lang.reflect.Field xrayField = eaiAttributesClass.getField("XRAY_FOLLOW_RANGE");
                 Object xrayAttrHolder = xrayField.get(null);
                 if (xrayAttrHolder instanceof net.minecraft.world.entity.ai.attributes.Attribute attr) {
-                    inst = mob.getAttribute(BuiltInRegistries.ATTRIBUTE.wrapAsHolder(attr));
+                    inst = mob.getAttribute(net.minecraft.core.Holder.direct(attr));
                 }
             } catch (Throwable ignored) {}
 
@@ -88,7 +88,7 @@ public class EnhancedAICompat {
                         attr = BuiltInRegistries.ATTRIBUTE.get(ResourceLocation.fromNamespaceAndPath("enhancedai", "generic.xray_follow_range"));
                     }
                     if (attr != null) {
-                        inst = mob.getAttribute(BuiltInRegistries.ATTRIBUTE.wrapAsHolder(attr));
+                        inst = mob.getAttribute(net.minecraft.core.Holder.direct(attr));
                     }
                 } catch (Throwable ignored) {}
             }
@@ -100,3 +100,4 @@ public class EnhancedAICompat {
         }
     }
 }
+

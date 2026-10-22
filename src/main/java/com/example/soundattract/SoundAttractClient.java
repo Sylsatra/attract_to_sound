@@ -2,9 +2,10 @@ package com.example.soundattract;
 
 import com.example.soundattract.camo.CamoClientEvents;
 import com.example.soundattract.client.AttractionClientEvents;
-import com.example.soundattract.config.SoundAttractConfig;
 import net.fabricmc.api.ClientModInitializer;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.particle.v1.ParticleFactoryRegistry;
+import com.example.soundattract.client.particle.WindScentWispParticle;
+import com.example.soundattract.registration.ModParticles;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,20 +16,13 @@ public class SoundAttractClient implements ClientModInitializer {
     public void onInitializeClient() {
         LOGGER.info("Initializing Sound Attract client...");
 
+        ParticleFactoryRegistry.getInstance().register(ModParticles.WIND_SCENT_WISP, WindScentWispParticle.Provider::new);
+
         com.example.soundattract.camo.CamoClientEvents.register();
+        com.example.soundattract.client.AwarenessClientEvents.register();
+        com.example.soundattract.network.AwarenessClientNetworking.register();
         AttractionClientEvents.register();
         com.example.soundattract.event.SoundAttractFabricEvents.registerClient();
-
-        if (ModChecker.isLoaded("voicechat")) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
-                LOGGER.info("[SoundAttractClient] Registering VoiceChat integration on client setup");
-            }
-            com.example.soundattract.event.client.SoundAttractClientEvents.registerVoiceChatIntegration();
-        } else {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
-                LOGGER.info("[SoundAttractClient] VoiceChat mod not present; skipping integration");
-            }
-        }
 
         LOGGER.info("Sound Attract client initialized successfully!");
     }

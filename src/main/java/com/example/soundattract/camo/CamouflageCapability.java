@@ -5,11 +5,8 @@ import com.example.soundattract.util.CamoUtil;
 import com.example.soundattract.event.StealthDetectionEvents;
 import com.example.soundattract.network.CamoSyncMessage;
 import com.example.soundattract.network.SoundAttractNetwork;
-import com.example.soundattract.Soundattract;
 import org.ladysnake.cca.api.v3.component.Component;
 import net.minecraft.core.HolderLookup;
-import net.minecraft.core.component.DataComponents;
-import net.minecraft.world.item.component.CustomData;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.tags.FluidTags;
@@ -190,7 +187,6 @@ public class CamouflageCapability implements Component {
                 if (!stack.isEmpty()) {
                     CamoUtil.ClimateData climate = CamoUtil.sampleClimate(entity);
                     CamoUtil.addLayerToStack(stack, new CamoLayer(0xCACACA, "snow", gain, gain, true, time, seed, climate.erosion(), climate.humidity(), climate.temperature()), slot);
-                    entity.setItemSlot(slot, stack);
                 }
             }
         }
@@ -313,42 +309,42 @@ public class CamouflageCapability implements Component {
         for (EquipmentSlot slot : EquipmentSlot.values()) {
             if (slot.getType() == EquipmentSlot.Type.HUMANOID_ARMOR) {
                 ItemStack armorStack = entity.getItemBySlot(slot);
-                if (!armorStack.isEmpty()) {
-                    CompoundTag tag = armorStack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
-                    if (tag != null && !tag.isEmpty()) {
-                        boolean armorChanged = false;
+                if (!armorStack.isEmpty() && armorStack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) {
+                    net.minecraft.nbt.CompoundTag tag = armorStack.getOrDefault(net.minecraft.core.component.DataComponents.CUSTOM_DATA, net.minecraft.world.item.component.CustomData.EMPTY).copyTag();
+                    boolean armorChanged = false;
 
-                        boolean slotSubmerged = CamoUtil.isSlotSubmerged(entity, slot);
+                    boolean slotSubmerged = CamoUtil.isSlotSubmerged(entity, slot);
 
-                        if (tag.contains("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_LIST)) {
-                            net.minecraft.nbt.ListTag list = tag.getList("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_COMPOUND);
-                            net.minecraft.nbt.ListTag nextList = new net.minecraft.nbt.ListTag();
-                            for (int i = 0; i < list.size(); i++) {
-                                CamoLayer layer = CamoLayer.load(list.getCompound(i));
-                                float decay = baseDecay;
-                                CamoMaterialRegistry.CategoryRules rules = CamoMaterialRegistry.getCategoryRules(layer.category());
+                    if (tag.contains("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_LIST)) {
+                        net.minecraft.nbt.ListTag list = tag.getList("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_COMPOUND);
+                        net.minecraft.nbt.ListTag nextList = new net.minecraft.nbt.ListTag();
+                        for (int i = 0; i < list.size(); i++) {
+                            CamoLayer layer = CamoLayer.load(list.getCompound(i));
+                            float decay = baseDecay;
+                            CamoMaterialRegistry.CategoryRules rules = CamoMaterialRegistry.getCategoryRules(layer.category());
 
-                                if (slotSubmerged) {
-                                    decay += waterRate;
-                                } else if (inRain && rules != null && rules.waterSensitive()) {
-                                    decay += waterRate;
-                                }
-
-                                if (sprinting) {
-                                    decay += StealthConfig.SPRINT_DEGRADATION_RATE.get().floatValue() * decayScale;
-                                }
-
-                                float currentDur = (layer.upperDurability() + layer.lowerDurability()) / 2.0f;
-                                float newDur = Math.max(0, currentDur - decay);
-                                
-                                if (newDur > 0) {
-                                    nextList.add(new CamoLayer(layer.color(), layer.category(), newDur, newDur, layer.blocksScent(), layer.appliedTick(), layer.seed(), layer.erosion(), layer.humidity(), layer.temperature()).save());
-                                }
-                                
-                                if (newDur != currentDur) {
-                                    armorChanged = true;
-                                }
+                            if (slotSubmerged) {
+                                decay += waterRate;
+                            } else if (inRain && rules != null && rules.waterSensitive()) {
+                                decay += waterRate;
                             }
+
+                            if (sprinting) {
+                                decay += StealthConfig.SPRINT_DEGRADATION_RATE.get().floatValue() * decayScale;
+                            }
+
+
+                            float currentDur = (layer.upperDurability() + layer.lowerDurability()) / 2.0f;
+                            float newDur = Math.max(0, currentDur - decay);
+                            
+                            if (newDur > 0) {
+                                nextList.add(new CamoLayer(layer.color(), layer.category(), newDur, newDur, layer.blocksScent(), layer.appliedTick(), layer.seed(), layer.erosion(), layer.humidity(), layer.temperature()).save());
+                            }
+                            
+                            if (newDur != currentDur) {
+                                armorChanged = true;
+                            }
+                        }
                         
                         if (armorChanged) {
                             if (nextList.isEmpty()) {
@@ -357,7 +353,7 @@ public class CamouflageCapability implements Component {
                                 tag.put("soundattract:CamoLayers", nextList);
                             }
                         }
-                    }
+                    } 
                     else if (tag.contains("soundattract:CamoStrength")) {
                         float current = tag.getFloat("soundattract:CamoStrength");
                         float decay = slotSubmerged ? (waterRate + baseDecay) : baseDecay;
@@ -375,7 +371,8 @@ public class CamouflageCapability implements Component {
                     }
 
                     if (armorChanged) {
-                        armorStack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+                        armorStack.set(net.minecraft.core.component.DataComponents.CUSTOM_DATA,
+                                net.minecraft.world.item.component.CustomData.of(tag));
                         dirty = true;
                         entity.setItemSlot(slot, armorStack);
                     }
@@ -386,7 +383,6 @@ public class CamouflageCapability implements Component {
         if (dirty) {
             sync(entity);
         }
-    }
     }
 
     public void onDamage(LivingEntity entity, float amount) {
@@ -407,50 +403,49 @@ public class CamouflageCapability implements Component {
         for (EquipmentSlot slot : EquipmentSlot.values()) {
             if (slot.getType() == EquipmentSlot.Type.HUMANOID_ARMOR) {
                 ItemStack armorStack = entity.getItemBySlot(slot);
-                if (!armorStack.isEmpty()) {
-                    CompoundTag tag = armorStack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
-                    if (tag != null && !tag.isEmpty()) {
-                        boolean changed = false;
+                if (!armorStack.isEmpty() && armorStack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) {
+                    net.minecraft.nbt.CompoundTag tag = armorStack.getOrDefault(net.minecraft.core.component.DataComponents.CUSTOM_DATA, net.minecraft.world.item.component.CustomData.EMPTY).copyTag();
+                    boolean changed = false;
 
 
-                        if (tag.contains("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_LIST)) {
-                            net.minecraft.nbt.ListTag list = tag.getList("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_COMPOUND);
-                            net.minecraft.nbt.ListTag nextList = new net.minecraft.nbt.ListTag();
-                            for (int i = 0; i < list.size(); i++) {
-                                CamoLayer layer = CamoLayer.load(list.getCompound(i));
-                                float newDur = layer.durability() - damageDecay;
-                                if (newDur > 0) {
-                                    nextList.add(layer.withDurability(newDur, newDur).save());
-                                }
+                    if (tag.contains("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_LIST)) {
+                        net.minecraft.nbt.ListTag list = tag.getList("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_COMPOUND);
+                        net.minecraft.nbt.ListTag nextList = new net.minecraft.nbt.ListTag();
+                        for (int i = 0; i < list.size(); i++) {
+                            CamoLayer layer = CamoLayer.load(list.getCompound(i));
+                            float newDur = layer.durability() - damageDecay;
+                            if (newDur > 0) {
+                                nextList.add(layer.withDurability(newDur, newDur).save());
                             }
-                            if (nextList.size() != list.size()) {
-                                changed = true;
-                            }
-                            
-                            if (nextList.isEmpty()) {
-                                tag.remove("soundattract:CamoLayers");
-                            } else {
-                                tag.put("soundattract:CamoLayers", nextList);
-                            }
-                        } 
-
-                        else if (tag.contains("soundattract:CamoStrength")) {
-                            float current = tag.getFloat("soundattract:CamoStrength");
-                            float next = current - damageDecay;
-                            if (next <= 0) {
-                                tag.remove("soundattract:CamoStrength");
-                                tag.remove("soundattract:CamoColor");
-                                tag.remove("soundattract:CamoSeed");
-                            } else {
-                                tag.putFloat("soundattract:CamoStrength", next);
-                            }
+                        }
+                        if (!nextList.equals(list)) {
                             changed = true;
                         }
-
-                        if (changed) {
-                            armorStack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
-                            entity.setItemSlot(slot, armorStack);
+                        
+                        if (nextList.isEmpty()) {
+                            tag.remove("soundattract:CamoLayers");
+                        } else {
+                            tag.put("soundattract:CamoLayers", nextList);
                         }
+                    } 
+
+                    else if (tag.contains("soundattract:CamoStrength")) {
+                        float current = tag.getFloat("soundattract:CamoStrength");
+                        float next = current - damageDecay;
+                        if (next <= 0) {
+                            tag.remove("soundattract:CamoStrength");
+                            tag.remove("soundattract:CamoColor");
+                            tag.remove("soundattract:CamoSeed");
+                        } else {
+                            tag.putFloat("soundattract:CamoStrength", next);
+                        }
+                        changed = true;
+                    }
+
+                    if (changed) {
+                        armorStack.set(net.minecraft.core.component.DataComponents.CUSTOM_DATA,
+                                net.minecraft.world.item.component.CustomData.of(tag));
+                        entity.setItemSlot(slot, armorStack);
                     }
                 }
             }

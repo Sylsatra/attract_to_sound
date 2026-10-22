@@ -14,6 +14,7 @@ public class PerformanceConfig {
     public static final ForgeConfigSpec.DoubleValue MIN_TPS_FOR_SCAN_COOLDOWN;
     public static final ForgeConfigSpec.DoubleValue MAX_TPS_FOR_SCAN_COOLDOWN;
     public static final ForgeConfigSpec.BooleanValue ENABLE_TIERED_STEALTH_PERFORMANCE;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_SPATIAL_SCHEDULER;
     public static final ForgeConfigSpec.DoubleValue STEALTH_TIER_SKIP_EXPENSIVE_CHECKS_TPS;
     public static final ForgeConfigSpec.DoubleValue STEALTH_TIER_CURRENT_TARGETS_ONLY_TPS;
     public static final ForgeConfigSpec.DoubleValue STEALTH_TIER_SHARED_RANGE_TPS;
@@ -66,6 +67,8 @@ public class PerformanceConfig {
 
         ENABLE_TIERED_STEALTH_PERFORMANCE = BUILDER.comment("Enable tiered stealth performance scaling based on TPS.")
                 .define("enableTieredStealthPerformance", true);
+        ENABLE_SPATIAL_SCHEDULER = BUILDER.comment("Maintain the optional server-side spatial entity index used by group and interest queries.")
+                .define("enableSpatialScheduler", true);
 
         STEALTH_TIER_SKIP_EXPENSIVE_CHECKS_TPS = BUILDER.defineInRange("stealthTierSkipExpensiveChecksTps", 19.0, 0.0, 21.0);
         STEALTH_TIER_CURRENT_TARGETS_ONLY_TPS = BUILDER.defineInRange("stealthTierCurrentTargetsOnlyTps", 18.0, 0.0, 21.0);

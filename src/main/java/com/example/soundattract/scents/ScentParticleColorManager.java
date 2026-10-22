@@ -5,11 +5,12 @@ import com.example.soundattract.config.ScentEmissionConfig;
 import com.example.soundattract.config.SoundAttractConfig;
 import net.minecraft.world.entity.player.Player;
 import org.joml.Vector3f;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import java.awt.Color;
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Manages per-player scent particle colors.
@@ -17,14 +18,18 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class ScentParticleColorManager {
 
-    private static final Map<UUID, Vector3f> colorCache = new ConcurrentHashMap<>();
+    private static final Cache<UUID, Vector3f> colorCache = Caffeine.newBuilder()
+            .maximumSize(4096)
+            .expireAfterAccess(15, TimeUnit.MINUTES)
+            .build();
 
     /**
      * Get the RGB color for a player's scent particles.
      * Priority: profile hex override → deterministic UUID hash.
      */
     public static Vector3f getColorForPlayer(UUID playerUUID) {
-        return colorCache.computeIfAbsent(playerUUID, ScentParticleColorManager::computeColor);
+        if (playerUUID == null) return new Vector3f(1.0f, 1.0f, 1.0f);
+        return colorCache.get(playerUUID, ScentParticleColorManager::computeColor);
     }
 
     /**
@@ -32,7 +37,7 @@ public class ScentParticleColorManager {
      */
     public static Vector3f getColorForPlayer(UUID playerUUID, Player player) {
 
-        PlayerProfile2 profile = SoundAttractConfig.getMatchingPlayerProfile(player);
+        PlayerProfile2 profile = player == null ? null : SoundAttractConfig.getMatchingPlayerProfile(player);
         if (profile != null && profile.scentEmission().isPresent()) {
             ScentEmissionConfig scentConfig = profile.scentEmission().get();
             String hexColor = scentConfig.scentParticleColor();
@@ -83,6 +88,6 @@ public class ScentParticleColorManager {
      * Clear the color cache (e.g., on config reload).
      */
     public static void clearCache() {
-        colorCache.clear();
+        colorCache.invalidateAll();
     }
 }

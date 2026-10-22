@@ -2,11 +2,13 @@ package com.example.soundattract.tracking;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
@@ -26,6 +28,8 @@ import com.example.soundattract.worker.WorkerScheduler.SoundScoreResult;
 import com.example.soundattract.worker.WorkSchedulerManager;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.tags.BlockTags;
@@ -45,6 +49,26 @@ public class SoundTracker {
 
     public static long getSoundSequence() {
         return SOUND_SEQUENCE.get();
+    }
+
+    /** Returns the current record count for diagnostics and bounded-tracker verification. */
+    public static int getTrackedSoundCount() {
+        readLock.lock();
+        try {
+            return RECENT_SOUNDS.size();
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    /** Returns an immutable snapshot for diagnostics and safe tracker-policy verification. */
+    public static List<SoundRecord> getTrackedSoundsSnapshot() {
+        readLock.lock();
+        try {
+            return List.copyOf(RECENT_SOUNDS);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     public static class SoundRecord {
@@ -68,7 +92,26 @@ public class SoundTracker {
         }
 
         public boolean isPlayerProduced() {
-            return this instanceof VirtualSoundRecord || (soundId != null && soundId.contains(":virtual#"));
+            if (this instanceof VirtualSoundRecord || (soundId != null && soundId.contains(":virtual#"))) {
+                return true;
+            }
+
+
+            if (soundId != null && soundId.startsWith("pointblank:")) {
+                String metadata = extractIntegrationMetadata(soundId);
+                if (metadata != null) {
+                    int actionSeparator = metadata.indexOf('/');
+                    if (actionSeparator > 0) {
+                        try {
+                            UUID.fromString(metadata.substring(0, actionSeparator));
+                            return true;
+                        } catch (IllegalArgumentException ignored) {
+
+                        }
+                    }
+                }
+            }
+            return false;
         }
 
         public SoundRecord(SoundEvent sound, BlockPos pos, int lifetime, String dimensionKey, double range, double weight) {
@@ -161,6 +204,8 @@ public class SoundTracker {
     private record GridKey3D(int x, int y, int z) {
 
     }
+    private record AsyncKey(UUID mobId, String dimensionKey) {}
+
     private static final Map<String, Map<GridKey3D, Map<String, SoundRecord>>> SPATIAL_SOUNDS = new ConcurrentHashMap<>();
     private static final Map<String, SoundRecord> LARGE_RANGE_SOUNDS = new ConcurrentHashMap<>();
     private static final Map<String, SoundRecord> SOUND_RECORDS_BY_ID = new ConcurrentHashMap<>();
@@ -168,6 +213,47 @@ public class SoundTracker {
     private static final java.util.Set<String> DEDUP_SET_B = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static java.util.Set<String> DEDUP_THIS_TICK = DEDUP_SET_A;
     private static java.util.Set<String> DEDUP_LAST_TICK = DEDUP_SET_B;
+
+    private static final int MAX_RUNTIME_SOUNDS_TRACKED = 65536;
+
+    private static String recordKey(String dimensionKey, String soundId) {
+        return String.valueOf(dimensionKey) + "|" + String.valueOf(soundId);
+    }
+
+    private static String recordKey(SoundRecord record) {
+        return record == null ? "null|null" : recordKey(record.dimensionKey, record.soundId);
+    }
+
+    private static String storageKey(SoundRecord record) {
+        return recordKey(record) + "|" + record.pos.asLong();
+    }
+
+    private static int maxTrackedSounds() {
+        try {
+            return Math.min(MAX_RUNTIME_SOUNDS_TRACKED,
+                    Math.max(1, SoundAttractConfig.COMMON.maxSoundsTracked.get()));
+        } catch (Throwable ignored) {
+            return 4096;
+        }
+    }
+
+    private static int dedupSetLimit() {
+        try {
+            return Math.max(1024, Math.min(16384, SoundAttractConfig.COMMON.maxSoundsTracked.get() * 4));
+        } catch (Throwable ignored) {
+            return 4096;
+        }
+    }
+
+    private static void capDedupSet(java.util.Set<String> set) {
+        int excess = set.size() - dedupSetLimit();
+        if (excess <= 0) return;
+        Iterator<String> iterator = set.iterator();
+        while (excess-- > 0 && iterator.hasNext()) {
+            iterator.next();
+            iterator.remove();
+        }
+    }
 
     private static GridKey3D gridKey(BlockPos pos) {
         int x = pos.getX() >> 4;
@@ -183,35 +269,36 @@ public class SoundTracker {
     private static final int MAX_SYNC_CANDIDATES = 24;
 
     private static void addRecordToCollections(SoundRecord r) {
+        String key = storageKey(r);
         if (r.range > LARGE_SOUND_RANGE_THRESHOLD) {
-            LARGE_RANGE_SOUNDS.put(r.soundId, r);
+            LARGE_RANGE_SOUNDS.put(key, r);
         } else {
             SPATIAL_SOUNDS.computeIfAbsent(r.dimensionKey, k -> new ConcurrentHashMap<>())
-                .computeIfAbsent(gridKey(r.pos), k -> new ConcurrentHashMap<>()).put(r.soundId, r);
+                .computeIfAbsent(gridKey(r.pos), k -> new ConcurrentHashMap<>()).put(key, r);
         }
-        SOUND_RECORDS_BY_ID.put(r.soundId, r);
+        SOUND_RECORDS_BY_ID.put(recordKey(r), r);
     }
 
     private static void removeRecordFromCollections(SoundRecord r) {
+        String key = storageKey(r);
         if (r.range > LARGE_SOUND_RANGE_THRESHOLD) {
-            LARGE_RANGE_SOUNDS.remove(r.soundId);
+            LARGE_RANGE_SOUNDS.remove(key, r);
         } else {
             Map<GridKey3D, Map<String, SoundRecord>> dimMap = SPATIAL_SOUNDS.get(r.dimensionKey);
             if (dimMap != null) {
                 Map<String, SoundRecord> gridCell = dimMap.get(gridKey(r.pos));
                 if (gridCell != null) {
-                    if (gridCell.remove(r.soundId) != null) {
-                        SOUND_RECORDS_BY_ID.remove(r.soundId);
-                    }
+                    gridCell.remove(key, r);
                     if (gridCell.isEmpty()) {
-                        dimMap.remove(gridKey(r.pos));
+                        dimMap.remove(gridKey(r.pos), gridCell);
                     }
                 }
                 if (dimMap.isEmpty()) {
-                    SPATIAL_SOUNDS.remove(r.dimensionKey);
+                    SPATIAL_SOUNDS.remove(r.dimensionKey, dimMap);
                 }
             }
         }
+        SOUND_RECORDS_BY_ID.remove(recordKey(r), r);
     }
 
     public static List<SoundRecord> getNearbySounds(Level level, String dim, BlockPos pos, @Nullable java.util.Collection<net.minecraft.world.level.ChunkPos> additionalChunks) {
@@ -296,6 +383,7 @@ public class SoundTracker {
                     return;
                 }
                 DEDUP_THIS_TICK.add(dedupKey);
+                capDedupSet(DEDUP_THIS_TICK);
             }
             for (Iterator<SoundRecord> it = RECENT_SOUNDS.iterator(); it.hasNext();) {
                 SoundRecord existing = it.next();
@@ -311,7 +399,7 @@ public class SoundTracker {
                 }
             }
 
-            int cap = SoundAttractConfig.COMMON.maxSoundsTracked.get();
+            int cap = maxTrackedSounds();
             if (RECENT_SOUNDS.size() >= cap) {
                 SoundRecord worstRecord = null;
                 int worstRecordIndex = -1;
@@ -354,6 +442,16 @@ public class SoundTracker {
                     removeRecordFromCollections(r);
                 }
             }
+            advanceDedupWindow();
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    /** Rotates the production duplicate-suppression window without expiring unrelated records. */
+    static void advanceDedupWindow() {
+        writeLock.lock();
+        try {
             java.util.Set<String> previous = DEDUP_THIS_TICK;
             DEDUP_THIS_TICK = DEDUP_LAST_TICK;
             DEDUP_LAST_TICK = previous;
@@ -389,6 +487,14 @@ public class SoundTracker {
             boolean strongerOrEqualExists = RECENT_SOUNDS.stream().anyMatch(r -> r.pos.equals(pos) && r.dimensionKey.equals(dimensionKey) && r.weight >= weight);
 
             if (!strongerOrEqualExists) {
+                if (RECENT_SOUNDS.size() >= maxTrackedSounds()) {
+                    SoundRecord weakest = RECENT_SOUNDS.stream()
+                            .min(java.util.Comparator.comparingDouble(r -> r.weight + r.range / 1000.0))
+                            .orElse(null);
+                    if (weakest == null || weight + range / 1000.0 <= weakest.weight + weakest.range / 1000.0) return;
+                    RECENT_SOUNDS.remove(weakest);
+                    removeRecordFromCollections(weakest);
+                }
                 String virtualId = "soundattract:virtual#"
                     + (sourcePlayer != null ? sourcePlayer.toString() : "unknown")
                     + "/" + (animationClass != null ? animationClass : "unknown")
@@ -462,32 +568,125 @@ public class SoundTracker {
     private static final double NO_MUFFLING_RANGE = 1.0;
     private static final double NO_MUFFLING_WEIGHT = 1.0;
 
-    private static final java.util.concurrent.ConcurrentHashMap<UUID, String> ASYNC_BEST_SOUND_BY_MOB = new java.util.concurrent.ConcurrentHashMap<>();
-    private static final java.util.concurrent.ConcurrentHashMap<UUID, Double> ASYNC_BEST_SOUND_RANGE = new java.util.concurrent.ConcurrentHashMap<>();
-    private static final java.util.concurrent.ConcurrentHashMap<UUID, Double> ASYNC_BEST_SOUND_WEIGHT = new java.util.concurrent.ConcurrentHashMap<>();
-    private static final java.util.concurrent.ConcurrentHashMap<UUID, Long> ASYNC_RESULT_GAME_TIME = new java.util.concurrent.ConcurrentHashMap<>();
-    private static final java.util.concurrent.ConcurrentHashMap<UUID, Long> LAST_SUBMIT_GAME_TIME = new java.util.concurrent.ConcurrentHashMap<>();
-    private static final java.util.concurrent.ConcurrentHashMap<UUID, Integer> LAST_CANDIDATE_HASH = new java.util.concurrent.ConcurrentHashMap<>();
-    private static final java.util.concurrent.ConcurrentHashMap<UUID, Map<String, MuffledResult>> ASYNC_MUFFLED_BY_MOB = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<AsyncKey, String> ASYNC_BEST_SOUND_BY_MOB = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<AsyncKey, Double> ASYNC_BEST_SOUND_RANGE = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<AsyncKey, Double> ASYNC_BEST_SOUND_WEIGHT = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<AsyncKey, Long> ASYNC_RESULT_GAME_TIME = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<AsyncKey, Long> LAST_SUBMIT_GAME_TIME = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<AsyncKey, Integer> LAST_CANDIDATE_HASH = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<AsyncKey, Map<String, MuffledResult>> ASYNC_MUFFLED_BY_MOB = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final int MAX_ASYNC_CACHE_ENTRIES = 8192;
+
+    public static void clearCaches() {
+        RAYCAST_CACHE.clear();
+        ASYNC_BEST_SOUND_BY_MOB.clear();
+        ASYNC_BEST_SOUND_RANGE.clear();
+        ASYNC_BEST_SOUND_WEIGHT.clear();
+        ASYNC_RESULT_GAME_TIME.clear();
+        LAST_SUBMIT_GAME_TIME.clear();
+        LAST_CANDIDATE_HASH.clear();
+        ASYNC_MUFFLED_BY_MOB.clear();
+    }
+
+    public static void onLevelUnload(net.minecraft.server.level.ServerLevel level) {
+        if (level == null) return;
+        String dimension = level.dimension().location().toString();
+        writeLock.lock();
+        try {
+            RECENT_SOUNDS.removeIf(record -> {
+                if (!dimension.equals(record.dimensionKey)) return false;
+                removeRecordFromCollections(record);
+                return true;
+            });
+            DEDUP_SET_A.removeIf(key -> key.startsWith(dimension + "|"));
+            DEDUP_SET_B.removeIf(key -> key.startsWith(dimension + "|"));
+            ASYNC_BEST_SOUND_BY_MOB.keySet().removeIf(key -> dimension.equals(key.dimensionKey()));
+            ASYNC_BEST_SOUND_RANGE.keySet().removeIf(key -> dimension.equals(key.dimensionKey()));
+            ASYNC_BEST_SOUND_WEIGHT.keySet().removeIf(key -> dimension.equals(key.dimensionKey()));
+            ASYNC_RESULT_GAME_TIME.keySet().removeIf(key -> dimension.equals(key.dimensionKey()));
+            LAST_SUBMIT_GAME_TIME.keySet().removeIf(key -> dimension.equals(key.dimensionKey()));
+            LAST_CANDIDATE_HASH.keySet().removeIf(key -> dimension.equals(key.dimensionKey()));
+            ASYNC_MUFFLED_BY_MOB.keySet().removeIf(key -> dimension.equals(key.dimensionKey()));
+            RAYCAST_CACHE.keySet().removeIf(key -> dimension.equals(key.dimensionKey));
+            trimAsyncCaches();
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    public static void onServerStopped() {
+        writeLock.lock();
+        try {
+            RECENT_SOUNDS.clear();
+            SPATIAL_SOUNDS.clear();
+            LARGE_RANGE_SOUNDS.clear();
+            SOUND_RECORDS_BY_ID.clear();
+            DEDUP_SET_A.clear();
+            DEDUP_SET_B.clear();
+            SOUND_SEQUENCE.set(0L);
+            clearCaches();
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    public static void onMobUnload(UUID mobId, net.minecraft.world.level.Level level) {
+        if (mobId == null || level == null) return;
+        AsyncKey key = new AsyncKey(mobId, level.dimension().location().toString());
+        ASYNC_BEST_SOUND_BY_MOB.remove(key);
+        ASYNC_BEST_SOUND_RANGE.remove(key);
+        ASYNC_BEST_SOUND_WEIGHT.remove(key);
+        ASYNC_RESULT_GAME_TIME.remove(key);
+        LAST_SUBMIT_GAME_TIME.remove(key);
+        LAST_CANDIDATE_HASH.remove(key);
+        ASYNC_MUFFLED_BY_MOB.remove(key);
+    }
+
+    private static void trimAsyncCaches() {
+        Set<AsyncKey> keys = new HashSet<>();
+        keys.addAll(ASYNC_RESULT_GAME_TIME.keySet());
+        keys.addAll(ASYNC_BEST_SOUND_BY_MOB.keySet());
+        keys.addAll(ASYNC_BEST_SOUND_RANGE.keySet());
+        keys.addAll(ASYNC_BEST_SOUND_WEIGHT.keySet());
+        keys.addAll(LAST_SUBMIT_GAME_TIME.keySet());
+        keys.addAll(LAST_CANDIDATE_HASH.keySet());
+        keys.addAll(ASYNC_MUFFLED_BY_MOB.keySet());
+        int excess = keys.size() - MAX_ASYNC_CACHE_ENTRIES;
+        if (excess <= 0) return;
+        Iterator<AsyncKey> iterator = keys.iterator();
+        while (excess-- > 0 && iterator.hasNext()) {
+            AsyncKey key = iterator.next();
+            ASYNC_RESULT_GAME_TIME.remove(key);
+            ASYNC_BEST_SOUND_BY_MOB.remove(key);
+            ASYNC_BEST_SOUND_RANGE.remove(key);
+            ASYNC_BEST_SOUND_WEIGHT.remove(key);
+            LAST_SUBMIT_GAME_TIME.remove(key);
+            LAST_CANDIDATE_HASH.remove(key);
+            ASYNC_MUFFLED_BY_MOB.remove(key);
+        }
+    }
 
     private static void drainAsyncSoundScores(Level level) {
         try {
             List<SoundScoreResult> results = WorkSchedulerManager.get().drainSoundScoreResults();
             if (results == null || results.isEmpty()) return;
-            long nowGameTime = level == null ? 0L : level.getGameTime();
             for (SoundScoreResult r : results) {
                 if (r == null || r.mobUuid() == null) continue;
-                if (r.soundId() != null) {
-                    ASYNC_BEST_SOUND_BY_MOB.put(r.mobUuid(), r.soundId());
-                    ASYNC_RESULT_GAME_TIME.put(r.mobUuid(), nowGameTime);
-                    Map<String, MuffledResult> muffled = ASYNC_MUFFLED_BY_MOB.get(r.mobUuid());
+                if (r.soundId() != null && r.dimensionKey() != null) {
+                    long resultGameTime = gameTimeForDimension(level, r.dimensionKey());
+                    if (resultGameTime == Long.MIN_VALUE) continue;
+                    AsyncKey key = new AsyncKey(r.mobUuid(), r.dimensionKey());
+                    ASYNC_BEST_SOUND_BY_MOB.put(key, r.soundId());
+                    ASYNC_RESULT_GAME_TIME.put(key, resultGameTime);
+                    Map<String, MuffledResult> muffled = ASYNC_MUFFLED_BY_MOB.get(key);
                     if (muffled != null) {
                         MuffledResult result = muffled.get(r.soundId());
                         if (result != null) {
-                            ASYNC_BEST_SOUND_RANGE.put(r.mobUuid(), result.range());
-                            ASYNC_BEST_SOUND_WEIGHT.put(r.mobUuid(), result.weight());
+                            ASYNC_BEST_SOUND_RANGE.put(key, result.range());
+                            ASYNC_BEST_SOUND_WEIGHT.put(key, result.weight());
                         }
                     }
+                    trimAsyncCaches();
                 }
             }
         } catch (Throwable t) {
@@ -495,6 +694,19 @@ public class SoundTracker {
                 Soundattract.LOGGER.error("[SoundTracker] drainAsyncSoundScores failed", t);
             }
         }
+    }
+
+    private static long gameTimeForDimension(Level fallback, String dimensionKey) {
+        if (dimensionKey == null) return Long.MIN_VALUE;
+        if (fallback != null && dimensionKey.equals(fallback.dimension().location().toString())) {
+            return fallback.getGameTime();
+        }
+        if (!(fallback instanceof net.minecraft.server.level.ServerLevel serverLevel)) return Long.MIN_VALUE;
+        ResourceLocation location = ResourceLocation.tryParse(dimensionKey);
+        if (location == null) return Long.MIN_VALUE;
+        net.minecraft.server.level.ServerLevel target = serverLevel.getServer().getLevel(
+                ResourceKey.create(Registries.DIMENSION, location));
+        return target == null ? Long.MIN_VALUE : target.getGameTime();
     }
 
     public static double[] applyBlockMuffling(Level level, BlockPos src, BlockPos dst, double origRange, double origWeight, String soundId, boolean skipBiomassMuffle) {
@@ -510,7 +722,7 @@ public class SoundTracker {
         int raycastMax = SoundAttractConfig.COMMON.raycastCacheMaxEntries.get();
         String dimensionKey = level.dimension().location().toString();
 
-        if (useCache && QuantifiedCacheCompat.isUsable()) {
+        if (useCache) {
             String key = new StringBuilder(128)
                 .append(dimensionKey).append('|')
                 .append(soundId).append('|')
@@ -786,15 +998,17 @@ public class SoundTracker {
         readLock.lock();
         try {
             try {
-                String asyncBestId = ASYNC_BEST_SOUND_BY_MOB.get(mob.getUUID());
-                Long when = ASYNC_RESULT_GAME_TIME.get(mob.getUUID());
+                String dimensionKey = level.dimension().location().toString();
+                AsyncKey asyncKey = new AsyncKey(mob.getUUID(), dimensionKey);
+                String asyncBestId = ASYNC_BEST_SOUND_BY_MOB.get(asyncKey);
+                Long when = ASYNC_RESULT_GAME_TIME.get(asyncKey);
                 long asyncTtl = SoundAttractConfig.COMMON.asyncResultTtlTicks.get();
 
                 if (asyncBestId != null && when != null && (level.getGameTime() - when) <= asyncTtl) {
-                    SoundRecord asyncPick = SOUND_RECORDS_BY_ID.get(asyncBestId);
+                    SoundRecord asyncPick = SOUND_RECORDS_BY_ID.get(recordKey(dimensionKey, asyncBestId));
                     if (asyncPick != null && asyncPick.pos != null) {
-                        Double asyncRange = ASYNC_BEST_SOUND_RANGE.get(mob.getUUID());
-                        Double asyncWeight = ASYNC_BEST_SOUND_WEIGHT.get(mob.getUUID());
+                        Double asyncRange = ASYNC_BEST_SOUND_RANGE.get(asyncKey);
+                        Double asyncWeight = ASYNC_BEST_SOUND_WEIGHT.get(asyncKey);
                         double effectiveRange = asyncRange != null ? asyncRange.doubleValue() : asyncPick.range;
                         double distanceSq = asyncPick.pos.distSqr(mobPos);
                         if (distanceSq <= effectiveRange * effectiveRange) {
@@ -803,10 +1017,10 @@ public class SoundTracker {
                         }
                     }
                 } else if (when != null && (level.getGameTime() - when) > asyncTtl) {
-                    ASYNC_BEST_SOUND_BY_MOB.remove(mob.getUUID());
-                    ASYNC_BEST_SOUND_RANGE.remove(mob.getUUID());
-                    ASYNC_BEST_SOUND_WEIGHT.remove(mob.getUUID());
-                    ASYNC_MUFFLED_BY_MOB.remove(mob.getUUID());
+                    ASYNC_BEST_SOUND_BY_MOB.remove(asyncKey);
+                    ASYNC_BEST_SOUND_RANGE.remove(asyncKey);
+                    ASYNC_BEST_SOUND_WEIGHT.remove(asyncKey);
+                    ASYNC_MUFFLED_BY_MOB.remove(asyncKey);
                 }
             } catch (Throwable t) {
                 if (SoundAttractConfig.COMMON.debugLogging.get()) {
@@ -842,7 +1056,6 @@ public class SoundTracker {
         int noveltyTicks = SoundAttractConfig.COMMON.soundNoveltyTimeTicks.get();
         int maxLifetime = SoundAttractConfig.COMMON.soundLifetimeTicks.get();
 
-        List<SoundCandidate> asyncCandidates = new ArrayList<>(Math.min(snapshotSounds.size(), 64));
         Map<String, SoundSnapshot> candidateRecordById = new HashMap<>(Math.min(snapshotSounds.size(), 128));
 
         SoundSnapshot[] shortlist = new SoundSnapshot[MAX_SYNC_CANDIDATES];
@@ -912,17 +1125,6 @@ public class SoundTracker {
             }
 
             if (soundIdStr != null) {
-                long ageTicks = Math.max(0L, maxLifetime - r.ticksRemaining);
-                long occurredAt = Math.max(0L, level.getGameTime() - ageTicks);
-                SoundCandidate cand = new SoundCandidate(
-                    soundIdStr,
-                    r.pos.getX() + 0.5, r.pos.getY() + 0.5, r.pos.getZ() + 0.5,
-                    occurredAt,
-                    effectiveInitialRange,
-                    effectiveInitialWeight,
-                    1.0
-                );
-                asyncCandidates.add(cand);
                 SoundSnapshot newRec = new SoundSnapshot(r.sound, r.soundId, r.pos, r.ticksRemaining, r.dimensionKey, effectiveInitialRange, effectiveInitialWeight);
                 SoundSnapshot prev = candidateRecordById.get(soundIdStr);
                 if (prev == null) {
@@ -1053,7 +1255,7 @@ public class SoundTracker {
                 }
             }
 
-            java.util.List<SoundCandidate> toSubmit = !asyncScoringCandidates.isEmpty() ? asyncScoringCandidates : asyncCandidates;
+            java.util.List<SoundCandidate> toSubmit = asyncScoringCandidates;
             int candidateHash = 1;
             for (SoundCandidate c : toSubmit) {
                 int h = 17;
@@ -1069,11 +1271,12 @@ public class SoundTracker {
             }
 
             try {
-                if (!asyncCandidates.isEmpty()) {
+                if (!asyncScoringCandidates.isEmpty()) {
                     long now = level.getGameTime();
-                    Long lastSubmit = LAST_SUBMIT_GAME_TIME.get(mob.getUUID());
-                    Integer lastHash = LAST_CANDIDATE_HASH.get(mob.getUUID());
-                    Long lastAsyncWhen = ASYNC_RESULT_GAME_TIME.get(mob.getUUID());
+                    AsyncKey asyncKey = new AsyncKey(mob.getUUID(), level.dimension().location().toString());
+                    Long lastSubmit = LAST_SUBMIT_GAME_TIME.get(asyncKey);
+                    Integer lastHash = LAST_CANDIDATE_HASH.get(asyncKey);
+                    Long lastAsyncWhen = ASYNC_RESULT_GAME_TIME.get(asyncKey);
                     long asyncTtl = SoundAttractConfig.COMMON.asyncResultTtlTicks.get();
                     long submitCooldown = SoundAttractConfig.COMMON.soundScoringSubmitCooldownTicks.get();
                     boolean hasFreshAsync = lastAsyncWhen != null && (now - lastAsyncWhen) <= asyncTtl;
@@ -1087,6 +1290,7 @@ public class SoundTracker {
                             mobPos.getX() + 0.5, mobPos.getY() + 0.5, mobPos.getZ() + 0.5,
                             level.getGameTime(),
                             currentTargetSoundId,
+                            level.dimension().location().toString(),
                             toSubmit,
                             switchRatio,
                             noveltyBonusValue,
@@ -1094,13 +1298,14 @@ public class SoundTracker {
                         )
                     );
                     if (!muffledBySoundId.isEmpty()) {
-                        ASYNC_MUFFLED_BY_MOB.put(mob.getUUID(), muffledBySoundId);
+                        ASYNC_MUFFLED_BY_MOB.put(asyncKey, muffledBySoundId);
                     } else {
-                        ASYNC_MUFFLED_BY_MOB.remove(mob.getUUID());
+                        ASYNC_MUFFLED_BY_MOB.remove(asyncKey);
                     }
                     WorkSchedulerManager.get().submitSoundScore(batch);
-                        LAST_SUBMIT_GAME_TIME.put(mob.getUUID(), now);
-                        LAST_CANDIDATE_HASH.put(mob.getUUID(), candidateHash);
+                        LAST_SUBMIT_GAME_TIME.put(asyncKey, now);
+                        LAST_CANDIDATE_HASH.put(asyncKey, candidateHash);
+                        trimAsyncCaches();
                     }
                 }
             } catch (Throwable t) {

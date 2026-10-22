@@ -13,5 +13,8 @@ public final class EntityComponents implements EntityComponentInitializer {
         registry.beginRegistration(LivingEntity.class, ModComponents.CAMOUFLAGE)
                 .respawnStrategy(RespawnCopyStrategy.ALWAYS_COPY)
                 .end(entity -> new CamouflageCapability());
+        registry.beginRegistration(net.minecraft.world.entity.Entity.class, ModComponents.LIVING_BRIDGE_DATA)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY)
+                .end(entity -> new LivingBridgeEntityData());
     }
 }

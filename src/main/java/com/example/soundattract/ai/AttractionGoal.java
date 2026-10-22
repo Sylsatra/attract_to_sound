@@ -84,6 +84,7 @@ public class AttractionGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return false;
         if (this.mob.isVehicle() || this.mob.isSleeping() || shouldSuppressTargeting()) {
             return false;
         }
@@ -173,6 +174,7 @@ public class AttractionGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return false;
         if (!isMobEligible() || this.mob.isVehicle() || this.mob.isSleeping() || shouldSuppressTargeting()) {
             return false;
         }
@@ -243,13 +245,16 @@ public class AttractionGoal extends Goal {
 
     private SoundTracker.SoundRecord getCachedNearestSound() {
         long currentTick = this.mob.level().getGameTime();
-        if (this.cacheTick == currentTick) {
+        long cacheTtl = this.isPursuingSound ? 6L : 1L;
+
+
+
+        if (this.cacheTick >= 0L && (currentTick - this.cacheTick) < cacheTtl
+                && this.soundResultCache != null) {
             return this.soundResultCache;
         }
-    
+
         this.cacheTick = currentTick;
-
-
 
         this.soundResultCache = SoundTracker.findNearestSound(
             this.mob,
@@ -281,6 +286,7 @@ public class AttractionGoal extends Goal {
 
     @Override
     public void tick() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return;
 
         if (this.blockBreakerGoal != null &&
             ((com.example.soundattract.mixin.MobAccessor) this.mob).getGoalSelector().getAvailableGoals().stream()
@@ -471,12 +477,8 @@ public class AttractionGoal extends Goal {
         boolean navDone = this.mob.getNavigation().isDone();
         boolean shouldRecalc = targetChanged || navDone || cooldownElapsed || this.mob.getNavigation().isStuck();
         if (shouldRecalc && this.targetSoundPos != null) {
-            this.mob.getNavigation().moveTo(
-                    targetSoundPos.getX(),
-                    targetSoundPos.getY(),
-                    targetSoundPos.getZ(),
-                    this.moveSpeed
-            );
+            com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(
+                    this.mob, Vec3.atCenterOf(targetSoundPos), this.moveSpeed);
             this.lastMoveToTick = nowTick;
             this.lastMoveToTarget = this.targetSoundPos;
         }

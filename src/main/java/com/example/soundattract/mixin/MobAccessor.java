@@ -10,6 +10,9 @@ public interface MobAccessor {
     @Accessor("persistenceRequired")
     void setPersistenceRequiredFlag(boolean persistenceRequired);
 
+    @Accessor("persistenceRequired")
+    boolean isPersistenceRequiredFlag();
+
     @Accessor("goalSelector")
     GoalSelector getGoalSelector();
 

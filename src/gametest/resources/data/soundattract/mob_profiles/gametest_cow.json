@@ -1,0 +1,7 @@
+{
+  "id": "gametest_sheep_profile",
+  "condition": {
+    "type": "minecraft:sheep"
+  },
+  "sound_overrides": []
+}

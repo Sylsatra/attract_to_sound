@@ -12,11 +12,15 @@ import net.minecraft.world.entity.ai.goal.WrappedGoal;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
 
 public class GoalWrappingHelper {
+    private record GoalToWrap(Goal goal, int priority) {}
+
     private static final Map<Mob, Set<Goal>> WRAPPED_GOALS = new WeakHashMap<>();
     private static final Map<Mob, Set<Goal>> DELEGATE_GOALS = new WeakHashMap<>();
 
@@ -28,6 +32,7 @@ public class GoalWrappingHelper {
         Set<Goal> wrapped = WRAPPED_GOALS.computeIfAbsent(mob, k -> new HashSet<>());
         Set<Goal> delegates = DELEGATE_GOALS.computeIfAbsent(mob, k -> new HashSet<>());
 
+        List<GoalToWrap> replacements = new ArrayList<>();
         for (WrappedGoal wrappedGoal : goalSelector.getAvailableGoals()) {
             if (wrappedGoal == null) {
                 continue;
@@ -39,11 +44,14 @@ public class GoalWrappingHelper {
             }
 
             if (isCustomNpcsAiGoal(goal)) {
-                SoundInterruptWrapperGoal wrapper = new SoundInterruptWrapperGoal(goal, mob);
-                replaceGoal(goalSelector, goal, wrapper);
-                wrapped.add(wrapper);
-                delegates.add(goal);
+                replacements.add(new GoalToWrap(goal, wrappedGoal.getPriority()));
             }
+        }
+        for (GoalToWrap replacement : replacements) {
+            SoundInterruptWrapperGoal wrapper = new SoundInterruptWrapperGoal(replacement.goal(), mob);
+            replaceGoal(goalSelector, replacement.goal(), wrapper, replacement.priority());
+            wrapped.add(wrapper);
+            delegates.add(replacement.goal());
         }
     }
 
@@ -68,10 +76,10 @@ public class GoalWrappingHelper {
                !isOurGoal(goal);
     }
 
-    private static void replaceGoal(GoalSelector goalSelector, Goal oldGoal, Goal newGoal) {
+    private static void replaceGoal(GoalSelector goalSelector, Goal oldGoal, Goal newGoal, int priority) {
         try {
             goalSelector.getAvailableGoals().removeIf(wg -> wg.getGoal() == oldGoal);
-            goalSelector.addGoal(0, newGoal);
+            goalSelector.addGoal(priority, newGoal);
         } catch (Throwable t) {
             com.example.soundattract.Soundattract.LOGGER.warn("[CustomNPCs GoalWrapper] Failed to replace goal: {}", t.getMessage());
         }

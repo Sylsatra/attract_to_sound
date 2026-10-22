@@ -19,12 +19,21 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import net.minecraft.world.effect.MobEffects;
 
 import java.util.Set;
 
 @Pseudo
 @Mixin(targets = "noppes.npcs.entity.EntityNPCInterface", remap = false)
 public abstract class CustomNpcsEntityNPCInterfaceMixin {
+
+    @Inject(method = "isInvisible()Z", at = @At("RETURN"), cancellable = true, remap = false)
+    private void soundattract$includeVanillaInvisibility(CallbackInfoReturnable<Boolean> cir) {
+        if (((net.minecraft.world.entity.LivingEntity) (Object) this).hasEffect(MobEffects.INVISIBILITY)) {
+            cir.setReturnValue(true);
+        }
+    }
 
     @Inject(method = "updateTasks()V", at = @At("TAIL"))
     private void soundattract$afterUpdateTasks(CallbackInfo ci) {
@@ -123,7 +132,7 @@ public abstract class CustomNpcsEntityNPCInterfaceMixin {
     @Inject(method = "readSpawnData(Lnet/minecraft/nbt/CompoundTag;)V", at = @At("TAIL"))
     private void soundattract$onReadSpawnData(CallbackInfo ci) {
         if (SoundAttractConfig.COMMON == null || !SoundAttractConfig.COMMON.enableCustomNpcsIntegration.get()) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (SoundAttractConfig.COMMON != null && SoundAttractConfig.COMMON.debugLogging.get()) {
                 Soundattract.LOGGER.info("[CustomNPCs] Integration disabled, skipping readSpawnData");
             }
             return;

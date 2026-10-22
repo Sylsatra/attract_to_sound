@@ -40,13 +40,32 @@ public class FollowScentGoal extends Goal {
     private static int scansThisTick = 0;
 
     public FollowScentGoal(PathfinderMob mob) {
+        this(mob, ScentManager.getForLevel(mob.level()));
+    }
+
+    /** Allows isolated scent sources in deterministic integrations and tests. */
+    public FollowScentGoal(PathfinderMob mob, ScentManager scentManager) {
         this.mob = mob;
-        this.scentManager = ScentManager.getForLevel(mob.level());
+        this.scentManager = scentManager;
         this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
+    }
+
+    public boolean isFollowingScent() {
+        return targetPos != null && !isAmbushing;
+    }
+
+    public Vec3 getTargetPosition() {
+        return targetPos;
+    }
+
+    /** Exercises scent selection without randomized polling or the shared per-tick scan budget. */
+    public boolean acquireScentForTesting() {
+        return findScentTrail();
     }
 
     @Override
     public boolean canUse() {
+        if (LivingWallCoordinator.isControlled(mob)) return false;
         if (!SoundAttractConfig.COMMON.enableScentSystem.get()) return false;
         if (scentManager == null) return false;
         
@@ -85,6 +104,7 @@ public class FollowScentGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
+        if (LivingWallCoordinator.isControlled(mob)) return false;
         if (mob.getTarget() != null && mob.getTarget().isAlive()) return false;
         
         if (isAmbushing && ambushTimer <= 0) return false;
@@ -102,9 +122,10 @@ public class FollowScentGoal extends Goal {
 
     @Override
     public void tick() {
+        if (LivingWallCoordinator.isControlled(mob)) return;
         if (targetPos == null) return;
 
-        if (this.blockBreakerGoal != null && ((MobAccessor) this.mob).getGoalSelector().getAvailableGoals().stream().anyMatch(g -> g.getGoal() == this.blockBreakerGoal)) {
+        if (this.blockBreakerGoal != null && ((MobAccessor) this.mob).getGoalSelector().getAvailableGoals().stream().filter(goal -> goal.isRunning()).anyMatch(g -> g.getGoal() == this.blockBreakerGoal)) {
             if (lastPos != null && mob.position().distanceToSqr(Vec3.atCenterOf(lastPos)) >= 1.0) {
                 BlockBreakerManager.scheduleRemove(this.mob, this.blockBreakerGoal);
                 this.blockBreakerGoal = null;
@@ -245,10 +266,7 @@ public class FollowScentGoal extends Goal {
 
     private void moveToTarget() {
         isAmbushing = false;
-        Path path = mob.getNavigation().createPath(BlockPos.containing(targetPos), 1);
-        if (path != null) {
-            mob.getNavigation().moveTo(path, 1.0);
-        } else {
+        if (targetPos == null || !com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, targetPos, 1.0D)) {
             this.pathfindingCooldownTo = mob.level().getGameTime() + 40;
             this.targetPos = null;
         }
@@ -327,6 +345,7 @@ public class FollowScentGoal extends Goal {
         if (type == null) return 1.0;
         return switch (type) {
             case PLAYER_WALK -> 1.0;
+            case PLAYER_WIND -> 1.1;
             case ARROW_PATH, ARROW_ORIGIN -> 0.8;
             case MOB_PROJECTILE_PATH, MOB_PROJECTILE_ORIGIN -> 0.6;
         };

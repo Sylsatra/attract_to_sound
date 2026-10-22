@@ -20,10 +20,9 @@ public abstract class HttpTextureMixin extends SimpleTextureMixin {
      * - m_118010_ (Searge/Runtime)
      */
     @Inject(
-        method = {"onLoadingFinished", "loadCallback", "onDownload", "m_118010_"}, 
+        method = "loadCallback(Lcom/mojang/blaze3d/platform/NativeImage;)V",
         at = @At("HEAD"), 
-        remap = false, 
-        require = 0
+        require = 1
     )
     private void soundattract$onDownload(NativeImage img, CallbackInfo ci) {
         ResourceLocation loc = this.soundattract$getLocation();

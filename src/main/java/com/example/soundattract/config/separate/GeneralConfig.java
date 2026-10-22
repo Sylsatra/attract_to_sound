@@ -144,7 +144,17 @@ public class GeneralConfig {
                         "minecraft:vex", "minecraft:vindicator", "minecraft:witch",
                         "minecraft:wither_skeleton", "minecraft:zoglin", "minecraft:zombie", "minecraft:zombie_villager",
                         "scguns:cog_knight", "scguns:cog_minion", "scguns:blunderer", "scguns:hive", "scguns:dissident", "scguns:hornlin", "scguns:redcoat", "scguns:cog_knight",
-                        "scguns:sky_carrier", "scguns:supply_scamp", "scguns:swarm", "scguns:zombified_hornlin"
+                        "scguns:sky_carrier", "scguns:supply_scamp", "scguns:swarm", "scguns:zombified_hornlin",
+                        "sculkhorde:sculk_zombie", "sculkhorde:sculk_witch", "sculkhorde:sculk_vindicator", "sculkhorde:sculk_vex",
+                        "sculkhorde:sculk_squid", "sculkhorde:sculk_spore_spewer",
+                        "sculkhorde:sculk_spitter", "sculkhorde:sculk_soul_reaper",
+                        "sculkhorde:sculk_sheep", "sculkhorde:sculk_salmon",
+                        "sculkhorde:sculk_ravager", "sculkhorde:sculk_pufferfish",
+                        "sculkhorde:sculk_phantom", "sculkhorde:sculk_mite_aggressor",
+                        "sculkhorde:sculk_mite", "sculkhorde:sculk_metamorphosis_pod",
+                        "sculkhorde:sculk_hatcher", "sculkhorde:sculk_guardian",
+                        "sculkhorde:sculk_ghast", "sculkhorde:sculk_enderman", "sculkhorde:sculk_creeper", "sculkhorde:sculk_broodling", "sculkhorde:sculk_brood_hatcher", "sculkhorde:sculk_bee_infector",
+                        "sculkhorde:sculk_bee_harvester", "sculkhorde:golem_of_wrath"
                 ), obj -> obj instanceof String);
         MOB_BLACKLIST = BUILDER.defineList("mobBlacklist", Arrays.asList("minecraft:pig"), obj -> obj instanceof String);
         STEALTH_BYPASS_MOB_IDS = BUILDER.defineList("stealthBypassMobIds", Arrays.asList(), obj -> obj instanceof String);

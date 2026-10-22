@@ -36,19 +36,22 @@
 		"soundattract.mixins.json",
 		"soundattract.mixins.gecko.json",
 		"soundattract.customnpcs.mixins.json",
-		"soundattract.tacznpcs.mixins.json"
+		"soundattract.tacznpcs.mixins.json",
+		"soundattract.pointblank.mixins.json"
 	],
 	"custom": {
 		"cardinal-components": [
 			"soundattract:camouflage",
-			"soundattract:scent"
+			"soundattract:scent",
+			"soundattract:living_bridge_data"
 		]
 	},
 	"depends": {
-		"fabricloader": ">=0.19.2",
+		"fabricloader": ">=0.19.3",
 		"minecraft": "~1.21.1",
 		"java": ">=21",
 		"fabric-api": ">=0.116.0",
-		"forgeconfigapiport": ">=21.1.0"
+		"forgeconfigapiport": ">=21.1.0",
+		"quantified": ">=2.2.3"
 	}
 }

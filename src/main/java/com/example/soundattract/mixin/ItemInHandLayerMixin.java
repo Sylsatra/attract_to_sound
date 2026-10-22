@@ -14,7 +14,8 @@ public class ItemInHandLayerMixin {
 
     @Inject(method = "render(Lcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;ILnet/minecraft/world/entity/LivingEntity;FFFFFF)V", at = @At("HEAD"), cancellable = true)
     private void soundattract$hideItemsWhenInvisible(PoseStack poseStack, MultiBufferSource buffer, int packedLight, LivingEntity entity, float limbSwing, float limbSwingAmount, float partialTick, float ageInTicks, float netHeadYaw, float headPitch, CallbackInfo ci) {
-        if (entity.isInvisible() && com.example.soundattract.config.SoundAttractConfig.shouldHideWornGearWhileInvisible()) {
+        if (entity.isInvisible() && !com.example.soundattract.client.FromTheFogVisualCompat.shouldKeepInvisibleEquipment(entity)
+                && com.example.soundattract.config.SoundAttractConfig.shouldHideWornGearWhileInvisible()) {
             ci.cancel();
         }
     }

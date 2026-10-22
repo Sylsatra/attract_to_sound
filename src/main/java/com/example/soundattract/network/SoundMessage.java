@@ -125,6 +125,9 @@ public class SoundMessage implements CustomPacketPayload {
         try {
             ResourceLocation loc = msg.soundId;
             boolean isIntegration = (msg.taczType != null) || (msg.pointBlankType != null);
+            if (sender != null) {
+                com.example.soundattract.ai.LivingWallCoordinator.recordCombatThreat(sender.serverLevel(), sender);
+            }
             if (!SoundAttractConfig.SOUND_ID_WHITELIST_CACHE.isEmpty()
                     && (loc == null || !SoundAttractConfig.SOUND_ID_WHITELIST_CACHE.contains(loc))
                     && !msg.soundId.equals(VOICE_CHAT_SOUND_ID)
@@ -175,6 +178,12 @@ public class SoundMessage implements CustomPacketPayload {
                 }
                 range = r;
                 weight = w;
+                if (sender != null) {
+                    double multiplier = com.example.soundattract.integration.toughasnails.ToughAsNailsStateCache
+                            .soundMultiplier(sender, serverLevel.getGameTime());
+                    range *= multiplier;
+                    weight *= multiplier;
+                }
             } else if (msg.soundId.equals(VOICE_CHAT_SOUND_ID)) {
                 int baseRange = msg.whispering
                         ? SoundAttractConfig.SERVER.voiceChatWhisperRange.get()

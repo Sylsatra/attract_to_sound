@@ -1,187 +1,156 @@
 package com.example.soundattract.mixin;
 
-import com.example.soundattract.config.SoundAttractConfig;
-import com.example.soundattract.camo.CamoLODUtil;
-import com.example.soundattract.camo.CamoRenderTypes;
+import com.example.soundattract.camo.CamouflageCapability;
 import com.example.soundattract.camo.CamoTextureGenerator;
-import com.example.soundattract.util.CamoUtil;
+import com.example.soundattract.camo.CamoRenderTypes;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.model.HumanoidModel;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.entity.layers.HumanoidArmorLayer;
 import net.minecraft.client.renderer.texture.OverlayTexture;
-import net.minecraft.core.component.DataComponents;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.tags.ItemTags;
-import net.minecraft.util.FastColor;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.ArmorItem;
-import net.minecraft.world.item.ArmorMaterial;
+import software.bernie.geckolib.renderer.GeoArmorRenderer;
+import com.example.soundattract.config.SoundAttractConfig;
+import net.minecraft.world.entity.player.Player;
+import com.example.soundattract.camo.CamoLODUtil;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.component.CustomData;
-import net.minecraft.world.item.component.DyedItemColor;
-import org.spongepowered.asm.mixin.Final;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-import java.util.List;
+import java.util.Optional;
 
 @Mixin(HumanoidArmorLayer.class)
 public abstract class HumanoidArmorLayerMixin {
-    @Shadow
-    @Final
-    private HumanoidModel<?> innerModel;
+    private static final Logger LOGGER = LogManager.getLogger();
 
-    @Shadow
-    @Final
-    private HumanoidModel<?> outerModel;
+    private static final ThreadLocal<java.util.List<ResourceLocation>> s_CapturedTextures = ThreadLocal.withInitial(java.util.ArrayList::new);
+    private static final ThreadLocal<Boolean> s_IsRecording = ThreadLocal.withInitial(() -> false);
 
-    @Inject(method = "render", at = @At("HEAD"), cancellable = true, remap = false)
-    private void soundattract$hideArmorWhenInvisible(PoseStack poseStack, MultiBufferSource buffer, int packedLight, LivingEntity entity, float limbSwing, float limbSwingAmount, float ageInTicks, float netHeadYaw, float headPitch, float tickDelta, CallbackInfo ci) {
-        if (entity.isInvisible() && SoundAttractConfig.shouldHideWornGearWhileInvisible()) {
-            boolean hasArmor = false;
-            for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
-                ItemStack stack = entity.getItemBySlot(slot);
-                if (!stack.isEmpty()) {
-                    hasArmor = true;
-                    break;
-                }
-            }
-            
-            if (hasArmor) {
-                ci.cancel();
-            }
-        }
+    private static ResourceLocation soundattract$buildArmorTexture(ItemStack stack, EquipmentSlot slot, String suffix) {
+        if (!(stack.getItem() instanceof ArmorItem armorItem)) return null;
+        return soundattract$buildArmorTexture(armorItem.getMaterial().unwrapKey().map(key -> key.location().toString()).orElse("minecraft:leather"), slot, suffix);
     }
 
-    @Inject(method = "render", at = @At("TAIL"), remap = false)
-    private void soundattract$renderArmorCamo(PoseStack poseStack, MultiBufferSource buffer, int packedLight, LivingEntity entity, float limbSwing, float limbSwingAmount, float ageInTicks, float netHeadYaw, float headPitch, float tickDelta, CallbackInfo ci) {
-        CamoLODUtil.LODResult lod = CamoLODUtil.getLOD(entity);
-        if (!lod.shouldRender()) {
+    private static ResourceLocation soundattract$buildArmorTexture(String materialName, EquipmentSlot slot, String suffix) {
+        boolean secondLayer = slot == EquipmentSlot.LEGS;
+        ResourceLocation material = ResourceLocation.tryParse(materialName);
+        if (material == null) return null;
+        String path = "textures/models/armor/" + material.getPath()
+            + "_layer_" + (secondLayer ? 2 : 1)
+            + (suffix == null ? "" : "_" + suffix) + ".png";
+        return material.withPath(path);
+    }
+
+    @Inject(method = "renderArmorPiece", at = @At("HEAD"), cancellable = true)
+    private void soundattract$startRecording(PoseStack poseStack, MultiBufferSource buffer, LivingEntity entity, EquipmentSlot slot, int packedLight, HumanoidModel<?> armorModel, CallbackInfo ci) {
+        if (entity.isInvisible() && !com.example.soundattract.client.FromTheFogVisualCompat.shouldKeepInvisibleEquipment(entity)
+                && SoundAttractConfig.shouldHideWornGearWhileInvisible()) {
+            ci.cancel();
             return;
         }
-        if (entity.isInvisible()) {
-            return;
-        }
+        s_CapturedTextures.get().clear();
+        s_IsRecording.set(true);
+    }
 
-        HumanoidArmorLayer<?, ?, ?> self = (HumanoidArmorLayer<?, ?, ?>) (Object) this;
+    @Inject(method = "renderArmorPiece", at = @At("TAIL"))
+    private void soundattract$tintArmorWithCamo(
+            PoseStack poseStack, MultiBufferSource buffer,
+            LivingEntity entity, EquipmentSlot slot,
+            int packedLight, HumanoidModel<?> armorModel,
+            CallbackInfo ci) {
 
-        for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
+        if (!s_IsRecording.get()) return;
+        try {
             ItemStack stack = entity.getItemBySlot(slot);
-            if (stack.isEmpty()) continue;
+            ResourceLocation main = soundattract$buildArmorTexture(stack, slot, null);
+            if (main != null) s_CapturedTextures.get().add(main);
+            ResourceLocation overlay = soundattract$buildArmorTexture(stack, slot, "overlay");
+            if (overlay != null) s_CapturedTextures.get().add(overlay);
 
-            CompoundTag tag = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
-            if (tag == null || tag.isEmpty()) continue;
+            if (entity.isInvisible() && SoundAttractConfig.shouldHideWornGearWhileInvisible()) return;
+        CamoLODUtil.LODResult lod = CamoLODUtil.getLOD(entity);
+        if (!lod.shouldRender()) return;
 
-            List<ResourceLocation> armorTextures = getArmorTextures(stack, slot);
-            if (armorTextures.isEmpty()) continue;
+        java.util.List<ResourceLocation> captured = new java.util.ArrayList<>(s_CapturedTextures.get());
 
-            if (tag.contains("soundattract:CamoLayers", Tag.TAG_LIST)) {
-                ListTag list = tag.getList("soundattract:CamoLayers", Tag.TAG_COMPOUND);
-                CamoUtil.BlendedCamoData blended = CamoUtil.getBlendedDataFromTag(list);
-                
-                if (blended.color().isPresent()) {
-                    ResourceLocation smudgeTex = CamoTextureGenerator.getOrCreateMaskedSmudge(
-                        blended.seed(), 
-                        blended.color().get(), 
-                        blended.strength() * 2.0f, 
-                        armorTextures,
-                        lod.resolution(),
-                        blended.erosion(),
-                        blended.humidity(),
-                        blended.temp()
-                    );
-        
-                    if (smudgeTex != null) {
-                        HumanoidModel<?> armorModel = getArmorModel(self, slot);
-                        if (armorModel == null) continue;
+        if (entity == Minecraft.getInstance().player && entity.level().getGameTime() % 200 == 0) {
+            if (captured.isEmpty()) {
+            } else {
+                com.example.soundattract.camo.ArmorValidationTracker.markSlotValidated(entity, slot);
+            }
+        } else if (!captured.isEmpty()) {
+             com.example.soundattract.camo.ArmorValidationTracker.markSlotValidated(entity, slot);
+        }
 
-                        setCamoPartVisibility(armorModel, slot);
+        if (captured.isEmpty()) return;
 
-                        VertexConsumer vertexConsumer = buffer.getBuffer(CamoRenderTypes.camoOverlay(smudgeTex));
-                        armorModel.renderToBuffer(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY, 0xFFFFFFFF);
+        if (isGeckoAnimatable(stack)) {
+            return;
+        }
 
-                        armorModel.setAllVisible(true);
-                    }
-                }
-            } else if (tag.contains("soundattract:CamoStrength")) {
-                int color = tag.getInt("soundattract:CamoColor");
-                float strength = tag.getFloat("soundattract:CamoStrength");
-                long seed = tag.getLong("soundattract:CamoSeed");
+        if (stack.isEmpty() || !stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) return;
 
-                ResourceLocation smudgeTex = CamoTextureGenerator.getOrCreateMaskedSmudge(seed, color, strength * 2.0f, armorTextures, lod.resolution(), 0, 0, 0);
-                
+        net.minecraft.nbt.CompoundTag tag = com.example.soundattract.util.CamoUtil.getCustomTagReadOnly(stack);
+
+            if (tag.contains("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_LIST)) {
+            net.minecraft.nbt.ListTag list = tag.getList("soundattract:CamoLayers", net.minecraft.nbt.Tag.TAG_COMPOUND);
+            com.example.soundattract.util.CamoUtil.BlendedCamoData blended = com.example.soundattract.util.CamoUtil.getBlendedDataFromTag(list);
+
+            if (blended.color().isPresent()) {
+                ResourceLocation smudgeTex = com.example.soundattract.camo.CamoTextureGenerator.getOrCreateMaskedSmudge(
+                    blended.seed(),
+                    blended.color().get(),
+                    blended.strength() * 2.0f,
+                    captured,
+                    lod.resolution(),
+                    blended.erosion(),
+                    blended.humidity(),
+                    blended.temp()
+                );
+
                 if (smudgeTex != null) {
-                    HumanoidModel<?> armorModel = getArmorModel(self, slot);
-                    if (armorModel == null) continue;
-
-                    setCamoPartVisibility(armorModel, slot);
-
                     VertexConsumer vertexConsumer = buffer.getBuffer(CamoRenderTypes.camoOverlay(smudgeTex));
                     armorModel.renderToBuffer(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY, 0xFFFFFFFF);
-
-                    armorModel.setAllVisible(true);
                 }
             }
-        }
-    }
+            } else if (tag.contains("soundattract:CamoStrength")) {
+            int color = tag.getInt("soundattract:CamoColor");
+            float strength = tag.getFloat("soundattract:CamoStrength");
+            long seed = tag.getLong("soundattract:CamoSeed");
 
-    @SuppressWarnings("unchecked")
-    private HumanoidModel<?> getArmorModel(HumanoidArmorLayer<?, ?, ?> layer, EquipmentSlot slot) {
-        boolean usesInnerModel = slot == EquipmentSlot.LEGS;
-        return usesInnerModel ? innerModel : outerModel;
-    }
+            ResourceLocation smudgeTex = CamoTextureGenerator.getOrCreateMaskedSmudge(seed, color, strength, captured, lod.resolution(), 0, 0, 0);
 
-    private List<ResourceLocation> getArmorTextures(ItemStack stack, EquipmentSlot slot) {
-        List<ResourceLocation> textures = new java.util.ArrayList<>();
-        ArmorItem armorItem = (ArmorItem) stack.getItem();
-        ArmorMaterial material = armorItem.getMaterial().value();
-        boolean usesInnerModel = slot == EquipmentSlot.LEGS;
-
-        int dyeColor = -1;
-        if (stack.is(ItemTags.DYEABLE)) {
-            dyeColor = FastColor.ARGB32.opaque(DyedItemColor.getOrDefault(stack, -6265536));
-        }
-
-        for (ArmorMaterial.Layer layer : material.layers()) {
-            ResourceLocation texture = layer.texture(usesInnerModel);
-            if (texture != null) {
-                textures.add(texture);
+            if (smudgeTex != null) {
+                VertexConsumer vertexConsumer = buffer.getBuffer(CamoRenderTypes.camoOverlay(smudgeTex));
+                armorModel.renderToBuffer(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY, 0xFFFFFFFF);
             }
+            }
+        } finally {
+            s_IsRecording.set(false);
+            s_CapturedTextures.get().clear();
         }
-
-        return textures;
     }
 
-    private void setCamoPartVisibility(HumanoidModel<?> model, EquipmentSlot slot) {
-        model.setAllVisible(false);
-        switch (slot) {
-            case HEAD:
-                model.head.visible = true;
-                model.hat.visible = true;
-                break;
-            case CHEST:
-                model.body.visible = true;
-                model.rightArm.visible = true;
-                model.leftArm.visible = true;
-                break;
-            case LEGS:
-                model.body.visible = true;
-                model.rightLeg.visible = true;
-                model.leftLeg.visible = true;
-                break;
-            case FEET:
-                model.rightLeg.visible = true;
-                model.leftLeg.visible = true;
-                break;
+    private boolean isGeckoAnimatable(ItemStack stack) {
+        if (stack.isEmpty()) return false;
+        try {
+            if (!net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("geckolib")) return false;
+            Class<?> geoAnimatableClass = Class.forName("software.bernie.geckolib.animatable.GeoAnimatable");
+            return geoAnimatableClass.isInstance(stack.getItem());
+        } catch (Throwable e) {
+            return false;
         }
     }
 }
+

@@ -11,6 +11,7 @@ import com.example.soundattract.quantified.QuantifiedIntegration;
 import com.example.soundattract.integration.vanilla.VanillaIntegrationEvents;
 import com.example.soundattract.integration.immersive_melodies.ImmersiveMelodiesIntegration;
 import com.example.soundattract.integration.voicechat.PlasmoVoiceBootstrap;
+import com.example.soundattract.integration.toughasnails.ToughAsNailsIntegration;
 import com.example.soundattract.camo.CamoEvents;
 import com.example.soundattract.integration.scent.ScentCapabilityHandler;
 import com.example.soundattract.event.ArrowInvestigationEvents;
@@ -42,8 +43,15 @@ public class Soundattract implements ModInitializer {
 
         registerConfigs();
         registerContent();
+        com.example.soundattract.reload.DataDrivenReloadRegistrar.register();
         registerEvents();
         registerNetwork();
+        com.example.soundattract.event.AwarenessServerEvents.register();
+        com.example.soundattract.event.FromTheFogEquipmentSyncEvents.register();
+        com.example.soundattract.event.LivingWallFabricEvents.register();
+        if (ModChecker.isLoaded("toughasnails")) {
+            ToughAsNailsIntegration.register();
+        }
         PlasmoVoiceBootstrap.init();
 
         LOGGER.info("Sound Attract mod initialized successfully!");
@@ -52,11 +60,18 @@ public class Soundattract implements ModInitializer {
     private void registerConfigs() {
         ConfigHelper.register(ForgeConfigRegistry.INSTANCE);
 
+
+
+        com.example.soundattract.event.config.ConfigReloadListener.register();
+        com.example.soundattract.event.config.ConfigReloadListener.onConfigLoad();
+
         ServerLifecycleEvents.SERVER_STARTING.register(this::onServerStarting);
     }
 
     private void registerContent() {
+        ModEnchantments.register();
         ModSounds.register();
+        com.example.soundattract.registration.ModParticles.register();
         ModLootModifiers.register();
     }
 

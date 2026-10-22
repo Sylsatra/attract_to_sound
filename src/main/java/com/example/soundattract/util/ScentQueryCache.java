@@ -1,12 +1,10 @@
 package com.example.soundattract.util;
 
-import com.example.soundattract.Soundattract;
-import com.example.soundattract.config.SoundAttractConfig;
-
 import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import net.minecraft.resources.ResourceLocation;
 
 /**
  * Thread-safe, bounded, TTL-based cache for per-mob scent query results.
@@ -18,26 +16,33 @@ public final class ScentQueryCache {
         public static final Result EMPTY = new Result(Long.MIN_VALUE, false, 0.0);
     }
 
-    private static final ConcurrentHashMap<UUID, Result> CACHE = new ConcurrentHashMap<>();
+    private record Key(UUID mobId, ResourceLocation dimension) {}
+
+    private static final ConcurrentHashMap<Key, Result> CACHE = new ConcurrentHashMap<>();
 
     private ScentQueryCache() {}
 
-    public static Result getCached(UUID mobId, long nowTick, int ttl) {
-        if (mobId == null) return null;
-        Result r = CACHE.get(mobId);
+    public static Result getCached(UUID mobId, ResourceLocation dimension, long nowTick, int ttl) {
+        if (mobId == null || dimension == null) return null;
+        Key key = new Key(mobId, dimension);
+        Result r = CACHE.get(key);
         if (r == null) return null;
-        if (nowTick - r.tickStored() > ttl) return null;
+        long age = nowTick - r.tickStored();
+        if (r.tickStored() == Long.MIN_VALUE || age < 0L || age > ttl) {
+            CACHE.remove(key, r);
+            return null;
+        }
         return r;
     }
 
-    public static void put(UUID mobId, Result result) {
-        if (mobId == null || result == null) return;
-        CACHE.put(mobId, result);
+    public static void put(UUID mobId, ResourceLocation dimension, Result result) {
+        if (mobId == null || dimension == null || result == null || result.tickStored() == Long.MIN_VALUE) return;
+        CACHE.put(new Key(mobId, dimension), result);
     }
 
-    public static void invalidate(UUID mobId) {
-        if (mobId == null) return;
-        CACHE.remove(mobId);
+    public static void invalidate(UUID mobId, ResourceLocation dimension) {
+        if (mobId == null || dimension == null) return;
+        CACHE.remove(new Key(mobId, dimension));
     }
 
     public static void clear() {
@@ -48,30 +53,26 @@ public final class ScentQueryCache {
         return CACHE.size();
     }
 
-    /**
-     * Periodic cleanup. Removes expired entries; if still over maxEntries, drops oldest.
-     */
-    public static void cleanup(long nowTick, int ttl, int maxEntries) {
-        try {
-            Iterator<Map.Entry<UUID, Result>> it = CACHE.entrySet().iterator();
-            while (it.hasNext()) {
-                Map.Entry<UUID, Result> e = it.next();
-                Result r = e.getValue();
-                if (r == null || nowTick - r.tickStored() > ttl) {
-                    it.remove();
-                }
+    /** Periodic cleanup removes expired dimension entries and enforces the global capacity. */
+    public static void cleanup(ResourceLocation dimension, long nowTick, int ttl, int maxEntries) {
+        if (dimension == null) return;
+        Iterator<Map.Entry<Key, Result>> it = CACHE.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<Key, Result> e = it.next();
+            Result r = e.getValue();
+            if (e.getKey().dimension().equals(dimension)
+                    && (r == null || r.tickStored() == Long.MIN_VALUE
+                    || nowTick < r.tickStored() || nowTick - r.tickStored() > ttl)) {
+                it.remove();
             }
-            int over = CACHE.size() - maxEntries;
-            if (over > 0) {
-                CACHE.entrySet().stream()
-                    .sorted(Map.Entry.comparingByValue(
-                        (a, b) -> Long.compare(a.tickStored(), b.tickStored())))
-                    .limit(over)
-                    .forEach(e -> CACHE.remove(e.getKey()));
-            }
-        } catch (Throwable t) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
-                Soundattract.LOGGER.warn("[ScentQueryCache] cleanup failed: {}", t.toString());
+        }
+        int over = CACHE.size() - Math.max(1, maxEntries);
+        if (over > 0) {
+            Iterator<Key> keys = CACHE.keySet().iterator();
+            while (over > 0 && keys.hasNext()) {
+                keys.next();
+                keys.remove();
+                over--;
             }
         }
     }

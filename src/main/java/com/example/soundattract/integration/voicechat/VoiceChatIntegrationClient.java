@@ -64,7 +64,7 @@ public class VoiceChatIntegrationClient {
             intensity01,
             isWhispering
         );
-        ClientPlayNetworking.send(msg);
+        com.example.soundattract.network.SoundAttractNetwork.sendSoundToServer(msg);
     }
 
 
@@ -83,3 +83,4 @@ public class VoiceChatIntegrationClient {
         return db;
     }
 }
+

@@ -10,6 +10,12 @@ loom {
 version = project.mod_version
 group = project.maven_group
 
+def includeSpoiledRuntimeProfile = !project.hasProperty('excludeSpoiledRuntime')
+def includeCustomNpcsRuntimeProfile = !project.hasProperty('excludeCustomNpcsRuntime')
+def includeSmartBrainLibRuntimeProfile = !project.hasProperty('excludeSmartBrainLibRuntime')
+def includeToughAsNailsRuntimeProfile = project.hasProperty('includeToughAsNailsRuntime')
+def toughAsNailsJar = files('libs/ToughAsNails-fabric-1.21.1-10.1.0.11.jar')
+
 repositories {
     maven {
         name = 'Ladysnake Mods'
@@ -51,16 +57,45 @@ dependencies {
     modRuntimeOnly "maven.modrinth:simple-voice-chat:fabric-${voicechat_version}"
     modCompileOnly "su.plo.voice.api:server:2.1.5"
     modCompileOnly "su.plo.voice.api:client:2.1.5"
-    modImplementation files('libs/pointblank-fabric-1.21-1.11.1.jar')
-    modCompileOnly files('libs/geckolib-fabric-1.21.1-4.8.4.jar')
+    modCompileOnly files('libs/pointblank-fabric-1.21-1.11.1.jar')
+    modRuntimeOnly files('libs/pointblank-fabric-1.21-1.11.1.jar')
+    modImplementation files('libs/geckolib-fabric-1.21.1-4.8.4.jar')
 	implementation("com.eliotlash.mclib:mclib:20")
 	modImplementation files('libs/ForgeConfigAPIPort-v21.1.6-1.21.1-Fabric.jar')
-	implementation("com.electronwill.night-config:core:3.6.7")
-	implementation("com.electronwill.night-config:toml:3.6.7")
-	modImplementation files('libs/CustomNPCs-Unofficial-Fabric-1.21.1.20260419.jar')
+	include implementation("com.electronwill.night-config:core:3.8.0")
+	include implementation("com.electronwill.night-config:toml:3.8.0")
+	def customNpcsJar = files('libs/CustomNPCs-Unofficial-Fabric-1.21.1.20260419.jar')
+	if (includeCustomNpcsRuntimeProfile) {
+		modImplementation customNpcsJar
+	} else {
+		modCompileOnly customNpcsJar
+	}
 	modImplementation files('libs/architectury-13.0.8-fabric.jar')
-	modImplementation files('libs/SmartBrainLib-fabric-1.21.1-1.16.11.jar')
+	def smartBrainLibJar = files('libs/SmartBrainLib-fabric-1.21.1-1.16.11.jar')
+	if (includeSmartBrainLibRuntimeProfile) {
+		modImplementation smartBrainLibJar
+	} else {
+		modCompileOnly smartBrainLibJar
+	}
 	modCompileOnly files('libs/TACZ-Refabricated-1.21.1-0.6.0-forge1.1.8.jar')
+	modCompileOnly toughAsNailsJar
+	if (includeToughAsNailsRuntimeProfile) {
+		modRuntimeOnly toughAsNailsJar
+		modRuntimeOnly 'maven.modrinth:glitchcore:lbSHOhee'
+		runtimeOnly files(fileTree('build/optional-profile/tough-as-nails/embedded') { include '*.jar' })
+	}
+	modRuntimeOnly files('libs/From-The-Fog-1.21-1.21.1-v1.9.4-Forge-Fabric.jar')
+	modImplementation files('libs/quantified api-omni-2.2.3.jar')
+	if (project.hasProperty('includeImmersiveMelodiesRuntime')) {
+		modRuntimeOnly files('libs/immersive_melodies-fabric-0.6.4+1.21.1.jar')
+	}
+	include implementation('com.github.ben-manes.caffeine:caffeine:3.1.8')
+	if (includeSpoiledRuntimeProfile) {
+		modRuntimeOnly files('libs/Spoiled-fabric-1.21.1-6.2.3.jar')
+		modRuntimeOnly files('libs/cloth-config-15.0.140-fabric.jar')
+	}
+	testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
 
 	modImplementation "org.ladysnake.cardinal-components-api:cardinal-components-base:${project.cca_version}"
 	modImplementation "org.ladysnake.cardinal-components-api:cardinal-components-entity:${project.cca_version}"
@@ -68,6 +103,68 @@ dependencies {
 	include "org.ladysnake.cardinal-components-api:cardinal-components-base:${project.cca_version}"
 	include "org.ladysnake.cardinal-components-api:cardinal-components-entity:${project.cca_version}"
 	include "org.ladysnake.cardinal-components-api:cardinal-components-world:${project.cca_version}"
+}
+
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = "soundattract-gametest"
+		enableGameTests = true
+		enableClientGameTests = true
+		eula = true
+	}
+}
+
+// Tough As Nails nests Night Config 3.6.7, but this project already supplies
+// Night Config 3.8.0. Only typetools is needed from the nested library set.
+def extractToughAsNailsTypetools = tasks.register('extractToughAsNailsTypetools', Sync) {
+	onlyIf { includeToughAsNailsRuntimeProfile }
+	from(zipTree(file('libs/ToughAsNails-fabric-1.21.1-10.1.0.11.jar'))) {
+		include 'META-INF/jars/typetools-0.6.3.jar'
+		eachFile { details -> details.path = details.name }
+		includeEmptyDirs = false
+	}
+	into layout.buildDirectory.dir('optional-profile/tough-as-nails/embedded')
+}
+
+if (includeToughAsNailsRuntimeProfile) {
+	tasks.matching { task -> task.name.toLowerCase().contains('gametest') }.configureEach {
+		dependsOn extractToughAsNailsTypetools
+	}
+}
+
+tasks.named('processGametestResources', ProcessResources).configure {
+	def includeSmartBrainLibTests = includeSmartBrainLibRuntimeProfile
+	def includeSpoiledTests = includeSpoiledRuntimeProfile
+	def includeImmersiveMelodiesTests = project.hasProperty('includeImmersiveMelodiesRuntime')
+	def gameTestOnlyEntrypoint = project.findProperty('gameTestOnlyEntrypoint')
+	inputs.property('includeSmartBrainLibTests', includeSmartBrainLibTests)
+	inputs.property('includeSpoiledTests', includeSpoiledTests)
+	inputs.property('includeImmersiveMelodiesTests', includeImmersiveMelodiesTests)
+	inputs.property('gameTestOnlyEntrypoint', gameTestOnlyEntrypoint ?: '')
+	def testEntrypoints = [
+		'com.example.soundattract.event.OverheadAlertGameTests',
+		'com.example.soundattract.gametest.SoundAttractGameTests',
+		'com.example.soundattract.event.AwarenessServerGameTests',
+		'com.example.soundattract.tracking.SoundTrackerGameTests',
+		'com.example.soundattract.ai.MobGroupGameTests',
+		'com.example.soundattract.scents.ScentBiomeGameTests',
+		'com.example.soundattract.raid.RaidReinforcementGameTests',
+		'com.example.soundattract.raid.RaidDimensionGameTests'
+	]
+	if (includeSmartBrainLibTests) testEntrypoints.add('com.example.soundattract.gametest.SmartBrainLibGameTests')
+	if (includeSpoiledTests) testEntrypoints.add('com.example.soundattract.integration.spoiled.SpoiledScentGameTests')
+	if (includeImmersiveMelodiesTests) testEntrypoints.add('com.example.soundattract.integration.immersive_melodies.ImmersiveMelodiesGameTests')
+	if (gameTestOnlyEntrypoint) {
+		testEntrypoints = [gameTestOnlyEntrypoint.toString()]
+	}
+	filesMatching('fabric.mod.json') {
+		expand([gameTestEntrypoints: testEntrypoints.collect { '"' + it + '"' }.join(',\n      ')])
+	}
+}
+
+test {
+	useJUnitPlatform()
 }
 
 processResources {
@@ -118,3 +215,5 @@ publishing {
 		// retrieving dependencies.
 	}
 }
+
+

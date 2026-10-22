@@ -2,27 +2,25 @@ package com.example.soundattract.reload;
 
 import com.example.soundattract.Soundattract;
 import com.example.soundattract.config.SoundAttractConfig;
-import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.HashMap;
 import java.util.Map;
 
-public class TaczGunsReloadListener extends SimpleJsonResourceReloadListener {
+public class TaczGunsReloadListener extends IdentifiedJsonReloadListener {
 
     public TaczGunsReloadListener() {
-        super(new Gson(), "guns/tacz");
+        super("guns/tacz", "tacz_guns", false);
     }
 
     @Override
-    protected void apply(Map<ResourceLocation, JsonElement> elements, ResourceManager resourceManager, ProfilerFiller profiler) {
+    protected void applyElements(Map<ResourceLocation, JsonElement> elements, ResourceManager resourceManager, ProfilerFiller profiler) {
         Map<ResourceLocation, Pair<Double, Double>> guns = new HashMap<>();
         Map<String, Double> attachments = new HashMap<>();
         Map<ResourceLocation, Double> muzzle = new HashMap<>();

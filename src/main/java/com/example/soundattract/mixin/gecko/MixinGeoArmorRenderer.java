@@ -54,7 +54,7 @@ public abstract class MixinGeoArmorRenderer<T extends net.minecraft.world.item.I
              return;
         }
         
-        net.minecraft.nbt.CompoundTag tag = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
+        CompoundTag tag = com.example.soundattract.util.CamoUtil.getCustomTagReadOnly(stack);
         if (tag == null || tag.isEmpty() || !tag.contains("soundattract:CamoLayers", 9)) {
              return;
         }

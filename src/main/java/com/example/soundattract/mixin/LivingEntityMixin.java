@@ -13,5 +13,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(LivingEntity.class)
 public abstract class LivingEntityMixin {
-
+    @Inject(method = "knockback(DDD)V", at = @At("HEAD"), cancellable = true)
+    private void soundattract$cancelStructuralKnockback(double strength, double x, double z, CallbackInfo ci) {
+        if (com.example.soundattract.ai.LivingWallCoordinator.cancelStructuralKnockback((LivingEntity) (Object) this)) {
+            ci.cancel();
+        }
+    }
 }

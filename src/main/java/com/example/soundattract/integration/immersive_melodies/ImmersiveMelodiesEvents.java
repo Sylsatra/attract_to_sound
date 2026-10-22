@@ -5,10 +5,7 @@ import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.config.separate.IntegrationConfig;
 import com.example.soundattract.tracking.SoundTracker;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.component.DataComponents;
-import net.minecraft.world.item.component.CustomData;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -21,9 +18,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 public class ImmersiveMelodiesEvents {
-
-    private static final String TAG_PLAYING = "playing";
-    private static final String TAG_MELODY = "melody";
 
     public static void onServerTick(MinecraftServer server) {
         if (!IntegrationConfig.ENABLE_IMMERSIVE_MELODIES_INTEGRATION.get()) return;
@@ -40,7 +34,7 @@ public class ImmersiveMelodiesEvents {
         }
     }
 
-    private static void checkAndAddMusicSound(ServerPlayer player) {
+    static void checkAndAddMusicSound(ServerPlayer player) {
         ItemStack main = player.getItemInHand(InteractionHand.MAIN_HAND);
         ItemStack off = player.getItemInHand(InteractionHand.OFF_HAND);
 
@@ -51,18 +45,12 @@ public class ImmersiveMelodiesEvents {
         }
     }
 
-    private static boolean isInstrumentPlaying(ItemStack stack) {
-        if (stack.isEmpty()) return false;
-        
-        CompoundTag tag = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
-        return tag != null && tag.getBoolean(TAG_PLAYING);
+    static boolean isInstrumentPlaying(ItemStack stack) {
+        return !stack.isEmpty() && ImmersiveMelodiesComponents.isPlaying(stack);
     }
 
     private static void addMusicSound(ServerPlayer player, ItemStack stack) {
-        CompoundTag tag = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
-        if (tag == null || tag.isEmpty()) return;
-
-        String melodyId = tag.getString(TAG_MELODY);
+        String melodyId = ImmersiveMelodiesComponents.melodyId(stack);
         ResourceLocation instrumentId = BuiltInRegistries.ITEM.getKey(stack.getItem());
         if (instrumentId == null) return;
 

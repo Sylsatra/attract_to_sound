@@ -11,6 +11,7 @@ import com.example.soundattract.util.ArrowInvestigationHelper;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerWorldEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
@@ -28,6 +29,8 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import java.util.List;
 import java.util.Map;
@@ -45,10 +48,15 @@ public final class ArrowInvestigationEvents {
     private static final int MAX_TRACKED_ARROWS = 4096;
     private static final long MAX_ARROW_AGE_TICKS = 1200L;
 
-    public static final Map<Integer, ArrowState> ARROWS = new ConcurrentHashMap<>();
-    private static final Map<UUID, Long> COOLDOWNS = new ConcurrentHashMap<>();
+    public static final Map<ArrowKey, ArrowState> ARROWS = new ConcurrentHashMap<>();
+    private static final Cache<UUID, Long> COOLDOWNS = Caffeine.newBuilder()
+            .maximumSize(8192)
+            .expireAfterWrite(java.time.Duration.ofMinutes(10))
+            .build();
 
     public static final UUID DISPENSER_SENTINEL_UUID = UUID.fromString("00000000-0000-0000-0000-000000000001");
+
+    public record ArrowKey(ResourceLocation dimension, int entityId) {}
 
     public static void register() {
         ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
@@ -62,6 +70,8 @@ public final class ArrowInvestigationEvents {
         });
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> onServerStopping());
+
+        ServerWorldEvents.UNLOAD.register((server, level) -> onLevelUnload(level));
 
         ServerTickEvents.END_WORLD_TICK.register(level -> {
             if (level instanceof ServerLevel) {
@@ -93,25 +103,68 @@ public final class ArrowInvestigationEvents {
             shooterUuid = DISPENSER_SENTINEL_UUID;
             isMob = false;
         }
-        ARROWS.put(projectile.getId(), new ArrowState(projectile.position(), now, shooterUuid, isMob));
+        ARROWS.put(new ArrowKey(level.dimension().location(), projectile.getId()),
+                new ArrowState(projectile.position(), now, shooterUuid, isMob));
     }
 
     public static void onEntityLeave(Entity entity) {
-        if (entity != null) {
-            ARROWS.remove(entity.getId());
+        if (entity != null && entity.level() != null) {
+            ARROWS.remove(new ArrowKey(entity.level().dimension().location(), entity.getId()));
         }
+    }
+
+    public static void onLevelUnload(ServerLevel level) {
+        if (level == null) return;
+        ResourceLocation dimension = level.dimension().location();
+        ARROWS.keySet().removeIf(key -> key != null && dimension.equals(key.dimension()));
     }
 
     public static void onServerStopping() {
         ARROWS.clear();
-        COOLDOWNS.clear();
+        COOLDOWNS.invalidateAll();
     }
 
     public static void onServerTick(ServerLevel level) {
-        if (!SoundAttractConfig.COMMON.enableArrowInvestigation.get()) return;
-
         if (SoundAttractConfig.COMMON == null) return;
-        final double radius = SoundAttractConfig.COMMON.arrowNearMissRadius.get();
+        onServerTick(level, SoundAttractConfig.COMMON.enableArrowInvestigation.get(),
+                SoundAttractConfig.COMMON.arrowNearMissRadius.get(),
+                SoundAttractConfig.COMMON.arrowInvestigationRespectCurrentTarget.get(),
+                SoundAttractConfig.COMMON.arrowInvestigationOffset.get());
+    }
+
+    /** Runs the same production scan with explicit controls for deterministic GameTests. */
+    public static void onServerTickForTesting(ServerLevel level, double radius) {
+        onServerTick(level, true, radius, false, 0);
+    }
+
+    /** Clears one mob's dispatch cooldown before a deterministic GameTest scan. */
+    public static void clearInvestigationCooldownForTesting(UUID mobId) {
+        if (mobId != null) COOLDOWNS.invalidate(mobId);
+    }
+
+    /** Replays a prior projectile segment in a deterministic GameTest scan. */
+    public static void setPreviousPositionForTesting(ServerLevel level, int projectileId, Vec3 previousPosition) {
+        ArrowState state = getStateForTesting(level, projectileId);
+        if (state != null && previousPosition != null) state.prevPos = previousPosition;
+    }
+
+    public static boolean isTrackedForTesting(ServerLevel level, int projectileId) {
+        return getStateForTesting(level, projectileId) != null;
+    }
+
+    public static ArrowState getStateForTesting(ServerLevel level, int projectileId) {
+        if (level == null) return null;
+        return ARROWS.get(new ArrowKey(level.dimension().location(), projectileId));
+    }
+
+    /** Reads the production cooldown deadline for deterministic GameTest assertions. */
+    public static Long getInvestigationCooldownEndForTesting(UUID mobId) {
+        return mobId == null ? null : COOLDOWNS.getIfPresent(mobId);
+    }
+
+    private static void onServerTick(ServerLevel level, boolean enabled, double radius,
+                                     boolean respectCurrentTarget, int investigationOffset) {
+        if (!enabled || SoundAttractConfig.COMMON == null) return;
         final double radiusSq = radius * radius;
         final long now = level.getGameTime();
         final int checkInterval = 4;
@@ -119,9 +172,11 @@ public final class ArrowInvestigationEvents {
         ARROWS.entrySet().removeIf(entry -> {
             ArrowState state = entry.getValue();
             if (state == null) return true;
+            ArrowKey key = entry.getKey();
+            if (key == null || !level.dimension().location().equals(key.dimension())) return false;
             if (now - state.spawnTick > MAX_ARROW_AGE_TICKS) return true;
 
-            Entity e = level.getEntity(entry.getKey());
+            Entity e = level.getEntity(key.entityId());
             if (!(e instanceof Projectile projectile)) return false;
             if (projectile.level() != level) return false;
             if (!projectile.isAlive()) {
@@ -129,33 +184,39 @@ public final class ArrowInvestigationEvents {
             }
             Vec3 velocity = projectile.getDeltaMovement();
             double speedSqr = velocity.lengthSqr();
-            if (projectile instanceof AbstractArrow && speedSqr < 1.0e-4) {
-                return true;
-            }
+            boolean stopped = projectile instanceof AbstractArrow && speedSqr < 1.0e-4;
 
             Vec3 curr = projectile.position();
 
-            int arrowId = entry.getKey();
-            if ((arrowId + (int)now) % checkInterval != 0) {
-                state.prevPos = curr;
+
+            if (stopped && state.prevPos.distanceToSqr(curr) < 1.0e-8) return true;
+
+            int arrowId = key.entityId();
+            if (!stopped && (arrowId + (int)now) % checkInterval != 0) {
                 return false;
             }
 
-            double cullRadiusSq = (radius * 2) * (radius * 2);
+
+
+            double observerRadius = AwarenessServerEvents.alertScanRadius() + radius;
+            double cullRadiusSq = observerRadius * observerRadius;
             boolean anyPlayerNearby = false;
             for (var player : level.players()) {
-                if (player.isAlive() && curr.distanceToSqr(player.position()) <= cullRadiusSq) {
+                if (player.isAlive() && ArrowInvestigationHelper.segmentToPointSquaredDistance(
+                        state.prevPos, curr, player.position()) <= cullRadiusSq) {
                     anyPlayerNearby = true;
                     break;
                 }
             }
             if (!anyPlayerNearby && level.players().size() > 0) {
                 state.prevPos = curr;
-                return false;
+                return stopped;
             }
             AABB segmentAabb = new AABB(state.prevPos, curr).inflate(radius + 1.0);
 
-            List<Mob> mobs = level.getEntitiesOfClass(Mob.class, segmentAabb, m -> m.isAlive() && hasSoundPursuitGoal(m));
+            List<Mob> mobs = level.getEntitiesOfClass(Mob.class, segmentAabb, m -> m.isAlive()
+                    && !java.util.Objects.equals(m.getUUID(), state.shooterUuid)
+                    && hasSoundPursuitGoal(m));
             for (Mob mob : mobs) {
                 UUID mobId = mob.getUUID();
                 if (state.notifiedMobIds.contains(mobId)) continue;
@@ -167,7 +228,10 @@ public final class ArrowInvestigationEvents {
                 double d2 = ArrowInvestigationHelper.segmentToPointSquaredDistance(state.prevPos, curr, mobCenter);
                 if (d2 <= radiusSq) {
                     state.notifiedMobIds.add(mobId);
-                    dispatchInvestigation(level, projectile, state.spawnPos, mob, "arrow_miss");
+                    AwarenessServerEvents.recordNearMiss(mob);
+                    BlockPos investigationPos = dispatchInvestigation(level, projectile, state.spawnPos, mob,
+                            "arrow_miss", respectCurrentTarget, investigationOffset);
+                    if (investigationPos != null) state.lastInvestigationPos = investigationPos;
                 }
             }
 
@@ -198,15 +262,28 @@ public final class ArrowInvestigationEvents {
             }
 
             state.prevPos = curr;
-            return false;
+            return stopped;
         });
 
-        COOLDOWNS.entrySet().removeIf(e -> e.getValue() == null || e.getValue() < now);
     }
 
     public static void onProjectileImpact(Projectile projectile, HitResult hitResult, ServerLevel level) {
         if (SoundAttractConfig.COMMON == null) return;
-        if (!SoundAttractConfig.COMMON.enableArrowInvestigation.get()) return;
+        investigateProjectileImpact(projectile, hitResult, level,
+                SoundAttractConfig.COMMON.enableArrowInvestigation.get(),
+                SoundAttractConfig.COMMON.arrowInvestigationRespectCurrentTarget.get(),
+                SoundAttractConfig.COMMON.arrowInvestigationOffset.get());
+    }
+
+    /** Runs the production impact scan with deterministic policy controls for GameTests. */
+    public static void onProjectileImpactForTesting(Projectile projectile, HitResult hitResult, ServerLevel level) {
+        investigateProjectileImpact(projectile, hitResult, level, true, false, 0);
+    }
+
+    private static void investigateProjectileImpact(Projectile projectile, HitResult hitResult, ServerLevel level,
+                                                    boolean enabled, boolean respectCurrentTarget,
+                                                    int investigationOffset) {
+        if (!enabled) return;
         if (projectile == null) return;
         if (!isWatchedProjectile(projectile)) return;
 
@@ -218,31 +295,34 @@ public final class ArrowInvestigationEvents {
         double r = SoundAttractConfig.COMMON.arrowImpactRadius.get();
         AABB scan = AABB.ofSize(impact, 2 * r, 2 * r, 2 * r);
         List<Mob> mobs = level.getEntitiesOfClass(Mob.class, scan, m -> m.isAlive() && hasSoundPursuitGoal(m));
-        ArrowState state = ARROWS.get(projectile.getId());
+        ArrowState state = getStateForTesting(level, projectile.getId());
         Vec3 spawnPos = state != null ? state.spawnPos : projectile.position();
         for (Mob mob : mobs) {
-            dispatchInvestigation(level, projectile, spawnPos, mob, "arrow_impact");
+            BlockPos investigationPos = dispatchInvestigation(level, projectile, spawnPos, mob,
+                    "arrow_impact", respectCurrentTarget, investigationOffset);
+            if (state != null && investigationPos != null) state.lastInvestigationPos = investigationPos;
         }
     }
 
-    private static void dispatchInvestigation(ServerLevel level, Projectile projectile, Vec3 spawnPos, Mob mob, String kind) {
-        if (SoundAttractConfig.COMMON.arrowInvestigationRespectCurrentTarget.get()) {
-            if (mob.getTarget() != null) return;
+    private static BlockPos dispatchInvestigation(ServerLevel level, Projectile projectile, Vec3 spawnPos,
+                                                  Mob mob, String kind, boolean respectCurrentTarget,
+                                                  int investigationOffset) {
+        if (respectCurrentTarget) {
+            if (mob.getTarget() != null) return null;
             BlockPos existing = getMobSoundTargetPos(mob);
-            if (existing != null) return;
+            if (existing != null) return null;
         }
 
         long now = level.getGameTime();
-        Long cdEnd = COOLDOWNS.get(mob.getUUID());
-        if (cdEnd != null && cdEnd > now) return;
+        Long cdEnd = COOLDOWNS.getIfPresent(mob.getUUID());
+        if (cdEnd != null && cdEnd > now) return null;
         int cooldown = SoundAttractConfig.COMMON.arrowInvestigationCooldownTicks.get();
         COOLDOWNS.put(mob.getUUID(), now + cooldown);
 
         Vec3 origin = resolveOrigin(level, projectile, spawnPos);
-        int off = SoundAttractConfig.COMMON.arrowInvestigationOffset.get();
         ThreadLocalRandom rng = ThreadLocalRandom.current();
-        double tx = origin.x + ArrowInvestigationHelper.randomOffset(rng, off);
-        double tz = origin.z + ArrowInvestigationHelper.randomOffset(rng, off);
+        double tx = origin.x + ArrowInvestigationHelper.randomOffset(rng, investigationOffset);
+        double tz = origin.z + ArrowInvestigationHelper.randomOffset(rng, investigationOffset);
         int ty = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
                 (int) Math.floor(tx), (int) Math.floor(tz));
         BlockPos target = BlockPos.containing(tx, ty, tz);
@@ -267,7 +347,7 @@ public final class ArrowInvestigationEvents {
             SoundTracker.addVirtualSound(target, dimKey, range, weight, lifetime, sourcePlayer, "arrow_investigation");
         } catch (Throwable t) {
             Soundattract.LOGGER.error("[ArrowInvestigation] addVirtualSound failed", t);
-            return;
+            return null;
         }
 
         if (SoundAttractConfig.COMMON.debugLogging != null && SoundAttractConfig.COMMON.debugLogging.get()) {
@@ -276,6 +356,7 @@ public final class ArrowInvestigationEvents {
                     owner != null ? owner.getName().getString() : "unknown",
                     mob.getName().getString(), target, kind);
         }
+        return target;
     }
 
     private static boolean isWatchedProjectile(Projectile projectile) {
@@ -339,10 +420,15 @@ public final class ArrowInvestigationEvents {
     }
 
     public static final class ArrowState {
+        /** Start of the flight segment not yet scanned for near misses. */
         Vec3 prevPos;
+        /** Independent scent distance cursor; scent ticks must not consume the scan. */
+        Vec3 prevScentPos;
         public final Vec3 spawnPos;
         public final long spawnTick;
         public final Set<UUID> notifiedMobIds = ConcurrentHashMap.newKeySet();
+        /** Last origin investigate target accepted by dispatch, retained for diagnostics. */
+        public volatile BlockPos lastInvestigationPos;
 
         public UUID shooterUuid;
         public boolean isMobShooter = false;
@@ -351,6 +437,7 @@ public final class ArrowInvestigationEvents {
 
         public ArrowState(Vec3 spawn, long spawnTick, UUID shooter, boolean mobShooter) {
             this.prevPos = spawn;
+            this.prevScentPos = spawn;
             this.spawnPos = spawn;
             this.spawnTick = spawnTick;
             this.shooterUuid = shooter;

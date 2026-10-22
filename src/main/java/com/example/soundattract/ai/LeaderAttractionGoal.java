@@ -83,6 +83,7 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
 
     @Override
     public boolean canUse() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return false;
         if (this.mob.isVehicle() || this.mob.isSleeping()) {
             return false;
         }
@@ -146,6 +147,7 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
 
     @Override
     public boolean canContinueToUse() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return false;
         if (!isMobEligible() || this.mob.isVehicle() || this.mob.isSleeping()) {
             return false;
         }
@@ -217,6 +219,7 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
 
     @Override
     public void tick() {
+        if (LivingWallCoordinator.isControlled(this.mob)) return;
 
         if (RaidManager.isRaidAdvancing(this.mob)) {
             if (this.targetSoundPos == null) {
@@ -260,7 +263,7 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
             if (chosenDest != null) {
                 Vec3 cur = mob.position();
                 if (cur.distanceToSqr(chosenDest) > 1.5 * 1.5) {
-                    mob.getNavigation().moveTo(chosenDest.x, chosenDest.y, chosenDest.z, moveSpeed);
+                    com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, chosenDest, moveSpeed);
                 }
                 if (mob.getNavigation().isDone()) {
                     hasPicked = false;
@@ -395,7 +398,7 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
         if (chosenDest != null) {
             Vec3 cur = mob.position();
             if (cur.distanceToSqr(chosenDest) > 1.5 * 1.5) {
-                mob.getNavigation().moveTo(chosenDest.x, chosenDest.y, chosenDest.z, moveSpeed);
+                com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, chosenDest, moveSpeed);
             }
             if (mob.getNavigation().isDone()) {
                 hasPicked = false;

@@ -91,10 +91,7 @@ public class SoundAttractClientEvents {
         }
 
         SoundMessage msg = new SoundMessage(soundRL, x, y, z, dim, sourcePlayerUUID, actionName);
-        ClientPlayNetworking.send(msg);
-    }
-
-    public static void registerVoiceChatIntegration() {
+        SoundAttractNetwork.sendSoundToServer(msg);
     }
 
     public enum PlayerAction {

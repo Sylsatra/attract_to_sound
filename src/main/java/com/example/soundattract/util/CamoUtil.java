@@ -28,11 +28,16 @@ public final class CamoUtil {
     private CamoUtil() {}
 
     public static boolean hasCustomTag(ItemStack stack) {
-        return stack.has(DataComponents.CUSTOM_DATA);
+        return stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
     }
 
     public static CompoundTag getCustomTag(ItemStack stack) {
-        return stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
+        return stack.getOrDefault(net.minecraft.core.component.DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
+    }
+
+    /** Returns the component's backing tag for read-only access. Never mutate this tag. */
+    public static CompoundTag getCustomTagReadOnly(ItemStack stack) {
+        return stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).getUnsafe();
     }
 
     public static CompoundTag getOrCreateCustomTag(ItemStack stack) {
@@ -44,7 +49,7 @@ public final class CamoUtil {
     }
 
     public static void setCustomTag(ItemStack stack, CompoundTag tag) {
-        stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+        stack.set(net.minecraft.core.component.DataComponents.CUSTOM_DATA, CustomData.of(tag));
     }
 
     public static boolean isCamouflageArmorItem(Item item) {
@@ -101,7 +106,7 @@ public final class CamoUtil {
             if (slot.getType() == EquipmentSlot.Type.HUMANOID_ARMOR) {
                 ItemStack stack = entity.getItemBySlot(slot);
                 if (!stack.isEmpty() && hasCustomTag(stack)) {
-                    CompoundTag tag = getCustomTag(stack);
+                    CompoundTag tag = getCustomTagReadOnly(stack);
                     if (tag.contains("soundattract:CamoLayers", Tag.TAG_LIST)) {
                         ListTag list = tag.getList("soundattract:CamoLayers", Tag.TAG_COMPOUND);
                         for (int i = 0; i < list.size(); i++) {

@@ -4,9 +4,6 @@ import com.example.soundattract.camo.ArmorValidationTracker;
 import com.example.soundattract.camo.GenericMobCamoLayer;
 import com.example.soundattract.network.PacketCamoRemoval;
 import com.example.soundattract.network.SoundAttractNetwork;
-import net.minecraft.core.component.DataComponents;
-import net.minecraft.world.item.component.CustomData;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.entity.LivingEntityRenderer;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
@@ -33,20 +30,30 @@ public abstract class LivingEntityRendererRenderMixin<T extends LivingEntity, M 
             if (player != Minecraft.getInstance().player) return;
 
             for (EquipmentSlot slot : EquipmentSlot.values()) {
-                if (slot.getType() == EquipmentSlot.Type.HUMANOID_ARMOR) {
-                    ItemStack stack = player.getItemBySlot(slot);
-                    if (stack.isEmpty()) continue;
+                if (slot.getType() != EquipmentSlot.Type.HUMANOID_ARMOR) continue;
 
-                    CompoundTag tag = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
-                    if (tag != null && !tag.isEmpty() && (tag.contains("soundattract:CamoLayers") || tag.contains("soundattract:CamoStrength"))) {
-                        if (!ArmorValidationTracker.wasSlotValidated(player, slot)) {
-                            SoundAttractNetwork.sendCamoRemovalToServer(new PacketCamoRemoval(slot));
+                ItemStack stack = player.getItemBySlot(slot);
+                if (stack.isEmpty()) continue;
 
-                            tag.remove("soundattract:CamoLayers");
-                            tag.remove("soundattract:CamoStrength");
-                            tag.remove("soundattract:CamoColor");
-                            tag.remove("soundattract:CamoSeed");
-                        }
+                if (!stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) continue;
+
+                net.minecraft.nbt.CompoundTag tag = stack.getOrDefault(
+                        net.minecraft.core.component.DataComponents.CUSTOM_DATA,
+                        net.minecraft.world.item.component.CustomData.EMPTY).copyTag();
+                if (!tag.contains("soundattract:CamoLayers") && !tag.contains("soundattract:CamoStrength")) continue;
+
+                if (!ArmorValidationTracker.wasSlotValidated(player, slot)) {
+                    SoundAttractNetwork.sendCamoRemovalToServer(new PacketCamoRemoval(slot));
+
+                    tag.remove("soundattract:CamoLayers");
+                    tag.remove("soundattract:CamoStrength");
+                    tag.remove("soundattract:CamoColor");
+                    tag.remove("soundattract:CamoSeed");
+                    if (tag.isEmpty()) {
+                        stack.remove(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
+                    } else {
+                        stack.set(net.minecraft.core.component.DataComponents.CUSTOM_DATA,
+                                net.minecraft.world.item.component.CustomData.of(tag));
                     }
                 }
             }

@@ -1,0 +1,8 @@
+{
+  "defaults": {
+    "minecraft:entity.generic.explode": {
+      "range": 31.0,
+      "weight": 7.5
+    }
+  }
+}

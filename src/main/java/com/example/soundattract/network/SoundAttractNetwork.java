@@ -13,12 +13,16 @@ import net.minecraft.world.entity.LivingEntity;
 
 public class SoundAttractNetwork {
 
+    public static final ResourceLocation AWARENESS_SNAPSHOT_ID = ResourceLocation.fromNamespaceAndPath(Soundattract.MOD_ID, "awareness_snapshot");
+    public static final ResourceLocation FROM_THE_FOG_MARKER_ID = ResourceLocation.fromNamespaceAndPath(Soundattract.MOD_ID, "from_the_fog_marker");
     public static final ResourceLocation SOUND_MESSAGE_ID = ResourceLocation.fromNamespaceAndPath(Soundattract.MOD_ID, "sound_message");
 
     public static void register() {
         PayloadTypeRegistry.playC2S().register(SoundMessage.TYPE, SoundMessage.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(CamoSyncMessage.ID, CamoSyncMessage.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(PacketCamoRemoval.TYPE, PacketCamoRemoval.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(AwarenessSnapshotMessage.TYPE, AwarenessSnapshotMessage.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(FromTheFogEquipmentMarkerMessage.TYPE, FromTheFogEquipmentMarkerMessage.STREAM_CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(SoundMessage.TYPE, (msg, context) -> {
             context.player().getServer().execute(() -> SoundMessage.handle(msg, context.player()));
@@ -41,8 +45,25 @@ public class SoundAttractNetwork {
         }
     }
 
+    public static void sendAwarenessSnapshot(ServerPlayer player, AwarenessSnapshotMessage message) {
+        if (player != null && ServerPlayNetworking.canSend(player, AwarenessSnapshotMessage.TYPE)) {
+            ServerPlayNetworking.send(player, message);
+        }
+    }
+
+    public static void sendFromTheFogMarker(ServerPlayer player, FromTheFogEquipmentMarkerMessage message) {
+        if (player != null && ServerPlayNetworking.canSend(player, FromTheFogEquipmentMarkerMessage.TYPE)) {
+            ServerPlayNetworking.send(player, message);
+        }
+    }
+
     @Environment(EnvType.CLIENT)
     public static void sendCamoRemovalToServer(PacketCamoRemoval msg) {
         ClientPlayNetworking.send(msg);
+    }
+
+    @Environment(EnvType.CLIENT)
+    public static void sendSoundToServer(SoundMessage message) {
+        ClientPlayNetworking.send(message);
     }
 }
