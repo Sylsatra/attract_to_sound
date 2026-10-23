@@ -1132,7 +1132,19 @@ public final class SoundAttractGameTests {
         Zombie zombie = helper.spawn(EntityType.ZOMBIE, 16, 1, 16);
         SoundAttractConfig.COMMON.enableFleeFromUnseenAttackerGoal.set(previousFleeEnabled);
         ServerLevel level = helper.getLevel();
-        net.minecraft.server.level.ServerPlayer player = helper.makeMockServerPlayerInLevel();
+        net.minecraft.server.level.ServerPlayer player = new net.minecraft.server.level.ServerPlayer(
+                level.getServer(), level,
+                new com.mojang.authlib.GameProfile(UUID.randomUUID(), "flee-selector-gametest")) {
+            @Override
+            public boolean isCreative() {
+                return false;
+            }
+
+            @Override
+            public boolean isSpectator() {
+                return false;
+            }
+        };
         player.gameMode.changeGameModeForPlayer(net.minecraft.world.level.GameType.SURVIVAL);
         player.setPos(zombie.getX(), zombie.getY(), zombie.getZ() - 3.0);
         helper.runAfterDelay(3, () -> {
@@ -1151,15 +1163,36 @@ public final class SoundAttractGameTests {
             boolean previousTieredStealth = SoundAttractConfig.COMMON.enableTieredStealthPerformance.get();
             double previousStandingRange = SoundAttractConfig.COMMON.standingDetectionRangePlayer.get();
             double previousMaximumRange = SoundAttractConfig.COMMON.maxStealthDetectionRange.get();
+            double previousInvisibilityFactor = SoundAttractConfig.COMMON.invisibilityStealthFactor.get();
             boolean started;
             try {
                 SoundAttractConfig.COMMON.enableStealthMechanics.set(true);
                 SoundAttractConfig.COMMON.enableTieredStealthPerformance.set(false);
                 SoundAttractConfig.COMMON.standingDetectionRangePlayer.set(24.0);
                 SoundAttractConfig.COMMON.maxStealthDetectionRange.set(64.0);
+                SoundAttractConfig.COMMON.invisibilityStealthFactor.set(0.1);
                 zombie.setYRot(0.0F);
+                zombie.setYHeadRot(0.0F);
+                zombie.setYBodyRot(0.0F);
                 zombie.setXRot(0.0F);
-                player.setPos(zombie.getX(), zombie.getY(), zombie.getZ() - 3.0);
+                player.setPos(zombie.getX(), zombie.getY(), zombie.getZ() - 8.0);
+                player.getActiveEffectsMap().put(net.minecraft.world.effect.MobEffects.INVISIBILITY,
+                        new net.minecraft.world.effect.MobEffectInstance(
+                                net.minecraft.world.effect.MobEffects.INVISIBILITY, 200, 0, false, false));
+                boolean attackerHiddenAtStart = !com.example.soundattract.event.StealthDetectionEvents
+                        .canMobDetectPlayer(zombie, player);
+                if (!attackerHiddenAtStart) {
+                    helper.fail("Flee selector fixture did not hide its in-level invisible attacker: pos="
+                            + player.position() + ", mob=" + zombie.position() + ", distance="
+                            + zombie.distanceTo(player) + ", playerCreative=" + player.isCreative()
+                            + ", spectator=" + player.isSpectator() + ", alive=" + player.isAlive()
+                            + ", invisible=" + player.hasEffect(net.minecraft.world.effect.MobEffects.INVISIBILITY)
+                            + ", range=" + com.example.soundattract.event.StealthDetectionEvents
+                                    .getRealisticStealthDetectionRange(player, zombie, level)
+                            + ", inFov=" + com.example.soundattract.event.FovEvents.isTargetInFov(zombie, player, true)
+                            + ", bypass=" + SoundAttractConfig.isStealthBypassed(zombie));
+                    return;
+                }
                 zombie.setLastHurtByMob(player);
                 for (int attempt = 0; attempt < 40 && !flee.isRunning(); attempt++) {
                     selector.tick();
@@ -1168,7 +1201,11 @@ public final class SoundAttractGameTests {
                         && zombie.getNavigation().getPath().canReach();
                 // An unseen attacker remains a valid flee trigger after arrival, so expose
                 // the registered player before ending navigation to prevent an intentional replan.
+                player.getActiveEffectsMap().remove(net.minecraft.world.effect.MobEffects.INVISIBILITY);
                 player.setPos(zombie.getX(), zombie.getY(), zombie.getZ() + 3.0);
+                zombie.setYRot(0.0F);
+                zombie.setYHeadRot(0.0F);
+                zombie.setYBodyRot(0.0F);
                 boolean attackerNowVisible = com.example.soundattract.event.StealthDetectionEvents
                         .canMobDetectPlayer(zombie, player);
                 zombie.getNavigation().stop();
@@ -1184,6 +1221,7 @@ public final class SoundAttractGameTests {
                 SoundAttractConfig.COMMON.enableTieredStealthPerformance.set(previousTieredStealth);
                 SoundAttractConfig.COMMON.standingDetectionRangePlayer.set(previousStandingRange);
                 SoundAttractConfig.COMMON.maxStealthDetectionRange.set(previousMaximumRange);
+                SoundAttractConfig.COMMON.invisibilityStealthFactor.set(previousInvisibilityFactor);
                 level.removePlayerImmediately(player, net.minecraft.world.entity.Entity.RemovalReason.DISCARDED);
             }
             boolean stopped = !flee.isRunning() && zombie.getNavigation().isDone();
@@ -1202,6 +1240,7 @@ public final class SoundAttractGameTests {
         boolean previousStealthEnabled = SoundAttractConfig.COMMON.enableStealthMechanics.get();
         boolean previousTieredStealth = SoundAttractConfig.COMMON.enableTieredStealthPerformance.get();
         double previousStandingRange = SoundAttractConfig.COMMON.standingDetectionRangePlayer.get();
+        double previousMaximumRange = SoundAttractConfig.COMMON.maxStealthDetectionRange.get();
         zombie.setYRot(0.0F);
         zombie.setXRot(0.0F);
         player.setPos(zombie.getX(), zombie.getY(), zombie.getZ() - 3.0);
@@ -1222,6 +1261,7 @@ public final class SoundAttractGameTests {
             SoundAttractConfig.COMMON.enableStealthMechanics.set(true);
             SoundAttractConfig.COMMON.enableTieredStealthPerformance.set(false);
             SoundAttractConfig.COMMON.standingDetectionRangePlayer.set(24.0);
+            SoundAttractConfig.COMMON.maxStealthDetectionRange.set(64.0);
             zombie.setLastHurtByMob(player);
             attackerRetained = zombie.getLastHurtByMob() == player;
             unseenDetectable = com.example.soundattract.event.StealthDetectionEvents
@@ -1250,6 +1290,7 @@ public final class SoundAttractGameTests {
             SoundAttractConfig.COMMON.enableStealthMechanics.set(previousStealthEnabled);
             SoundAttractConfig.COMMON.enableTieredStealthPerformance.set(previousTieredStealth);
             SoundAttractConfig.COMMON.standingDetectionRangePlayer.set(previousStandingRange);
+            SoundAttractConfig.COMMON.maxStealthDetectionRange.set(previousMaximumRange);
         }
 
         if (!unseenPlayerAccepted || !fleePathInstalled || visiblePlayerAccepted || nonPlayerAccepted) {
@@ -4378,7 +4419,7 @@ public final class SoundAttractGameTests {
                         .noneMatch(record -> soundId.equals(record.soundId));
                 // Advance a real server tick after expiration so the goal's per-tick
                 // sound lookup cache cannot keep a stale same-tick result alive.
-                helper.runAfterDelay(1, () -> {
+                helper.runAfterDelay(7, () -> {
                     try {
                     selector.tick();
                     boolean stopped = !attraction.isRunning();

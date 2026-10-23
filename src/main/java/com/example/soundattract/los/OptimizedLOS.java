@@ -676,7 +676,10 @@ public final class OptimizedLOS {
             }
 
             if (state.isAir()) {
-                if (factorAir >= 1.0) continue;
+                if (factorAir >= 1.0) {
+                    if (x == endX && y == endY && z == endZ) break;
+                    continue;
+                }
                 currentRange  *= factorAir;
                 currentWeight *= factorAir;
                 blocksHit++;
