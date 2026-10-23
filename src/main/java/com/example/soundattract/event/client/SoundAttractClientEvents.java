@@ -10,9 +10,7 @@ import com.example.soundattract.Soundattract;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.network.SoundMessage;
 import com.example.soundattract.network.SoundAttractNetwork;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.resources.sounds.AbstractSoundInstance;
-import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.phys.Vec3;
 import java.util.Optional;
@@ -31,7 +29,7 @@ public class SoundAttractClientEvents {
         }
 
         Level clientWorld = Minecraft.getInstance().level;
-        Player clientPlayer = Minecraft.getInstance().player;
+        net.minecraft.client.player.LocalPlayer clientPlayer = Minecraft.getInstance().player;
         if (clientWorld == null || clientPlayer == null) {
             return;
         }

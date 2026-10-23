@@ -1,6 +1,8 @@
 package com.example.soundattract.mixin;
 
 import com.example.soundattract.client.AttractionClientEvents;
+import com.example.soundattract.event.client.SoundAttractClientEvents;
+import net.minecraft.client.resources.sounds.AbstractSoundInstance;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.client.sounds.SoundEngine;
 import net.fabricmc.api.EnvType;
@@ -17,5 +19,8 @@ public class SoundEngineMixin {
     @Inject(method = "play", at = @At("HEAD"))
     private void onPlay(SoundInstance soundInstance, CallbackInfo ci) {
         AttractionClientEvents.onPlaySound(soundInstance);
+        if (soundInstance instanceof AbstractSoundInstance abstractSoundInstance) {
+            SoundAttractClientEvents.onPlaySound(abstractSoundInstance);
+        }
     }
 }
