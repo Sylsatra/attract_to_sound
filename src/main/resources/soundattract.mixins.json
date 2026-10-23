@@ -1,0 +1,41 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.example.soundattract.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "com.example.soundattract.mixin.CustomNpcsMixinPlugin",
+  "mixins": [
+    "HurtByTargetGoalMixin",
+    "LivingEntityLosMixin",
+    "SensingMixin",
+    "CustomNpcsUpdateTasksMixin",
+    "ItemStackMixin",
+    "LivingEntityMixin",
+    "CustomNpcStealthTargetMixin",
+    "EntityMixin",
+    "LevelChunkMixin",
+    "WalkNodeEvaluatorMixin",
+    "LivingBridgePathNavigationMixin",
+    "SnowballMixin",
+    "ThrownPotionMixin",
+    "MobAccessor",
+    "EnchantmentConcealMixin",
+    "LootTableMixin",
+    "ProjectileMixin"
+  ],
+  "client": [
+    "HumanoidArmorLayerMixin",
+    "ItemInHandLayerMixin",
+    "SimpleTextureMixin",
+    "SimpleTextureTextureImageMixin",
+    "NativeImageAccessor",
+    "LivingEntityRendererRenderMixin",
+    "LivingEntityRendererCamoMixin",
+    "SoundEngineMixin",
+    "LivingEntityRenderStateMixin"
+  ],
+  "server": [],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

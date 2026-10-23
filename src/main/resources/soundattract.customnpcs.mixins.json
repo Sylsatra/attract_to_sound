@@ -1,0 +1,12 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "com.example.soundattract.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "CustomNpcsEntityNPCInterfaceMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

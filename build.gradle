@@ -1,0 +1,260 @@
+plugins {
+	id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
+	id 'maven-publish'
+}
+
+loom {
+	accessWidenerPath = file("src/main/resources/soundattract.accesswidener")
+	splitEnvironmentSourceSets()
+
+	mods {
+		"soundattract" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+version = project.mod_version
+group = project.maven_group
+
+def includeSpoiledRuntimeProfile = project.hasProperty('includeSpoiledRuntime')
+def includeSmartBrainLibRuntimeProfile = project.hasProperty('includeSmartBrainLibRuntime')
+def includePointblankRuntimeProfile = project.hasProperty('includePointblankRuntime')
+def includeGeckoLibRuntimeProfile = project.hasProperty('includeGeckoLibRuntime')
+def includeToughAsNailsRuntimeProfile = project.hasProperty('includeToughAsNailsRuntime')
+def includePlasmoVoiceRuntimeProfile = project.hasProperty('includePlasmoVoiceRuntime')
+def includeFromTheFogRuntimeProfile = project.hasProperty('includeFromTheFogRuntime')
+def includeTaczRuntimeProfile = project.hasProperty('includeTaczRuntime')
+def toughAsNailsJar = files('libs/ToughAsNails-fabric-1.21.11-21.11.0.4.jar')
+
+repositories {
+    maven {
+        name = 'Ladysnake Mods'
+        url = 'https://maven.ladysnake.org/releases'
+    }
+    maven {
+        name = "Fuzs Mod Resources"
+        url = "https://raw.githubusercontent.com/Fuzss/modresources/main/maven/"
+    }
+    maven {
+        name = "plasmoverse-releases"
+        url = "https://repo.plasmoverse.com/releases"
+    }
+    flatDir {
+        dirs 'libs'
+    }
+    maven {
+        name = 'GeckoLib'
+        url 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/'
+        content {
+                includeGroupByRegex("software\\.bernie.*")
+                includeGroup("com.eliotlash.mclib")
+        }
+    }
+
+    mavenCentral()
+    maven { url = "https://maven.fabricmc.net/" }
+    maven { url = "https://api.modrinth.com/maven" }
+    maven { url = "https://maven.maxhenkel.de/repository/public" }
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings loom.officialMojangMappings()
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    modCompileOnly "de.maxhenkel.voicechat:voicechat-api:${voicechat_api_version}"
+    modRuntimeOnly files("libs/voicechat-fabric-${project.voicechat_version}.jar")
+    modCompileOnly "su.plo.voice.api:server:2.1.17"
+    modCompileOnly "su.plo.voice.api:client:2.1.17"
+    modCompileOnly files('libs/pointblank-fabric-1.21.11-2.0.1.jar')
+    if (includePointblankRuntimeProfile) {
+        modRuntimeOnly files('libs/pointblank-fabric-1.21.11-2.0.1.jar')
+    }
+    modCompileOnly files('libs/geckolib-fabric-1.21.11-5.4.5.jar')
+    if (includeGeckoLibRuntimeProfile) {
+        modRuntimeOnly files('libs/geckolib-fabric-1.21.11-5.4.5.jar')
+    }
+	implementation("com.eliotlash.mclib:mclib:20")
+	modImplementation files('libs/ForgeConfigAPIPort-v21.11.1-mc1.21.11-Fabric.jar')
+	include implementation("com.electronwill.night-config:core:3.8.0")
+	include implementation("com.electronwill.night-config:toml:3.8.0")
+	modImplementation files('libs/architectury-19.0.1-fabric.jar')
+	def smartBrainLibJar = files('libs/SmartBrainLib-fabric-1.21.11-1.16.11.jar')
+	if (includeSmartBrainLibRuntimeProfile) {
+		modImplementation smartBrainLibJar
+	} else {
+		modCompileOnly smartBrainLibJar
+	}
+	def taczJar = files('libs/TACZ-Refabricated-1.21.11-1.1.8+fabric.1.21.11.R3-hotfix2.jar')
+	modCompileOnly taczJar
+	if (includeTaczRuntimeProfile) {
+		modRuntimeOnly taczJar
+		// Fabric Loader discovers TaCZ's nested libraries in a packaged game,
+		// but Loom's development launch does not add them to the dev classpath.
+		runtimeOnly files(fileTree('build/optional-profile/tacz/embedded') { include '*.jar' })
+	}
+	modCompileOnly toughAsNailsJar
+	if (includeToughAsNailsRuntimeProfile) {
+		modRuntimeOnly toughAsNailsJar
+		modRuntimeOnly files('libs/GlitchCore-fabric-1.21.11-21.11.0.4.jar')
+		runtimeOnly files(fileTree('build/optional-profile/tough-as-nails/embedded') { include '*.jar' })
+	}
+	modImplementation files('libs/quantified api-omni-2.2.3.jar')
+	if (includeFromTheFogRuntimeProfile) {
+		// This upstream Fabric jar intentionally has no root manifest; keep it on
+		// the dev runtime classpath without asking Loom's jar splitter to remap it.
+		runtimeOnly files('libs/From-The-Fog-Forge-Fabric-1.21.11-v1.11.3.jar')
+	}
+	if (includePlasmoVoiceRuntimeProfile) {
+		modRuntimeOnly files('libs/plasmovoice-fabric-1.21.11-2.1.17.jar')
+	}
+	include implementation('com.github.ben-manes.caffeine:caffeine:3.1.8')
+	if (includeSpoiledRuntimeProfile) {
+		modRuntimeOnly files('libs/Spoiled-fabric-1.21.11-11.0.0.jar')
+		modRuntimeOnly files('libs/cloth-config-21.11.153-fabric.jar')
+	}
+	testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+
+	modImplementation "org.ladysnake.cardinal-components-api:cardinal-components-base:${project.cca_version}"
+	modImplementation "org.ladysnake.cardinal-components-api:cardinal-components-entity:${project.cca_version}"
+	modImplementation "org.ladysnake.cardinal-components-api:cardinal-components-world:${project.cca_version}"
+	include "org.ladysnake.cardinal-components-api:cardinal-components-base:${project.cca_version}"
+	include "org.ladysnake.cardinal-components-api:cardinal-components-entity:${project.cca_version}"
+	include "org.ladysnake.cardinal-components-api:cardinal-components-world:${project.cca_version}"
+}
+
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = "soundattract-gametest"
+		enableGameTests = true
+		enableClientGameTests = true
+		eula = true
+	}
+}
+
+// Tough As Nails nests Night Config 3.6.7, but this project already supplies
+// Night Config 3.8.0. Only typetools is needed from the nested library set.
+def extractToughAsNailsTypetools = tasks.register('extractToughAsNailsTypetools', Sync) {
+	onlyIf { includeToughAsNailsRuntimeProfile }
+	from(zipTree(file('libs/ToughAsNails-fabric-1.21.11-21.11.0.4.jar'))) {
+		include 'META-INF/jars/typetools-0.6.3.jar'
+		eachFile { details -> details.path = details.name }
+		includeEmptyDirs = false
+	}
+	into layout.buildDirectory.dir('optional-profile/tough-as-nails/embedded')
+}
+
+def extractTaczRuntimeLibraries = tasks.register('extractTaczRuntimeLibraries', Sync) {
+	onlyIf { includeTaczRuntimeProfile }
+	from(zipTree(file('libs/TACZ-Refabricated-1.21.11-1.1.8+fabric.1.21.11.R3-hotfix2.jar'))) {
+		include 'META-INF/jars/*.jar'
+		eachFile { details -> details.path = details.name }
+		includeEmptyDirs = false
+	}
+	into layout.buildDirectory.dir('optional-profile/tacz/embedded')
+}
+
+if (includeTaczRuntimeProfile) {
+	tasks.matching { task -> task.name.toLowerCase().contains('gametest') }.configureEach {
+		dependsOn extractTaczRuntimeLibraries
+	}
+}
+
+if (includeToughAsNailsRuntimeProfile) {
+	tasks.matching { task -> task.name.toLowerCase().contains('gametest') }.configureEach {
+		dependsOn extractToughAsNailsTypetools
+	}
+}
+
+tasks.named('processGametestResources', ProcessResources).configure {
+	def includeSmartBrainLibTests = includeSmartBrainLibRuntimeProfile
+	def includeSpoiledTests = includeSpoiledRuntimeProfile
+	def gameTestOnlyEntrypoint = project.findProperty('gameTestOnlyEntrypoint')
+	inputs.property('includeSmartBrainLibTests', includeSmartBrainLibTests)
+	inputs.property('includeSpoiledTests', includeSpoiledTests)
+	inputs.property('gameTestOnlyEntrypoint', gameTestOnlyEntrypoint ?: '')
+	def testEntrypoints = [
+		'com.example.soundattract.gametest.SoundAttractGameTests',
+		'com.example.soundattract.event.AwarenessServerGameTests',
+		'com.example.soundattract.tracking.SoundTrackerGameTests',
+		'com.example.soundattract.ai.MobGroupGameTests',
+		'com.example.soundattract.scents.ScentBiomeGameTests',
+		'com.example.soundattract.raid.RaidReinforcementGameTests',
+		'com.example.soundattract.raid.RaidDimensionGameTests'
+	]
+	if (includeSmartBrainLibTests) testEntrypoints.add('com.example.soundattract.gametest.SmartBrainLibGameTests')
+	if (includeSpoiledTests) testEntrypoints.add('com.example.soundattract.integration.spoiled.SpoiledScentGameTests')
+	if (gameTestOnlyEntrypoint) {
+		testEntrypoints = gameTestOnlyEntrypoint.toString().split(',').collect { it.trim() }.findAll { !it.isEmpty() }
+	}
+	filesMatching('fabric.mod.json') {
+		expand([gameTestEntrypoints: testEntrypoints.collect { '"' + it + '"' }.join(',\n      ')])
+	}
+}
+
+test {
+	useJUnitPlatform()
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 21
+}
+
+java {
+	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
+	// if it is present.
+	// If you remove this line, sources will not be generated.
+	withSourcesJar()
+
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
+}
+
+jar {
+	def projectName = project.name
+	inputs.property "projectName", projectName
+
+	from("LICENSE") {
+		rename { "${it}_$projectName"}
+	}
+}
+
+// configure the maven publication
+publishing {
+	publications {
+		create("mavenJava", MavenPublication) {
+			from components.java
+		}
+	}
+
+	// See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
+	repositories {
+		// Add repositories to publish to here.
+		// Notice: This block does NOT have the same function as the block in the top level.
+		// The repositories here will be used for publishing your artifact, not for
+		// retrieving dependencies.
+	}
+}
+
+
+
+
+

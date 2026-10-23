@@ -1,0 +1,17 @@
+{
+  "detection_overrides": {
+    "sneaking": 0.12
+  },
+  "scent_emission": {
+    "enabled": false,
+    "scent_strength_multiplier": 0.4,
+    "creation_interval_blocks": 3.0,
+    "show_scent_particles": false,
+    "scent_particle_color": "#335577"
+  },
+  "scent_visibility": {
+    "showPlayerWalk": false,
+    "showArrowScent": true,
+    "showWindScent": true
+  }
+}
