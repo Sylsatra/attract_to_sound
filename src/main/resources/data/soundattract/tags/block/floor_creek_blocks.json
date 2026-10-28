@@ -1,0 +1,8 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "#minecraft:planks", "required": false },
+    { "id": "#minecraft:wooden_slabs", "required": false },
+    { "id": "#minecraft:wooden_stairs", "required": false }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "wooden_floor_creek": {
+    "category": "block",
+    "subtitle": "subtitles.soundattract.wooden_floor_creek",
+    "sounds": [
+      "soundattract:floor/wooden_floor_creek_1",
+      "soundattract:floor/wooden_floor_creek_2",
+      "soundattract:floor/wooden_floor_creek_3",
+      "soundattract:floor/wooden_floor_creek_4"
+    ]
+  },
+  "arrow_miss": {
+    "category": "neutral",
+    "subtitle": "subtitles.soundattract.arrow_miss",
+    "sounds": [
+      "soundattract:arrow_miss"
+    ]
+  }
+}

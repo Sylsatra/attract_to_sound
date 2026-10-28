@@ -1,0 +1,66 @@
+{
+	"schemaVersion": 1,
+	"id": "soundattract",
+	"version": "${version}",
+	"name": "Sound Attract",
+	"description": "Sound-based mob attraction and stealth system for Minecraft",
+	"authors": [
+		"Sylsatra"
+	],
+	"contact": {
+		"homepage": "https://www.curseforge.com/minecraft/mc-mods/attract-to-sound",
+		"sources": "https://github.com/Sylsatra/attract_to_sound"
+	},
+	"license": "GPL-3.0",
+	"icon": "assets/soundattract/icon.png",
+	"accessWidener": "soundattract.accesswidener",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.example.soundattract.Soundattract"
+		],
+		"client": [
+			"com.example.soundattract.SoundAttractClient"
+		],
+		"cardinal-components-entity": [
+			"com.example.soundattract.component.EntityComponents"
+		],
+		"voicechat": [
+			"com.example.soundattract.integration.voicechat.SoundAttractVoiceChatPlugin"
+		]
+	},
+	"mixins": [
+		"soundattract.mixins.json",
+		"soundattract.mixins.gecko.json"
+	],
+	"jars": [
+		{ "file": "META-INF/jars/cardinal-components-api-8.0.1.jar" },
+		{ "file": "META-INF/jars/architectury-fabric-21.1.12.jar" }
+	],
+	"custom": {
+		"cardinal-components": [
+			"soundattract:camouflage",
+			"soundattract:living_bridge_data"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "26.2",
+		"java": ">=25",
+		"fabric-api": ">=0.161.0+26.2",
+		"forgeconfigapiport": ">=26.2.1",
+		"architectury": ">=21.1.12",
+		"cardinal-components": ">=8.0.1",
+		"quantified": ">=2.2.2"
+	},
+	"suggests": {
+		"geckolib": "5.5.5",
+		"smartbrainlib": "2.0.3",
+		"voicechat": "2.6.25+26.2",
+		"plasmovoice": "2.1.17",
+		"toughasnails": "21.11.0.8",
+		"watching": "1.11.3",
+		"tacz": "1.1.8+fabric.26.2.R3-hotfix",
+		"immersive_melodies": "0.8.2+26.2"
+	}
+}

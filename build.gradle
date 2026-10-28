@@ -1,0 +1,169 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+	id 'maven-publish'
+}
+
+version = project.mod_version
+
+def optionalRuntime = { name -> project.hasProperty("include${name}Runtime") }
+def geckoRuntime = optionalRuntime('GeckoLib')
+def smartBrainLibRuntime = optionalRuntime('SmartBrainLib')
+def voiceChatRuntime = optionalRuntime('VoiceChat')
+def plasmoVoiceRuntime = optionalRuntime('PlasmoVoice')
+def toughAsNailsRuntime = optionalRuntime('ToughAsNails')
+def fromTheFogRuntime = optionalRuntime('FromTheFog')
+def taczRuntime = optionalRuntime('Tacz')
+def immersiveMelodiesRuntime = optionalRuntime('ImmersiveMelodies')
+
+loom {
+	accessWidenerPath = file('src/main/resources/soundattract.accesswidener')
+	splitEnvironmentSourceSets()
+
+	mods {
+		"soundattract" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+repositories {
+	maven { url = 'https://repo.plasmoverse.com/releases' }
+	mavenCentral()
+}
+
+fabricApi {
+	configureDataGeneration {
+		client = true
+		modId = 'soundattract'
+	}
+	configureTests {
+		createSourceSet = true
+		modId = 'soundattract-gametest'
+		enableGameTests = true
+		enableClientGameTests = true
+		eula = true
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// Required runtime mods: these are also copied into mods/ for local GameTest launches.
+	implementation files('libs/ForgeConfigAPIPort-v26.2.1-mc26.2.x-Fabric.jar')
+	implementation files('libs/architectury-fabric-21.1.12.jar')
+	implementation files('libs/cardinal-components-api-8.0.1.jar')
+	// CCA 8's modules are separate artifacts and are needed on the compile classpath.
+	implementation fileTree(dir: 'libs/cca', include: ['*.jar'])
+	implementation files('libs/quantified api-omni-2.2.2.jar')
+
+	// APIs are compile-only so optional integrations remain safe when their mods are absent.
+	compileOnly files('libs/geckolib-fabric-26.2-5.5.5.jar')
+	compileOnly files('libs/smartbrainlib-fabric-26.2-2.0.3.jar')
+	compileOnly 'org.jetbrains.kotlin:kotlin-stdlib:2.2.0'
+	compileOnly files('libs/voicechat-fabric-2.6.25+26.2.jar')
+	compileOnly files('libs/TACZ-Refabricated-26.2-1.1.8+fabric.26.2.R3-hotfix.jar')
+	compileOnly files('libs/ToughAsNails-fabric-26.2-21.11.0.8.jar')
+	compileOnly files('libs/GlitchCore-fabric-26.2-26.2.0.0.0.jar')
+	compileOnly 'su.plo.voice.api:server:2.1.17'
+	compileOnly 'su.plo.voice.api:client:2.1.17'
+
+	if (geckoRuntime) runtimeOnly files('libs/geckolib-fabric-26.2-5.5.5.jar')
+	if (smartBrainLibRuntime) runtimeOnly files('libs/smartbrainlib-fabric-26.2-2.0.3.jar')
+	if (voiceChatRuntime) runtimeOnly files('libs/voicechat-fabric-2.6.25+26.2.jar')
+	if (plasmoVoiceRuntime) runtimeOnly files('libs/plasmovoice-fabric-26.2-2.1.17.jar')
+	if (toughAsNailsRuntime) {
+		runtimeOnly files('libs/ToughAsNails-fabric-26.2-21.11.0.8.jar')
+		runtimeOnly files('libs/GlitchCore-fabric-26.2-26.2.0.0.0.jar')
+	}
+	if (fromTheFogRuntime) runtimeOnly files('libs/From-The-Fog-Forge-Fabric-26.2-v1.11.3.jar')
+	if (taczRuntime) runtimeOnly files('libs/TACZ-Refabricated-26.2-1.1.8+fabric.26.2.R3-hotfix.jar')
+	if (immersiveMelodiesRuntime) runtimeOnly files('libs/immersive_melodies-fabric-0.8.2+26.2.jar')
+
+	include implementation('com.electronwill.night-config:core:3.8.0')
+	include implementation('com.electronwill.night-config:toml:3.8.0')
+	include implementation('com.github.ben-manes.caffeine:caffeine:3.1.8')
+
+	testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+}
+
+tasks.named('processGametestResources', ProcessResources).configure {
+	def testEntrypoints = [
+		'com.example.soundattract.gametest.SoundAttractGameTests',
+		'com.example.soundattract.gametest.LivingWallAdmissionGameTests',
+		'com.example.soundattract.ai.BridgeHazardRegressionGameTests',
+		'com.example.soundattract.event.AwarenessServerGameTests',
+		'com.example.soundattract.event.OverheadAlertGameTests',
+		'com.example.soundattract.tracking.SoundTrackerGameTests',
+		'com.example.soundattract.ai.MobGroupGameTests',
+		'com.example.soundattract.scents.ScentBiomeGameTests',
+		'com.example.soundattract.raid.RaidReinforcementGameTests',
+		'com.example.soundattract.raid.RaidDimensionGameTests',
+	]
+	if (immersiveMelodiesRuntime) testEntrypoints.add('com.example.soundattract.integration.immersive_melodies.ImmersiveMelodiesGameTests')
+	if (taczRuntime) testEntrypoints.add('com.example.soundattract.integration.tacz.TaczIntegrationGameTests')
+	if (smartBrainLibRuntime) testEntrypoints.add('com.example.soundattract.gametest.SmartBrainLibGameTests')
+	def gameTestOnlyEntrypoint = project.findProperty('gameTestOnlyEntrypoint')
+	if (gameTestOnlyEntrypoint) {
+		testEntrypoints = gameTestOnlyEntrypoint.toString().split(',').collect { it.trim() }.findAll { !it.isEmpty() }
+	}
+	inputs.property('gameTestEntrypoints', testEntrypoints)
+	filesMatching('fabric.mod.json') {
+		expand([gameTestEntrypoints: testEntrypoints.collect { '"' + it + '"' }.join(',\n      ')])
+	}
+}
+
+processResources {
+	inputs.property('version', project.version)
+	from('libs/cardinal-components-api-8.0.1.jar') {
+		into('META-INF/jars')
+	}
+	from('mods/architectury-fabric-21.1.12.jar') {
+		into('META-INF/jars')
+	}
+	from('libs/sources/architectury-26.2-source.zip') {
+		into('META-INF/sources')
+		rename { 'architectury-api-26.2-source.zip' }
+	}
+	filesMatching('fabric.mod.json') {
+		expand('version': project.version)
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.release = 25
+}
+
+java {
+	toolchain.languageVersion = JavaLanguageVersion.of(25)
+	withSourcesJar()
+}
+
+test {
+	useJUnitPlatform()
+}
+
+tasks.matching { it.name == 'runClientGameTest' }.configureEach {
+	if (project.hasProperty('soundattractTextureProbe')) {
+		systemProperty 'soundattract.textureProbe', 'true'
+		systemProperty 'soundattract.textureProbeOutput', layout.buildDirectory.dir('texture-probe').get().asFile.absolutePath
+	}
+}
+
+jar {
+	inputs.property('projectName', project.name)
+	from('LICENSE') {
+		rename { "${it}_${project.name}" }
+	}
+}
+
+publishing {
+	publications {
+		create('mavenJava', MavenPublication) {
+			from components.java
+		}
+	}
+}
