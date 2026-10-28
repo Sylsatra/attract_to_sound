@@ -1,0 +1,14 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "com.example.soundattract.mixin",
+  "plugin": "com.example.soundattract.mixin.TaczNpcsMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "TaczNpcsAbstractScavEntityMixin",
+    "tacznpcs.TaczShootAttackMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

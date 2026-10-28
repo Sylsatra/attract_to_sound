@@ -19,16 +19,9 @@
         {
           "condition": "neoforge:loot_table_id",
           "loot_table_id": "minecraft:chests/nether_bridge"
-        },
-        {
-          "condition": "neoforge:loot_table_id",
-          "loot_table_id": "minecraft:vaults/trial_chamber/reward"
-        },
-        {
-          "condition": "neoforge:loot_table_id",
-          "loot_table_id": "minecraft:vaults/trial_chamber/reward_ominous"
         }
       ]
     }
-  ]
+  ],
+  "enchantment": "soundattract:conceal"
 }

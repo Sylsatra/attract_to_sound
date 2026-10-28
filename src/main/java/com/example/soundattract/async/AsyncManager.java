@@ -11,7 +11,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import net.minecraft.server.MinecraftServer;
@@ -31,9 +30,6 @@ public final class AsyncManager {
     }
 
     private static final Queue<Runnable> MAIN_THREAD_QUEUE = new ConcurrentLinkedQueue<>();
-    private static final AtomicBoolean DRAIN_SCHEDULED = new AtomicBoolean(false);
-    private static volatile MinecraftServer serverRef;
-
     private static final ExecutorService FALLBACK_EXECUTOR = Executors.newFixedThreadPool(
         Math.max(2, Integer.getInteger("soundattract.async.fallbackThreads",
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2))),
@@ -107,10 +103,6 @@ public final class AsyncManager {
     public static void syncToMain(Runnable action) {
         if (action == null) return;
         MAIN_THREAD_QUEUE.add(action);
-        MinecraftServer server = serverRef;
-        if (server != null) {
-            scheduleBudgetedDrain(server);
-        }
     }
 
     public static <T> CompletableFuture<T> callOnMain(Supplier<T> supplier) {
@@ -127,25 +119,8 @@ public final class AsyncManager {
 
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Post event) {
-        serverRef = event.getServer();
         if (MAIN_THREAD_QUEUE.isEmpty()) return;
         drainBudgeted(event.getServer());
-    }
-
-    private static void scheduleBudgetedDrain(MinecraftServer server) {
-        if (server == null) return;
-        if (!DRAIN_SCHEDULED.compareAndSet(false, true)) return;
-        try {
-            server.execute(() -> {
-                DRAIN_SCHEDULED.set(false);
-                drainBudgeted(server);
-                if (!MAIN_THREAD_QUEUE.isEmpty()) {
-                    scheduleBudgetedDrain(server);
-                }
-            });
-        } catch (Throwable ignored) {
-            DRAIN_SCHEDULED.set(false);
-        }
     }
 
     private static void drainBudgeted(MinecraftServer server) {

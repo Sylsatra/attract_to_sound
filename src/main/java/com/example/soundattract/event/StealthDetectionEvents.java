@@ -752,6 +752,12 @@ public class StealthDetectionEvents {
         return canMobDetectLivingEntity(mob, player);
     }
 
+    public static boolean canMobDetectPlayerWithRange(Mob mob, Player player, double detectionRange) {
+        return mob != null && player != null && player.isAlive() && detectionRange >= 0.0D
+                && mob.distanceToSqr(player) <= detectionRange * detectionRange
+                && canMobDetectPlayer(mob, player);
+    }
+
     private static boolean canMobDetectTargetNoEdgeSuppression(Mob mob, LivingEntity target) {
         if (mob == null || target == null) {
             return true;

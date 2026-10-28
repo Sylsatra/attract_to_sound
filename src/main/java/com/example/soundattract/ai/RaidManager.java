@@ -86,6 +86,7 @@ public class RaidManager {
         if (raid != null) {
             clearPersistence(level, raid);
         }
+        LivingWallCoordinator.clearRaid(leader);
         if (SoundAttractConfig.COMMON.debugLogging.get()) {
             SoundAttractMod.LOGGER.info("[RaidManager] Cleared RAID for leader {}", leader.getName().getString());
         }
@@ -118,7 +119,11 @@ public class RaidManager {
         Raid r = d.leaderToRaid.get(leader);
         if (r == null) return null;
         if (!r.isValid()) {
-            d.leaderToRaid.remove(leader);
+            if (d.leaderToRaid.remove(leader, r)) {
+                clearPersistence(level, r);
+                com.example.soundattract.raid.RaidReinforcementManager.clearState(leader);
+                LivingWallCoordinator.clearRaid(leader);
+            }
             return null;
         }
         return r;
@@ -136,17 +141,21 @@ public class RaidManager {
         long now = level.getGameTime();
 
         if (d.lastCleanupTime == -1L || now - d.lastCleanupTime > 200) {
-            d.leaderToRaid.entrySet().removeIf(e -> {
-                Mob leader = e.getKey();
-                Raid raid = e.getValue();
-                if (leader == null || leader.isRemoved() || !leader.isAlive() || raid == null || !raid.isValid()) {
-                   if (raid != null) {
-                       clearPersistence(level, raid);
-                   }
-                   return true;
-                }
-                return false;
-            });
+            synchronized (d.leaderToRaid) {
+                d.leaderToRaid.entrySet().removeIf(e -> {
+                    Mob leader = e.getKey();
+                    Raid raid = e.getValue();
+                    if (leader == null || leader.isRemoved() || !leader.isAlive() || raid == null || !raid.isValid()) {
+                        if (raid != null) {
+                            clearPersistence(level, raid);
+                        }
+                        com.example.soundattract.raid.RaidReinforcementManager.clearState(leader);
+                        LivingWallCoordinator.clearRaid(leader);
+                        return true;
+                    }
+                    return false;
+                });
+            }
             d.lastCleanupTime = now;
         }
         synchronized (d.leaderToRaid) {
@@ -158,6 +167,8 @@ public class RaidManager {
                     if (raid != null) {
                         clearPersistence(level, raid);
                     }
+                    com.example.soundattract.raid.RaidReinforcementManager.clearState(leader);
+                    LivingWallCoordinator.clearRaid(leader);
                     it.remove();
                     continue;
                 }
@@ -178,6 +189,17 @@ public class RaidManager {
                                     leader.getName().getString(), raid.target);
                         }
                     }
+                }
+            }
+        }
+        LivingWallCoordinator.tick(level);
+        synchronized (d.leaderToRaid) {
+            for (Iterator<Map.Entry<Mob, Raid>> it = d.leaderToRaid.entrySet().iterator(); it.hasNext(); ) {
+                Map.Entry<Mob, Raid> entry = it.next();
+                Mob leader = entry.getKey();
+                Raid raid = entry.getValue();
+                if (leader != null && raid != null && raid.advancing) {
+                    LivingWallCoordinator.prepareRaid(leader, raid.target, level.getGameTime());
                 }
             }
         }

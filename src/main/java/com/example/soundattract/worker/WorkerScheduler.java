@@ -110,19 +110,21 @@ public final class WorkerScheduler {
         public final double mobX, mobY, mobZ;
         public final long gameTime;
         public final String currentTargetSoundId; 
+        public final String dimensionKey;
         public final List<SoundCandidate> candidates;
         public final double switchRatio;
         public final double noveltyBonus;
         public final int noveltyTicks;
 
         public SoundScoreRequest(UUID mobUuid, double mobX, double mobY, double mobZ,
-                                 long gameTime, String currentTargetSoundId,
+                                 long gameTime, String currentTargetSoundId, String dimensionKey,
                                  List<SoundCandidate> candidates,
                                  double switchRatio, double noveltyBonus, int noveltyTicks) {
             this.mobUuid = mobUuid;
             this.mobX = mobX; this.mobY = mobY; this.mobZ = mobZ;
             this.gameTime = gameTime;
             this.currentTargetSoundId = currentTargetSoundId;
+            this.dimensionKey = dimensionKey;
             this.candidates = candidates == null ? Collections.emptyList() : candidates;
             this.switchRatio = switchRatio;
             this.noveltyBonus = noveltyBonus;
@@ -149,5 +151,5 @@ public final class WorkerScheduler {
         }
     }
 
-    public record SoundScoreResult(UUID mobUuid, String soundId, double score) {}
+    public record SoundScoreResult(UUID mobUuid, String soundId, double score, String dimensionKey) {}
 }

@@ -29,6 +29,7 @@ import com.example.soundattract.integration.pointblank.PointBlankIntegration;
 import com.example.soundattract.integration.spore.BiomassSoundHandler;
 import com.example.soundattract.loot.ModLootModifiers;
 import com.example.soundattract.network.SoundAttractNetwork;
+import com.example.soundattract.registration.ModParticles;
 import com.example.soundattract.worker.WorkSchedulerManager;
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
@@ -52,6 +53,7 @@ public class SoundAttractMod {
     public SoundAttractMod(IEventBus modEventBus, ModContainer container) {
         ModLootModifiers.register(modEventBus);
         com.example.soundattract.registration.ModSounds.register(modEventBus);
+        ModParticles.register(modEventBus);
         CamoAttachments.register(modEventBus);
 
         modEventBus.addListener(this::onCommonSetup);

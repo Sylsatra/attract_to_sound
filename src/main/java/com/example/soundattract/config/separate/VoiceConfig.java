@@ -37,7 +37,7 @@ public class VoiceConfig {
                 "[DEPRECATED as of 6.3.4] Moved to soundattract/server-rules.toml (SERVER config).",
                 "The value here is no longer read at runtime; kept only so existing config files do not error."
         ).defineList("voiceChatDbThresholdMap", java.util.Arrays.asList("110:2.0", "90:1.8", "75:1.5", "50:1.0", "30:0.7", "10:0.3", "0:0.05"), obj -> obj instanceof String && ((String) obj).contains(":"));
-        
+
         BUILDER.pop();
         BUILDER.pop();
 

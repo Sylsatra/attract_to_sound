@@ -6,6 +6,10 @@ import java.util.Random;
 
 public final class ArrowInvestigationHelper {
 
+    public static boolean shouldScanProjectileSegment(boolean playerNearby, boolean eligibleMobNearby) {
+        return playerNearby || eligibleMobNearby;
+    }
+
     public static double segmentToPointSquaredDistance(Vec3 a, Vec3 b, Vec3 p) {
         double abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
         double lenSq = abx * abx + aby * aby + abz * abz;

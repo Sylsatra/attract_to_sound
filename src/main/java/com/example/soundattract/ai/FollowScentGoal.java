@@ -38,6 +38,9 @@ public class FollowScentGoal extends Goal {
     private static long lastScanTick = -1;
     private static int scansThisTick = 0;
 
+    public boolean isFollowingScent() { return targetPos != null; }
+    public Vec3 getTargetPosition() { return targetPos; }
+
     public FollowScentGoal(PathfinderMob mob) {
         this.mob = mob;
         this.scentManager = ScentManager.get(mob.level()).orElse(null);
@@ -325,7 +328,7 @@ public class FollowScentGoal extends Goal {
     private static double getSourceTypeWeightMultiplier(ScentSourceType type) {
         if (type == null) return 1.0;
         return switch (type) {
-            case PLAYER_WALK -> 1.0;
+            case PLAYER_WALK, PLAYER_WIND -> 1.0;
             case ARROW_PATH, ARROW_ORIGIN -> 0.8;
             case MOB_PROJECTILE_PATH, MOB_PROJECTILE_ORIGIN -> 0.6;
         };

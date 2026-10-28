@@ -4,6 +4,7 @@ import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.ai.AttractionGoal;
 import com.example.soundattract.ai.LeaderAttractionGoal;
 import com.example.soundattract.ai.FollowerEdgeRelayGoal;
+import com.example.soundattract.config.DebugLoggingConfig;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.tracking.SoundTracker;
 import com.example.soundattract.util.ArrowInvestigationHelper;
@@ -78,6 +79,11 @@ public final class ArrowInvestigationEvents {
             isMob = false;
         }
         ARROWS.put(projectile.getId(), new ArrowState(projectile.position(), now, shooterUuid, isMob));
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.ARROW_INVESTIGATION)) {
+            SoundAttractMod.LOGGER.info("[ArrowInvestigation] Tracking projectile: id={}, type={}, dimension={}",
+                    projectile.getId(), net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(projectile.getType()),
+                    projectile.level().dimension().location());
+        }
     }
 
     @SubscribeEvent
@@ -126,7 +132,8 @@ public final class ArrowInvestigationEvents {
 
             int arrowId = entry.getKey();
             if ((arrowId + (int)now) % checkInterval != 0) {
-                state.prevPos = curr;
+
+
                 return false;
             }
 
@@ -138,13 +145,12 @@ public final class ArrowInvestigationEvents {
                     break;
                 }
             }
-            if (!anyPlayerNearby && level.players().size() > 0) {
+            AABB segmentAabb = new AABB(state.prevPos, curr).inflate(radius + 1.0);
+            List<Mob> mobs = level.getEntitiesOfClass(Mob.class, segmentAabb, m -> m.isAlive() && hasSoundPursuitGoal(m));
+            if (!ArrowInvestigationHelper.shouldScanProjectileSegment(anyPlayerNearby, !mobs.isEmpty())) {
                 state.prevPos = curr;
                 return false;
             }
-            AABB segmentAabb = new AABB(state.prevPos, curr).inflate(radius + 1.0);
-
-            List<Mob> mobs = level.getEntitiesOfClass(Mob.class, segmentAabb, m -> m.isAlive() && hasSoundPursuitGoal(m));
             for (Mob mob : mobs) {
                 UUID mobId = mob.getUUID();
                 if (state.notifiedMobIds.contains(mobId)) continue;
@@ -156,6 +162,13 @@ public final class ArrowInvestigationEvents {
                 double d2 = ArrowInvestigationHelper.segmentToPointSquaredDistance(state.prevPos, curr, mobCenter);
                 if (d2 <= radiusSq) {
                     state.notifiedMobIds.add(mobId);
+                    AwarenessServerEvents.recordNearMiss(mob);
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.ARROW_INVESTIGATION)) {
+                        SoundAttractMod.LOGGER.info(
+                                "[ArrowInvestigation] Near-miss sweep matched: projectileId={}, type={}, mobId={}, distance={}, intervalTicks={}",
+                                projectile.getId(), net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(projectile.getType()),
+                                mob.getId(), Math.sqrt(d2), checkInterval);
+                    }
                     dispatchInvestigation(level, projectile, state.spawnPos, mob, "arrow_miss");
                 }
             }

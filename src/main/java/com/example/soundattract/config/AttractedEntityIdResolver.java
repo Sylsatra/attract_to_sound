@@ -5,8 +5,7 @@ import java.util.List;
 import java.util.Set;
 
 public final class AttractedEntityIdResolver {
-    private AttractedEntityIdResolver() {
-    }
+    private AttractedEntityIdResolver() {}
 
     public static Set<String> resolveAttractedEntityIds(List<String> attractedEntries, List<String> blacklistEntries, Set<String> registeredEntityIds) {
         Set<String> result = new HashSet<>();

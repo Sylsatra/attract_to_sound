@@ -30,6 +30,28 @@ public class ScentManager {
     private final Level level;
 
     private final Map<ChunkPos, ConcurrentLinkedQueue<ScentNode>> scentMap = new ConcurrentHashMap<>();
+    private final Map<UUID, List<ScentNode>> windNodes = new ConcurrentHashMap<>();
+
+    public void replaceWindNodes(UUID owner, List<ScentNode> replacement) {
+        clearWindNodes(owner);
+        if (owner == null || replacement == null || replacement.isEmpty()) return;
+        List<ScentNode> copy = List.copyOf(replacement);
+        windNodes.put(owner, copy);
+        copy.forEach(this::addScentNode);
+    }
+
+    public void clearWindNodes(UUID owner) {
+        List<ScentNode> previous = windNodes.remove(owner);
+        if (previous == null) return;
+        for (ScentNode node : previous) {
+            ChunkPos chunk = new ChunkPos(node.getBlockPos());
+            ConcurrentLinkedQueue<ScentNode> nodes = scentMap.get(chunk);
+            if (nodes != null) {
+                nodes.remove(node);
+                if (nodes.isEmpty()) scentMap.remove(chunk, nodes);
+            }
+        }
+    }
 
     public ScentManager(Level level) {
         this.level = level;

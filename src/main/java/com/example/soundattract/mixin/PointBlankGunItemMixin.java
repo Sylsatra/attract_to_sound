@@ -16,13 +16,14 @@ import java.util.UUID;
 @Mixin(targets = "com.vicmatskiv.pointblank.item.GunItem", priority = 1100, remap = false)
 public abstract class PointBlankGunItemMixin {
 
-    @Inject(method = "handleClientHitScanFireRequest", at = @At("RETURN"), remap = false, require = 0)
+    @Inject(method = "handleClientHitScanFireRequest", at = @At("RETURN"), remap = false, require = 1)
     private void soundattract$onHitScanFire(ServerPlayer player,
                                             FireModeInstance fireModeInstance,
                                             UUID stateId,
                                             int slotIndex,
                                             int correlationId,
                                             boolean isAiming,
+                                            boolean requestFlag,
                                             long requestSeed,
                                             CallbackInfo ci) {
         if (!SoundAttractConfig.serverReady() || !SoundAttractConfig.SERVER.enablePointBlankIntegration.get()) return;
@@ -32,7 +33,7 @@ public abstract class PointBlankGunItemMixin {
         PointBlankIntegration.onGunShoot(player, player.getInventory().getItem(slotIndex));
     }
 
-    @Inject(method = "handleClientProjectileFireRequest", at = @At("RETURN"), remap = false, require = 0)
+    @Inject(method = "handleClientProjectileFireRequest", at = @At("RETURN"), remap = false, require = 1)
     private void soundattract$onProjectileFire(ServerPlayer player,
                                                FireModeInstance fireModeInstance,
                                                UUID stateId,
@@ -55,7 +56,7 @@ public abstract class PointBlankGunItemMixin {
         PointBlankIntegration.onGunShoot(player, player.getInventory().getItem(slotIndex));
     }
 
-    @Inject(method = "handleClientReloadRequest", at = @At("RETURN"), remap = false, require = 0)
+    @Inject(method = "handleClientReloadRequest", at = @At("RETURN"), remap = false, require = 1)
     private void soundattract$onReload(ServerPlayer player,
                                       ItemStack itemStack,
                                       UUID clientStateId,

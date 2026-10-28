@@ -13,12 +13,17 @@
     "SnowballMixin",
     "ThrownPotionMixin",
     "MobAccessor",
-    "ItemInHandLayerMixin",
-    "HumanoidArmorLayerMixin",
+    "WalkNodeEvaluatorMixin",
+    "LivingBridgePathNavigationMixin",
     "SimpleTextureMixin",
     "HttpTextureMixin",
     "SimpleTextureTextureImageMixin",
     "NativeImageAccessor"
+  ],
+  "client": [
+    "ItemInHandLayerMixin",
+    "HumanoidArmorLayerMixin",
+    "AddLayersRendererMapAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

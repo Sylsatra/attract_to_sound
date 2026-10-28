@@ -9,13 +9,11 @@ public class StealthConfig {
     public static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
     public static final ModConfigSpec SPEC;
 
-
     public static final ModConfigSpec.DoubleValue DEFAULT_HORIZONTAL_FOV;
     public static final ModConfigSpec.DoubleValue DEFAULT_VERTICAL_FOV;
     public static final ModConfigSpec.ConfigValue<List<? extends String>> CUSTOM_FOV_OVERRIDES;
     public static final ModConfigSpec.ConfigValue<List<? extends String>> FOV_EXCLUSION_LIST;
     public static final ModConfigSpec.ConfigValue<List<? extends String>> NON_BLOCKING_VISION_ALLOW_LIST;
-
 
     public static final ModConfigSpec.BooleanValue ENABLE_STEALTH_MECHANICS;
     public static final ModConfigSpec.IntValue STEALTH_CHECK_INTERVAL;
@@ -23,11 +21,9 @@ public class StealthConfig {
     public static final ModConfigSpec.DoubleValue MIN_STEALTH_DETECTION_RANGE;
     public static final ModConfigSpec.DoubleValue MAX_STEALTH_DETECTION_RANGE;
 
-
     public static final ModConfigSpec.DoubleValue STANDING_DETECTION_RANGE_PLAYER;
     public static final ModConfigSpec.DoubleValue SNEAKING_DETECTION_RANGE_PLAYER;
     public static final ModConfigSpec.DoubleValue CRAWLING_DETECTION_RANGE_PLAYER;
-
 
     public static final ModConfigSpec.IntValue NEUTRAL_LIGHT_LEVEL;
     public static final ModConfigSpec.DoubleValue LIGHT_LEVEL_SENSITIVITY;
@@ -38,12 +34,10 @@ public class StealthConfig {
     public static final ModConfigSpec.DoubleValue RAIN_STEALTH_FACTOR;
     public static final ModConfigSpec.DoubleValue THUNDER_STEALTH_FACTOR;
 
-
     public static final ModConfigSpec.DoubleValue MOVEMENT_STEALTH_PENALTY;
     public static final ModConfigSpec.DoubleValue STATIONARY_STEALTH_BONUS_FACTOR;
     public static final ModConfigSpec.DoubleValue MOVEMENT_THRESHOLD;
     public static final ModConfigSpec.DoubleValue INVISIBILITY_STEALTH_FACTOR;
-
 
     public static final ModConfigSpec.BooleanValue ENABLE_CAMOUFLAGE;
     public static final ModConfigSpec.BooleanValue ENABLE_HELD_ITEM_PENALTY;
@@ -51,7 +45,7 @@ public class StealthConfig {
     public static final ModConfigSpec.BooleanValue ENABLE_ENCHANTMENT_PENALTY;
     public static final ModConfigSpec.DoubleValue ARMOR_ENCHANTMENT_PENALTY_FACTOR;
     public static final ModConfigSpec.DoubleValue HELD_ITEM_ENCHANTMENT_PENALTY_FACTOR;
-    
+
     public static final ModConfigSpec.ConfigValue<List<? extends String>> CAMOUFLAGE_ARMOR_ITEMS;
     public static final ModConfigSpec.BooleanValue REQUIRE_FULL_SET_FOR_CAMOUFLAGE_BONUS;
     public static final ModConfigSpec.DoubleValue FULL_ARMOR_STEALTH_BONUS;
@@ -61,7 +55,6 @@ public class StealthConfig {
     public static final ModConfigSpec.DoubleValue BOOTS_CAMOUFLAGE_EFFECTIVENESS;
     public static final ModConfigSpec.DoubleValue MAX_CAMOUFLAGE_EFFECTIVENESS_CAP;
     public static final ModConfigSpec.BooleanValue ALLOW_PARTIAL_BONUS_IF_FULL_SET_REQUIRED;
-
 
     public static final ModConfigSpec.BooleanValue ENABLE_ENVIRONMENTAL_CAMOUFLAGE;
     public static final ModConfigSpec.BooleanValue ENABLE_ENVIRONMENTAL_MISMATCH_PENALTY;
@@ -195,7 +188,7 @@ public class StealthConfig {
         BUILDER.pop();
 
         BUILDER.comment("Environmental Factors").push("environmental_factors");
-        
+
         BUILDER.push("light_level");
         NEUTRAL_LIGHT_LEVEL = BUILDER.defineInRange("neutralLightLevel", 7, 0, 15);
         LIGHT_LEVEL_SENSITIVITY = BUILDER.defineInRange("lightLevelSensitivity", 0.3, 0.0, 0.5);
@@ -217,7 +210,7 @@ public class StealthConfig {
         STATIONARY_STEALTH_BONUS_FACTOR = BUILDER.defineInRange("stationaryStealthBonusFactor", 0.8, 0.1, 1.0);
         MOVEMENT_THRESHOLD = BUILDER.defineInRange("movementThreshold", 0.003, 0.0001, 0.1);
         BUILDER.pop();
-        
+
         BUILDER.push("invisibility");
         INVISIBILITY_STEALTH_FACTOR = BUILDER.defineInRange("invisibilityStealthFactor", 0.1, 0.0, 1.0);
         BUILDER.pop();
@@ -326,7 +319,7 @@ public class StealthConfig {
         BIOME_MISMATCH_DEGRADATION_RATE = BUILDER.defineInRange("biomeMismatchDegradationRate", 0.01, 0.0, 1.0);
         SCENT_MISMATCH_PENALTY_FACTOR = BUILDER.defineInRange("scentMismatchPenaltyFactor", 0.3, 0.0, 1.0);
         CAMO_APPLIED_SCENT_BLOCK_STRENGTH = BUILDER.defineInRange("camoAppliedScentBlockStrength", 1.0, 0.0, 1.0);
-        
+
         CAMOUFLAGE_MATERIALS = BUILDER.comment("Format: namespace:item_id ; #HexColor ; category ; blocksScent")
                 .defineList("camouflageMaterials", Arrays.asList(
                     "minecraft:snowball;#CACACA;snow;true",

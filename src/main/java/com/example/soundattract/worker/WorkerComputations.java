@@ -188,10 +188,10 @@ public final class WorkerComputations {
 
     public static WorkerScheduler.SoundScoreResult computeSoundScore(WorkerScheduler.SoundScoreRequest req, long deadlineMs) {
         if (req == null) {
-            return new WorkerScheduler.SoundScoreResult(null, null, 0.0);
+            return new WorkerScheduler.SoundScoreResult(null, null, 0.0, null);
         }
         if (req.candidates == null || req.candidates.isEmpty()) {
-            return new WorkerScheduler.SoundScoreResult(req.mobUuid, null, 0.0);
+            return new WorkerScheduler.SoundScoreResult(req.mobUuid, null, 0.0, req.dimensionKey);
         }
 
         Double currentScore = null;
@@ -228,7 +228,7 @@ public final class WorkerComputations {
             }
         }
 
-        return new WorkerScheduler.SoundScoreResult(req.mobUuid, bestId, bestScore == Double.NEGATIVE_INFINITY ? 0.0 : bestScore);
+        return new WorkerScheduler.SoundScoreResult(req.mobUuid, bestId, bestScore == Double.NEGATIVE_INFINITY ? 0.0 : bestScore, req.dimensionKey);
     }
 
     private static double scoreCandidate(WorkerScheduler.SoundScoreRequest req, WorkerScheduler.SoundCandidate c) {

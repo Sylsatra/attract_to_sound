@@ -188,6 +188,7 @@ public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler 
             writeNullableUuid(out, result.mobUuid());
             writeNullableString(out, result.soundId());
             out.writeDouble(result.score());
+            writeNullableString(out, result.dimensionKey());
             out.flush();
             return bytes.toByteArray();
         } catch (Throwable ignored) {
@@ -197,16 +198,17 @@ public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler 
 
     private static WorkerScheduler.SoundScoreResult decodeSoundScoreResult(byte[] bytes) {
         if (bytes == null || bytes.length == 0) {
-            return new WorkerScheduler.SoundScoreResult(null, null, 0.0);
+            return new WorkerScheduler.SoundScoreResult(null, null, 0.0, null);
         }
         try {
             DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes));
             UUID mobUuid = readNullableUuid(in);
             String soundId = readNullableString(in);
             double score = in.readDouble();
-            return new WorkerScheduler.SoundScoreResult(mobUuid, soundId, score);
+            String dimensionKey = in.available() > 0 ? readNullableString(in) : null;
+            return new WorkerScheduler.SoundScoreResult(mobUuid, soundId, score, dimensionKey);
         } catch (Throwable ignored) {
-            return new WorkerScheduler.SoundScoreResult(null, null, 0.0);
+            return new WorkerScheduler.SoundScoreResult(null, null, 0.0, null);
         }
     }
 
@@ -288,7 +290,7 @@ public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler 
                     try {
                         return WorkerComputations.computeSoundScore(req, deadlineMs);
                     } catch (Throwable t) {
-                        return new WorkerScheduler.SoundScoreResult(req == null ? null : req.mobUuid, null, 0.0);
+                        return new WorkerScheduler.SoundScoreResult(req == null ? null : req.mobUuid, null, 0.0, req == null ? null : req.dimensionKey);
                     }
                 };
                 if (!QuantifiedOptionalBridge.trySetParallelSliceExecutor(builder, scorer)) {

@@ -7,11 +7,17 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.HitResult;
-import java.util.WeakHashMap;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import java.util.concurrent.TimeUnit;
 
 public final class NodeRouter {
     private NodeRouter() {}
-    private static final java.util.Map<Mob, Mem> MEMORY = java.util.Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Cache<Mob, Mem> MEMORY = Caffeine.newBuilder()
+            .weakKeys()
+            .maximumSize(8192)
+            .expireAfterAccess(2, TimeUnit.MINUTES)
+            .build();
     private static final class Mem {
         double off;
         long until;
@@ -23,15 +29,13 @@ public final class NodeRouter {
 
     public static Vec3 getWaypoint(Mob mob, Vec3 desired) {
         if (mob == null || mob.level() == null || desired == null) return desired;
+        if (!isFinite(desired)) return mob.position();
+        if (HazardClassifier.isDangerous(mob.level(), mob, desired)) return mob.position();
         try {
             if (!SoundAttractConfig.COMMON.enableNodeRouter.get()) return desired;
         } catch (Throwable ignored) {}
 
-        Mem mem = MEMORY.get(mob);
-        if (mem == null) {
-            mem = new Mem();
-            MEMORY.put(mob, mem);
-        }
+        Mem mem = MEMORY.get(mob, ignored -> new Mem());
 
         Vec3 pos = mob.position();
         double dx = desired.x - pos.x;
@@ -83,6 +87,12 @@ public final class NodeRouter {
             double dzd = desired.z - nz;
             double candDist = Math.sqrt(dxd * dxd + dyd * dyd + dzd * dzd);
 
+            Vec3 candidate = new Vec3(nx, ny, nz);
+            if (HazardClassifier.isDangerous(mob.level(), mob, candidate)) {
+                penalties[i] = Double.MAX_VALUE;
+                continue;
+            }
+
             double hPenalty = steep ? Math.abs(ny - pos.y) * 0.75 : 0.0;
             double verticalProgress = vDelta - Math.abs(desired.y - ny);
             double improveBase = Math.max(0.0, candDist - curDist);
@@ -90,7 +100,6 @@ public final class NodeRouter {
 
             boolean earlyPrune = (hPenalty + detourPenalty > bestPenalty + 2.0);
 
-            Vec3 candidate = new Vec3(nx, ny, nz);
             candidates[i] = candidate;
 
             double verticalPenalty = verticalProgress < -0.75 ? Math.abs(verticalProgress) * 0.25 : 0.0;
@@ -153,6 +162,9 @@ public final class NodeRouter {
                 double nz = pos.z + Math.sin(a) * step2;
                 double ny = snapGroundY(mob.level(), nx, pos.y + 1.0, nz);
                 Vec3 candidate = new Vec3(nx, ny, nz);
+                if (HazardClassifier.isDangerous(mob.level(), mob, candidate)) {
+                    continue;
+                }
                 double hPenalty = steep ? Math.abs(ny - pos.y) * 0.75 : 0.0;
                 double candDist = candidate.distanceTo(desired);
                 double verticalProgress = vDelta - Math.abs(desired.y - ny);
@@ -247,11 +259,18 @@ public final class NodeRouter {
     }
 
     public static boolean isWalkable(Mob mob, Vec3 pos) {
-        if (mob == null || mob.level() == null) return false;
+
+        if (mob == null || mob.level() == null || !isFinite(pos)) return false;
+        if (HazardClassifier.isDangerous(mob.level(), mob, pos)) return false;
         Level level = mob.level();
         BlockPos bp = new BlockPos((int) Math.floor(pos.x), (int) Math.floor(pos.y), (int) Math.floor(pos.z));
 
-        if (level.getBlockState(bp.below()).isAir()) {
+        if (level.getBlockState(bp.below()).getCollisionShape(level, bp.below()).isEmpty()
+                || !level.getFluidState(bp.below()).isEmpty()) {
+            return false;
+        }
+
+        if (!level.getFluidState(bp).isEmpty()) {
             return false;
         }
 
@@ -267,6 +286,7 @@ public final class NodeRouter {
     }
 
     public static boolean isPathable(Mob mob, Vec3 candidate) {
+        if (mob == null || !isFinite(candidate)) return false;
         try {
             Level lvl = mob.level();
             if (lvl == null) return false;
@@ -296,5 +316,16 @@ public final class NodeRouter {
         } catch (Throwable ignored) {
             return false;
         }
+    }
+
+    public static void clear() {
+        MEMORY.invalidateAll();
+    }
+
+    private static boolean isFinite(Vec3 value) {
+        return value != null
+                && Double.isFinite(value.x)
+                && Double.isFinite(value.y)
+                && Double.isFinite(value.z);
     }
 }

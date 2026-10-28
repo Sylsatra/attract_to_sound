@@ -10,25 +10,22 @@
       "terms": [
         {
           "condition": "neoforge:loot_table_id",
-          "loot_table_id": "minecraft:chests/village/village_toolsmith"
+          "loot_table_id": "minecraft:chests/ancient_city"
         },
         {
           "condition": "neoforge:loot_table_id",
-          "loot_table_id": "minecraft:chests/village/village_weaponsmith"
+          "loot_table_id": "minecraft:chests/end_city_treasure"
         },
         {
           "condition": "neoforge:loot_table_id",
-          "loot_table_id": "minecraft:chests/abandoned_mineshaft"
+          "loot_table_id": "minecraft:chests/stronghold_crossing"
         },
         {
           "condition": "neoforge:loot_table_id",
-          "loot_table_id": "minecraft:chests/stronghold_corridor"
-        },
-        {
-          "condition": "neoforge:loot_table_id",
-          "loot_table_id": "minecraft:chests/desert_pyramid"
+          "loot_table_id": "minecraft:chests/bastion_other"
         }
       ]
     }
-  ]
+  ],
+  "enchantment": "soundattract:conceal"
 }

@@ -205,7 +205,7 @@ public class ScentEvents {
                         if (viewerProfile != null && viewerProfile.scentVisibility().isPresent()) {
                             com.example.soundattract.config.ScentVisibilityConfig vis = viewerProfile.scentVisibility().get();
                             showScent = switch (node.getSourceType()) {
-                                case PLAYER_WALK -> vis.showPlayerWalk();
+                                case PLAYER_WALK, PLAYER_WIND -> vis.showPlayerWalk();
                                 case ARROW_PATH, ARROW_ORIGIN, MOB_PROJECTILE_PATH, MOB_PROJECTILE_ORIGIN -> vis.showArrowScent();
                             };
                         }

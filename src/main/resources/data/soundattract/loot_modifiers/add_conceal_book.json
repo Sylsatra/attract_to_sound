@@ -31,16 +31,20 @@
         {
           "condition": "neoforge:loot_table_id",
           "loot_table_id": "minecraft:chests/desert_pyramid"
-        },
-        {
-          "condition": "neoforge:loot_table_id",
-          "loot_table_id": "minecraft:vaults/trial_chamber/reward"
-        },
-        {
-          "condition": "neoforge:loot_table_id",
-          "loot_table_id": "minecraft:vaults/trial_chamber/reward_ominous"
         }
       ]
     }
-  ]
+  ],
+  "item": {
+    "id": "minecraft:enchanted_book",
+    "Count": 1,
+    "tag": {
+      "StoredEnchantments": [
+        {
+          "id": "soundattract:conceal",
+          "lvl": 1
+        }
+      ]
+    }
+  }
 }

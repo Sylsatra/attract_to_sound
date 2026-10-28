@@ -27,7 +27,6 @@ import com.example.soundattract.worker.WorkerScheduler.GroupComputeResult;
 import com.example.soundattract.worker.WorkSchedulerManager;
 import com.example.soundattract.integration.smartbrainlib.SmartBrainLibCompat;
 import com.example.soundattract.tracking.SoundTracker;
-import com.example.soundattract.integration.relentlessundead.RelentlessUndeadIntegration;
 
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.core.registries.Registries;
@@ -482,13 +481,6 @@ public class SoundAttractionEvents {
             }
         }
         
-        if (RelentlessUndeadIntegration.isMobEligibleForClimbing(mob)) {
-             scheduleAddGoal(mob, 0, new com.example.soundattract.ai.SoundClimbGoal(mob));
-             if (SoundAttractConfig.COMMON.debugLogging.get()) {
-                  SoundAttractMod.LOGGER.info("[SoundAttractionEvents] Scheduled SoundClimbGoal for mob {}", mob.getName().getString());
-             }
-        }
-
         if (SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) {
             scheduleAddGoal(mob, 3, new LeaderAttractionGoal(mob, moveSpeed));
             scheduleAddGoal(mob, 1, new FollowerEdgeRelayGoal(mob, moveSpeed));
