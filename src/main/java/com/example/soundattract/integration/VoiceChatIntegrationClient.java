@@ -1,13 +1,8 @@
 package com.example.soundattract.integration;
 
-// ============================================================================
-// SIMPLE VOICE CHAT CLIENT INTEGRATION - COMMENTED OUT FOR 1.21.11 (Simple Voice Chat not available for NeoForge 1.21.11)
-// ============================================================================
-
-/*
 import java.util.Optional;
 import java.util.UUID;
-import com.example.soundattract.SoundMessage;
+import com.example.soundattract.network.SoundMessage;
 import com.example.soundattract.config.SoundAttractConfig;
 import de.maxhenkel.voicechat.api.events.ClientSoundEvent;
 import net.minecraft.client.Minecraft;
@@ -28,7 +23,7 @@ import java.util.Comparator;
 public class VoiceChatIntegrationClient {
 
     public static void handleClientSound(ClientSoundEvent event) {
-        if (!SoundAttractConfig.COMMON.enableVoiceChatIntegration.get()) {
+        if (!SoundAttractConfig.serverReady() || !SoundAttractConfig.SERVER.enableVoiceChatIntegration.get()) {
             return;
         }
 
@@ -44,13 +39,11 @@ public class VoiceChatIntegrationClient {
             return;
         }
         double db = computePeakDb(rawAudio);
-
-
         double normDb = db - (-127.0);
-
+        float intensity01 = (float) Math.max(0.0, Math.min(1.0, normDb / 127.0));
 
         double factor = 0.0;
-        List<? extends String> rawMap = SoundAttractConfig.COMMON.voiceChatDbThresholdMap.get();
+        List<? extends String> rawMap = SoundAttractConfig.SERVER.voiceChatDbThresholdMap.get();
         if (rawMap != null && !rawMap.isEmpty()) {
             List<double[]> pairs = new ArrayList<>();
             for (String entry : rawMap) {
@@ -78,7 +71,6 @@ public class VoiceChatIntegrationClient {
                 }
             }
         } else {
-
             if (normDb >= 50.0) {
                 factor = 1.0;
             } else if (normDb >= 30.0) {
@@ -91,30 +83,27 @@ public class VoiceChatIntegrationClient {
         }
 
         boolean isWhispering = event.isWhispering();
-        int baseRange = isWhispering ? SoundAttractConfig.COMMON.voiceChatWhisperRange.get()
-                : SoundAttractConfig.COMMON.voiceChatNormalRange.get();
+        int baseRange = isWhispering ? SoundAttractConfig.SERVER.voiceChatWhisperRange.get()
+                : SoundAttractConfig.SERVER.voiceChatNormalRange.get();
         int effectiveRange = (int) Math.round(baseRange * factor);
         if (effectiveRange <= 0) {
             return;
         }
-        double weight = SoundAttractConfig.COMMON.voiceChatWeight.get();
+        double weight = SoundAttractConfig.SERVER.voiceChatWeight.get();
 
         Vec3 pos = clientPlayer.position();
-        Identifier dim = clientWorld.dimension().location();
+        Identifier dim = clientWorld.dimension().identifier();
         Optional<UUID> sourcePlayerUUID = Optional.of(clientPlayer.getUUID());
-        String animatorClass = "voice_chat";
 
         SoundMessage msg = new SoundMessage(
             SoundMessage.VOICE_CHAT_SOUND_ID,
             pos,
             dim,
             sourcePlayerUUID,
-            effectiveRange,
-            weight,
-            Optional.of(animatorClass),
-            Optional.empty()
+            intensity01,
+            isWhispering
         );
-        PacketDistributor.sendToServer(msg);
+        net.neoforged.neoforge.client.network.ClientPacketDistributor.sendToServer(msg);
     }
     private static double computePeakDb(short[] samples) {
         short highest = 0;
@@ -130,9 +119,4 @@ public class VoiceChatIntegrationClient {
         if (db < -127.0) db = -127.0;
         return db;
     }
-}
-*/
-
-// Stub class to prevent compilation errors - Simple Voice Chat client integration disabled for 1.21.11
-public class VoiceChatIntegrationClient {
 }

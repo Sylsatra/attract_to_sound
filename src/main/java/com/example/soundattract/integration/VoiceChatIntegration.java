@@ -1,10 +1,5 @@
 package com.example.soundattract.integration;
 
-// ============================================================================
-// SIMPLE VOICE CHAT INTEGRATION - COMMENTED OUT FOR 1.21.11 (Simple Voice Chat not available for NeoForge 1.21.11)
-// ============================================================================
-
-/*
 import de.maxhenkel.voicechat.api.events.EventRegistration;
 import de.maxhenkel.voicechat.api.events.ClientSoundEvent;
 import de.maxhenkel.voicechat.api.ForgeVoicechatPlugin;
@@ -24,7 +19,7 @@ public class VoiceChatIntegration implements VoicechatPlugin {
 
     @Override
     public void registerEvents(EventRegistration registration) {
-        if (FMLLoader.getDist().isClient()) {
+        if (true) {
             registration.registerEvent(ClientSoundEvent.class, ClientHandler::handle);
         }
     }
@@ -32,15 +27,10 @@ public class VoiceChatIntegration implements VoicechatPlugin {
     @OnlyIn(Dist.CLIENT)
     private static class ClientHandler {
         static void handle(ClientSoundEvent event) {
-            if (!SoundAttractConfig.COMMON.enableVoiceChatIntegration.get()) {
+            if (!SoundAttractConfig.serverReady() || !SoundAttractConfig.SERVER.enableVoiceChatIntegration.get()) {
                 return;
             }
             VoiceChatIntegrationClient.handleClientSound(event);
         }
     }
-}
-*/
-
-// Stub class to prevent compilation errors - Simple Voice Chat integration disabled for 1.21.11
-public class VoiceChatIntegration {
 }

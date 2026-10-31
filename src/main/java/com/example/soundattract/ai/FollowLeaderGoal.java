@@ -2,62 +2,26 @@ package com.example.soundattract.ai;
 
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.goal.Goal;
-import net.minecraft.world.entity.ai.goal.WrappedGoal;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.levelgen.Heightmap;
 import java.util.EnumSet;
+import java.util.stream.StreamSupport;
+import net.minecraft.world.entity.ai.goal.WrappedGoal;
 
 public class FollowLeaderGoal extends Goal {
     private final Mob mob;
     private final double moveSpeed;
     private Mob leader;
-    private static final double MAX_DISTANCE = 12.0; 
+    private AttractionGoal leaderAttractionGoal = null;
+    private Goal leaderPursuitGoal = null;
+    private Vec3 lastPos = null;
     private int stuckTicks = 0;
     private int stuckThreshold = com.example.soundattract.config.SoundAttractConfig.COMMON.scanCooldownTicks.get();
     private int dynamicTickCounter = 0;
-    private AttractionGoal leaderAttractionGoal = null;
-    private BlockPos leaderObjectivePos;
-    private BlockPos myStableDestination;
-    private BlockBreakerPosGoal followerBreaker = null;
-    private Vec3 lastPosVec = null;
-    private Vec3 lastPosSample = null;
-    private int navIdleTicks = 0;
-
-    private void moveTowardsLeader(double speed) {
-        if (leader == null) return;
-        BlockPos leaderBlock = leader.blockPosition();
-        this.mob.getNavigation().moveTo(
-            leaderBlock.getX() + 0.5,
-            leaderBlock.getY(),
-            leaderBlock.getZ() + 0.5,
-            speed
-        );
-    }
-
-    private void startMovingToDestination(double speed) {
-        if (this.myStableDestination != null) {
-            this.mob.getNavigation().moveTo(
-                this.myStableDestination.getX() + 0.5,
-                this.myStableDestination.getY(),
-                this.myStableDestination.getZ() + 0.5,
-                speed
-            );
-        }
-    }
-
-    private BlockPos calculateStableDestination(BlockPos leaderTarget) {
-        if (leaderTarget == null) return null;
-        double arrival = com.example.soundattract.config.SoundAttractConfig.COMMON.arrivalDistance.get();
-        long seed = this.mob.getUUID().getMostSignificantBits() ^ leaderTarget.asLong();
-        java.util.Random rand = new java.util.Random(seed);
-        double angle = rand.nextDouble() * Math.PI * 2.0;
-        double radius = arrival * (0.5 + rand.nextDouble() * 0.5);
-        int x = leaderTarget.getX() + (int) Math.floor(Math.cos(angle) * radius);
-        int z = leaderTarget.getZ() + (int) Math.floor(Math.sin(angle) * radius);
-        int groundY = this.mob.level().getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
-        return new BlockPos(x, groundY, z);
-    }
+    private Vec3 lastRandomDest = null;
+    private boolean hasPickedDest = false;
+    private boolean isSpreadingOut = false;
+    private BlockPos lastAnchorPos = null;
 
     public FollowLeaderGoal(Mob mob, double moveSpeed) {
         this.mob = mob;
@@ -71,61 +35,91 @@ public class FollowLeaderGoal extends Goal {
 
     @Override
     public boolean canUse() {
-        leader = MobGroupManager.getLeader(mob);
-        if (leader == null || leader == mob) return false;
-
-        if (this.mob.distanceToSqr(this.leader) > getGroupDistance() * getGroupDistance()) {
-            return false;
+        if (this.mob.getTarget() != null && this.mob.getTarget().isAlive()) {
+            if (!shouldMemberDropTargetForHighWeightSound()) return false;
+            if (com.example.soundattract.config.SoundAttractConfig.COMMON.debugLogging.get()) {
+                com.example.soundattract.SoundAttractMod.LOGGER.info(
+                    "[FollowLeaderGoal] Member {} dropping target - leader is in high-weight sound override.",
+                    mob.getName().getString());
+            }
+            this.mob.setTarget(null);
         }
-
-        boolean smartEdge = com.example.soundattract.config.SoundAttractConfig.COMMON.edgeMobSmartBehavior.get();
-        if (smartEdge && MobGroupManager.isEdgeMob(mob)) return false;
+        leader = MobGroupManager.getLeader(mob);
+        if (leader == null || leader == mob) return false; 
         if (!leader.isAlive()) return false;
 
-        leaderAttractionGoal = leader.goalSelector.getAvailableGoals().stream()
-            .filter(WrappedGoal::isRunning)
-            .map(WrappedGoal::getGoal)
-            .filter(goal -> goal instanceof AttractionGoal)
-            .map(goal -> (AttractionGoal) goal)
-            .filter(AttractionGoal::isPursuingSound)
-            .findFirst()
-            .orElse(null);
 
-        if (leaderAttractionGoal == null && !com.example.soundattract.ai.RaidManager.isRaidAdvancing(this.leader)) {
-            return false;
+        if (RaidManager.isRaidTicking(leader)) {
+            return true;
         }
 
-        this.leaderObjectivePos = leaderAttractionGoal != null ? leaderAttractionGoal.getTargetSoundPos() : com.example.soundattract.ai.RaidManager.getRaidTarget(this.leader);
-        this.myStableDestination = calculateStableDestination(this.leaderObjectivePos != null ? this.leaderObjectivePos : this.leader.blockPosition());
-        startMovingToDestination(this.moveSpeed);
+        if (RaidManager.isRaidAdvancing(leader)) {
+            return true;
+        }
+
+
+        if (this.mob.distanceToSqr(leader) > getGroupDistance() * getGroupDistance()) return false; 
+        boolean smartEdge = com.example.soundattract.config.SoundAttractConfig.COMMON.edgeMobSmartBehavior.get();
+        if (smartEdge && MobGroupManager.isEdgeMob(mob)) return false;
+        leaderAttractionGoal = null;
+        leaderPursuitGoal = null;
+        leader.goalSelector.getAvailableGoals().stream().filter(net.minecraft.world.entity.ai.goal.WrappedGoal::isRunning).forEach(goal -> {
+            if (leaderPursuitGoal == null) {
+                if (goal.getGoal() instanceof AttractionGoal ag) {
+                    leaderAttractionGoal = ag;
+                    leaderPursuitGoal = ag;
+                } else if (goal.getGoal() instanceof LeaderAttractionGoal lag) {
+                    leaderPursuitGoal = lag;
+                }
+            }
+        });
+        if (leaderPursuitGoal == null) return false;
+        if (leaderPursuitGoal instanceof AttractionGoal ag) {
+            if (!ag.isPursuingSound() && !ag.isHighWeightOverrideActive()) {
+                return false;
+            }
+        }
         return true;
     }
 
     @Override
     public boolean canContinueToUse() {
+        if (this.mob.getTarget() != null && this.mob.getTarget().isAlive()) {
+            if (!shouldMemberDropTargetForHighWeightSound()) return false;
+            this.mob.setTarget(null);
+        }
         if (leader == null || !leader.isAlive()) return false;
 
-        if (com.example.soundattract.ai.RaidManager.isRaidAdvancing(this.leader) || com.example.soundattract.ai.RaidManager.isRaidTicking(this.leader)) {
+
+        if (RaidManager.isRaidTicking(leader)) {
             return true;
         }
 
-        leaderAttractionGoal = leader.goalSelector.getAvailableGoals().stream()
-            .filter(WrappedGoal::isRunning)
+        if (RaidManager.isRaidAdvancing(leader)) {
+            net.minecraft.core.BlockPos raidTarget = RaidManager.getRaidTarget(leader);
+            if (raidTarget == null) return false;
+            double arrivalDistance = com.example.soundattract.config.SoundAttractConfig.COMMON.arrivalDistance.get();
+            if (this.mob.blockPosition().distSqr(raidTarget) < (arrivalDistance + 2.0) * (arrivalDistance + 2.0)) {
+                return false;
+            }
+            return true;
+        }
+
+        if (this.mob.distanceToSqr(leader) > getGroupDistance() * getGroupDistance()) return false;
+        leaderAttractionGoal = null;
+        leaderPursuitGoal = StreamSupport.stream(
+            leader.goalSelector.getAvailableGoals().stream().filter(net.minecraft.world.entity.ai.goal.WrappedGoal::isRunning).spliterator(), false)
             .map(WrappedGoal::getGoal)
-            .filter(goal -> goal instanceof AttractionGoal)
-            .map(goal -> (AttractionGoal) goal)
-            .filter(AttractionGoal::isPursuingSound)
+            .filter(g -> (g instanceof AttractionGoal) || (g instanceof LeaderAttractionGoal))
             .findFirst()
             .orElse(null);
 
-        if (leaderAttractionGoal == null) {
-            return false;
+        if (leaderPursuitGoal == null) return false;
+        if (leaderPursuitGoal instanceof AttractionGoal ag) {
+            if (!ag.isPursuingSound() && !ag.isHighWeightOverrideActive()) {
+                return false;
+            }
         }
-
-        if (leader.getNavigation().isDone()) {
-            return false;
-        }
-
         return true;
     }
 
@@ -133,8 +127,126 @@ public class FollowLeaderGoal extends Goal {
 
     @Override
     public void tick() {
-        if (leader == null || !leader.isAlive()) {
+        if (leader == null) return;
+
+        boolean debug = com.example.soundattract.config.SoundAttractConfig.COMMON.debugLogging.get();
+
+
+        if (RaidManager.isRaidTicking(leader)) {
+            if (debug) {
+                com.example.soundattract.SoundAttractMod.LOGGER.info(
+                    "[FollowLeaderGoal][RAID Rally] Mob {} rallying to leader {}",
+                    mob.getName().getString(), leader.getName().getString());
+            }
+            if (!mob.isSprinting()) mob.setSprinting(true);
+            double sprintMult = com.example.soundattract.config.SoundAttractConfig.COMMON.groupSprintMultiplier.get();
+            mob.getNavigation().moveTo(leader.getX(), leader.getY(), leader.getZ(), moveSpeed * sprintMult);
             return;
+        }
+
+
+        if (RaidManager.isRaidAdvancing(leader)) {
+            int scanCooldown = com.example.soundattract.config.SoundAttractConfig.COMMON.scanCooldownTicks.get();
+            int updateInterval = Math.max(1, scanCooldown / 2);
+            dynamicTickCounter = (dynamicTickCounter + 1) % updateInterval;
+            if (dynamicTickCounter != 0) return;
+
+            BlockPos raidTarget = RaidManager.getRaidTarget(leader);
+            if (raidTarget == null) return;
+            double arrivalDistance = com.example.soundattract.config.SoundAttractConfig.COMMON.arrivalDistance.get();
+
+            if (!mob.isSprinting()) mob.setSprinting(true);
+
+            if (!hasPickedDest) {
+                java.util.Random rand = new java.util.Random(
+                    mob.getUUID().hashCode() ^ raidTarget.hashCode()
+                );
+                double angle = rand.nextDouble() * 2 * Math.PI;
+                double radius = arrivalDistance * Math.sqrt(rand.nextDouble());
+                double offsetX = Math.cos(angle) * radius;
+                double offsetZ = Math.sin(angle) * radius;
+
+                int destX = raidTarget.getX() + (int) Math.floor(offsetX);
+                int destZ = raidTarget.getZ() + (int) Math.floor(offsetZ);
+                int groundY = mob.level().getHeight(
+                    net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                    destX, destZ
+                );
+
+                double finalX = destX + 0.5;
+                double finalY = groundY;
+                double finalZ = destZ + 0.5;
+                lastRandomDest = new Vec3(finalX, finalY, finalZ);
+                hasPickedDest = true;
+                if (debug) {
+                    com.example.soundattract.SoundAttractMod.LOGGER.info(
+                        "[FollowLeaderGoal][RAID Advance] Mob {} advancing to raid target area near {}",
+                        mob.getName().getString(), raidTarget);
+                }
+            }
+
+            if (lastRandomDest != null) {
+                Vec3 curPos = mob.position();
+                if (curPos.distanceToSqr(lastRandomDest) > 2.25) {
+                    double sprintMult = com.example.soundattract.config.SoundAttractConfig.COMMON.groupSprintMultiplier.get();
+                    double finalSpeed = moveSpeed * sprintMult;
+
+                    boolean useFlowField = false;
+                    try {
+                        useFlowField = com.example.soundattract.config.SoundAttractConfig.COMMON.enableFlowField.get();
+                    } catch (Throwable ignored) {}
+                    int ffThreshold = 15;
+                    try {
+                        ffThreshold = com.example.soundattract.config.SoundAttractConfig.COMMON.flowFieldMobThreshold.get();
+                    } catch (Throwable ignored) {}
+
+                    boolean moved = false;
+                    if (useFlowField) {
+                        int groupSize = MobGroupManager.getFollowerCount(leader);
+                        if (groupSize >= ffThreshold) {
+                            Vec3 flowVec = com.example.soundattract.pathfinding.FlowFieldManager.getNextStep(mob, lastRandomDest);
+                            if (flowVec != null) {
+                                double fx = curPos.x + flowVec.x * 3.0;
+                                double fy = curPos.y + flowVec.y * 3.0;
+                                double fz = curPos.z + flowVec.z * 3.0;
+                                moved = com.example.soundattract.pathfinding.NavLimiter.maybeMoveTo(mob, fx, fy, fz, finalSpeed);
+                            }
+                        }
+                    }
+                    if (!moved) {
+                        com.example.soundattract.pathfinding.NavLimiter.maybeMoveTo(
+                            mob, lastRandomDest.x, lastRandomDest.y, lastRandomDest.z, finalSpeed
+                        );
+                    }
+                }
+
+                if (lastPos != null && curPos.distanceToSqr(lastPos) < 0.04) {
+                    stuckTicks++;
+                    if (stuckTicks > stuckThreshold) {
+                        hasPickedDest = false;
+                        stuckTicks = 0;
+                    }
+                } else {
+                    stuckTicks = 0;
+                }
+                lastPos = curPos;
+            }
+            return;
+        }
+
+
+        if (leaderPursuitGoal == null) return;
+        if (leaderPursuitGoal instanceof AttractionGoal ag) {
+            if (!ag.isPursuingSound() && !ag.isHighWeightOverrideActive()) {
+                return;
+            }
+        }
+        if (debug) {
+            com.example.soundattract.SoundAttractMod.LOGGER.info(
+                "[FollowLeaderGoal] Mob {} following leader {} (leader is pursuing sound)",
+                mob.getName().getString(),
+                leader.getName().getString()
+            );
         }
 
         int scanCooldown = com.example.soundattract.config.SoundAttractConfig.COMMON.scanCooldownTicks.get();
@@ -142,114 +254,162 @@ public class FollowLeaderGoal extends Goal {
         dynamicTickCounter = (dynamicTickCounter + 1) % updateInterval;
         if (dynamicTickCounter != 0) return;
 
-        double sprintMult = com.example.soundattract.config.SoundAttractConfig.COMMON.groupSprintMultiplier.get();
-        boolean raidAdvancing = com.example.soundattract.ai.RaidManager.isRaidAdvancing(leader);
-        double speed = raidAdvancing ? (moveSpeed * sprintMult) : moveSpeed;
+        BlockPos soundPos = null;
+        double soundWeight = -1.0;
+        try {
+            Object pursuit = (leaderPursuitGoal != null) ? leaderPursuitGoal : leaderAttractionGoal;
+            if (pursuit == null) return;
+            java.lang.reflect.Field f = pursuit.getClass().getDeclaredField("targetSoundPos");
+            f.setAccessible(true);
+            soundPos = (BlockPos) f.get(pursuit);
 
-        Vec3 leaderPos = leader.position();
-        Vec3 curPos = mob.position();
-
-        if (com.example.soundattract.ai.RaidManager.isRaidAdvancing(this.leader)) {
-            BlockPos raidTarget = com.example.soundattract.ai.RaidManager.getRaidTarget(this.leader);
-            if (raidTarget != null) {
-                this.leaderObjectivePos = raidTarget;
-                this.myStableDestination = calculateStableDestination(this.leaderObjectivePos);
-                startMovingToDestination(speed);
-                return;
+            try {
+                java.lang.reflect.Field w = pursuit.getClass().getDeclaredField("currentTargetWeight");
+                w.setAccessible(true);
+                Object val = w.get(pursuit);
+                if (val instanceof Number n) {
+                    soundWeight = n.doubleValue();
+                }
+            } catch (Exception ignored) {
             }
+        } catch (Exception e) {
+        }
+        if (soundPos == null) return;
+
+        double arrivalDistance = com.example.soundattract.config.SoundAttractConfig.COMMON.arrivalDistance.get();
+
+        if (lastAnchorPos == null || !lastAnchorPos.equals(soundPos)) {
+            lastAnchorPos = soundPos;
+            hasPickedDest = false;
+            lastRandomDest = null;
+            isSpreadingOut = false;
+            stuckTicks = 0;
         }
 
-        if (leaderAttractionGoal != null && leaderAttractionGoal.isPursuingSound()) {
-            BlockPos currentLeaderTarget = leaderAttractionGoal.getTargetSoundPos();
-            if (currentLeaderTarget != null && !currentLeaderTarget.equals(this.leaderObjectivePos)) {
-                if (this.leaderObjectivePos == null || this.leaderObjectivePos.distSqr(currentLeaderTarget) > 100.0) {
-                    this.leaderObjectivePos = currentLeaderTarget;
-                    this.myStableDestination = calculateStableDestination(this.leaderObjectivePos);
-                    startMovingToDestination(this.moveSpeed);
+        double minWeightToSpreadOut = com.example.soundattract.config.SoundAttractConfig.COMMON.followLeaderMinSoundWeightToSpreadOut.get();
+
+        if (!isSpreadingOut && soundPos != null) {
+            double distToSound = mob.distanceToSqr(soundPos.getX() + 0.5, soundPos.getY(), soundPos.getZ() + 0.5);
+            if (distToSound <= (arrivalDistance + 2.0) * (arrivalDistance + 2.0)) {
+                if (soundWeight >= minWeightToSpreadOut) {
+                    isSpreadingOut = true;
+                    hasPickedDest = false;
+                    lastRandomDest = null;
+                    if (debug) {
+                        com.example.soundattract.SoundAttractMod.LOGGER.info(
+                            "[FollowLeaderGoal] Mob {} reached sound location at {}, starting to spread",
+                            mob.getName().getString(), soundPos);
+                    }
                 }
             }
         }
 
-        if (this.myStableDestination != null) {
-            double distSq = curPos.distanceToSqr(Vec3.atCenterOf(this.myStableDestination));
-            if (this.mob.getNavigation().isDone() || distSq > 4.0) {
-                this.mob.getNavigation().moveTo(
-                    this.myStableDestination.getX() + 0.5,
-                    this.myStableDestination.getY(),
-                    this.myStableDestination.getZ() + 0.5,
-                    speed
-                );
+        if (!isSpreadingOut && lastRandomDest != null && mob.position().distanceToSqr(lastRandomDest) <= 2.25) {
+            if (soundWeight >= minWeightToSpreadOut) {
+                isSpreadingOut = true;
+                hasPickedDest = false;
+                lastRandomDest = null;
             }
-        } else if (curPos.distanceToSqr(leaderPos) > 4.0) {
-            moveTowardsLeader(speed);
         }
 
-        if (lastPosSample != null && curPos.distanceToSqr(lastPosSample) < 0.04) {
-            stuckTicks++;
-            if (stuckTicks > stuckThreshold) {
-                this.myStableDestination = calculateStableDestination(this.leaderObjectivePos != null ? this.leaderObjectivePos : this.leader.blockPosition());
-                startMovingToDestination(speed);
+        if (!hasPickedDest) {
+            if (isSpreadingOut) {
+                int dirIdx = Math.floorMod(mob.getUUID().hashCode() ^ soundPos.hashCode(), 4);
+                int dx = 0;
+                int dz = 0;
+                switch (dirIdx) {
+                    case 0: dx = 1; break;
+                    case 1: dx = -1; break;
+                    case 2: dz = 1; break;
+                    default: dz = -1; break;
+                }
+                double spreadDistance = com.example.soundattract.config.SoundAttractConfig.COMMON.followLeaderSpreadOutDistance.get();
+                if (spreadDistance <= 0.0) {
+                    spreadDistance = Math.max(8.0, arrivalDistance * 2.0);
+                }
+                int step = (int) Math.round(spreadDistance);
+                int destX = soundPos.getX() + dx * step;
+                int destZ = soundPos.getZ() + dz * step;
+                int groundY = mob.level().getHeight(
+                    net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                    destX, destZ
+                );
+                lastRandomDest = new Vec3(destX + 0.5, groundY, destZ + 0.5);
+                hasPickedDest = true;
+            } else {
+                java.util.Random rand = new java.util.Random(
+                    mob.getUUID().hashCode() ^ soundPos.hashCode()
+                );
+                double angle = rand.nextDouble() * 2 * Math.PI;
+                double radius = arrivalDistance * Math.sqrt(rand.nextDouble());
+                double offsetX = Math.cos(angle) * radius;
+                double offsetZ = Math.sin(angle) * radius;
+
+                int destX = soundPos.getX() + (int) Math.floor(offsetX);
+                int destZ = soundPos.getZ() + (int) Math.floor(offsetZ);
+                int groundY = mob.level().getHeight(
+                    net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                    destX, destZ
+                );
+
+                double finalX = destX + 0.5;
+                double finalY = groundY;
+                double finalZ = destZ + 0.5;
+                lastRandomDest = new Vec3(finalX, finalY, finalZ);
+                hasPickedDest = true;
+            }
+        }
+
+        if (lastRandomDest != null) {
+            Vec3 curPos = mob.position();
+            if (curPos.distanceToSqr(lastRandomDest) > 2.25) {
+                double finalSpeed = moveSpeed;
+
+                boolean useFlowField = false;
+                try {
+                    useFlowField = com.example.soundattract.config.SoundAttractConfig.COMMON.enableFlowField.get();
+                } catch (Throwable ignored) {}
+                int ffThreshold = 15;
+                try {
+                    ffThreshold = com.example.soundattract.config.SoundAttractConfig.COMMON.flowFieldMobThreshold.get();
+                } catch (Throwable ignored) {}
+
+                boolean moved = false;
+                if (useFlowField) {
+                    int groupSize = MobGroupManager.getFollowerCount(leader);
+                    if (groupSize >= ffThreshold) {
+                        Vec3 flowVec = com.example.soundattract.pathfinding.FlowFieldManager.getNextStep(mob, lastRandomDest);
+                        if (flowVec != null) {
+                            double fx = curPos.x + flowVec.x * 3.0;
+                            double fy = curPos.y + flowVec.y * 3.0;
+                            double fz = curPos.z + flowVec.z * 3.0;
+                            moved = com.example.soundattract.pathfinding.NavLimiter.maybeMoveTo(mob, fx, fy, fz, finalSpeed);
+                        }
+                    }
+                }
+                if (!moved) {
+                    com.example.soundattract.pathfinding.NavLimiter.maybeMoveTo(
+                        mob, lastRandomDest.x, lastRandomDest.y, lastRandomDest.z, finalSpeed
+                    );
+                }
+            }
+
+            if (lastPos != null && curPos.distanceToSqr(lastPos) < 0.04) {
+                stuckTicks++;
+                if (stuckTicks > stuckThreshold) {
+                    hasPickedDest = false;
+                    stuckTicks = 0;
+                }
+            } else {
                 stuckTicks = 0;
             }
-        } else {
-            stuckTicks = 0;
-        }
-        lastPosSample = curPos;
-
-        if (lastPosVec != null && curPos.distanceToSqr(lastPosVec) < 0.01) {
-            stuckTicks++;
-        } else {
-            stuckTicks = 0;
-            lastPosVec = curPos;
-            if (this.followerBreaker != null) {
-                BlockBreakerManager.scheduleRemove(this.mob, this.followerBreaker);
-                this.followerBreaker = null;
-            }
+            lastPos = curPos;
         }
 
-        boolean enableBlockBreaking = com.example.soundattract.config.SoundAttractConfig.COMMON.enableBlockBreaking.get();
-        double distSqToTarget = this.myStableDestination != null
-            ? this.mob.position().distanceToSqr(Vec3.atCenterOf(this.myStableDestination))
-            : curPos.distanceToSqr(leaderPos);
-        boolean navIdleAndFar = this.mob.getNavigation().isDone() && distSqToTarget > 4.0;
-        boolean trulyStuck = stuckTicks >= 10;
+        
 
-        if (!enableBlockBreaking && (navIdleAndFar || trulyStuck)) {
-            this.myStableDestination = null;
-            this.mob.getNavigation().stop();
-        }
-
-        if (enableBlockBreaking) {
-            if (this.followerBreaker != null) {
-                boolean running = this.mob.goalSelector.getAvailableGoals().stream()
-                    .filter(net.minecraft.world.entity.ai.goal.WrappedGoal::isRunning)
-                    .anyMatch(wrapped -> wrapped.getGoal() == this.followerBreaker);
-                if (!running) {
-                    this.followerBreaker = null;
-                }
-            }
-
-            if (this.followerBreaker == null && (navIdleAndFar || trulyStuck)) {
-                BlockPos dest = this.myStableDestination != null ? this.myStableDestination : this.leader.blockPosition();
-                BlockBreakerPosGoal breaker = new BlockBreakerPosGoal(
-                    this.mob,
-                    dest,
-                    com.example.soundattract.config.SoundAttractConfig.COMMON.blockBreakTimeMultiplier.get(),
-                    com.example.soundattract.config.SoundAttractConfig.COMMON.blockBreakToolOnly.get(),
-                    com.example.soundattract.config.SoundAttractConfig.COMMON.blockBreakProperToolOnly.get(),
-                    com.example.soundattract.config.SoundAttractConfig.COMMON.blockBreakProperToolRequired.get()
-                );
-                BlockBreakerManager.scheduleAdd(this.mob, breaker, 2);
-                this.followerBreaker = breaker;
-                this.stuckTicks = 0;
-            }
-        }
-
-        if (leaderAttractionGoal == null && !com.example.soundattract.ai.RaidManager.isRaidAdvancing(this.leader) && this.mob.distanceToSqr(this.leader) < getGroupDistance() * getGroupDistance()) {
-            this.mob.getNavigation().stop();
-            if (this.mob.isSprinting()) {
-                this.mob.setSprinting(false);
-            }
+        if (!RaidManager.isRaidTicking(leader) && !RaidManager.isRaidAdvancing(leader) && mob.isSprinting()) {
+            mob.setSprinting(false);
         }
     }
 
@@ -258,13 +418,34 @@ public class FollowLeaderGoal extends Goal {
         mob.getNavigation().stop();
         if (mob.isSprinting()) mob.setSprinting(false);
         leader = null;
-        leaderAttractionGoal = null;
-        leaderObjectivePos = null;
-        myStableDestination = null;
-        lastPosVec = null;
-        if (this.followerBreaker != null) {
-            BlockBreakerManager.scheduleRemove(this.mob, this.followerBreaker);
-            this.followerBreaker = null;
-        }
+        hasPickedDest = false;
+        lastRandomDest = null;
+        isSpreadingOut = false;
+        lastAnchorPos = null;
+    }
+    public BlockPos getTargetSoundPos() {
+        return this.lastAnchorPos;
+    }
+
+    /**
+     * Returns true if the member mob's current leader is actively navigating to a
+     * high-weight sound via the override mechanism. When true, the member should
+     * drop its combat target and follow the leader.
+     */
+    private boolean shouldMemberDropTargetForHighWeightSound() {
+        double threshold = com.example.soundattract.config.SoundAttractConfig.COMMON
+                .highSoundWeightTargetOverride.get();
+        if (threshold <= 0) return false;
+
+        Mob leader = MobGroupManager.getLeader(mob);
+        if (leader == null || leader == mob) return false;
+
+        if (RaidManager.isRaidTicking(leader) || RaidManager.isRaidAdvancing(leader)) return false;
+
+        return leader.goalSelector.getAvailableGoals().stream().filter(net.minecraft.world.entity.ai.goal.WrappedGoal::isRunning)
+                .map(WrappedGoal::getGoal)
+                .anyMatch(g ->
+                        (g instanceof AttractionGoal ag && ag.isHighWeightOverrideActive()) ||
+                        (g instanceof LeaderAttractionGoal lag && lag.isHighWeightOverrideActive()));
     }
 }

@@ -1,8 +1,9 @@
 package com.example.soundattract.ai;
 
-import com.example.soundattract.SoundTracker;
+import java.util.EnumSet;
+
+import com.example.soundattract.tracking.SoundTracker;
 import com.example.soundattract.config.SoundAttractConfig;
-import com.example.soundattract.integration.EnhancedAICompat;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
@@ -17,13 +18,7 @@ import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.targeting.TargetingConditions;
 import net.minecraft.world.phys.Vec3;
 
-import java.util.EnumSet;
-
-/**
- * Ported EnhancedAI pick-up-and-throw helper goal: throws allies toward sound sources.
- */
 public class PickUpAndThrowToSoundGoal extends Goal {
-
     private final Mob mob;
     private final TargetingConditions targetingConditions;
     private Mob pickUp;
@@ -35,7 +30,8 @@ public class PickUpAndThrowToSoundGoal extends Goal {
     public PickUpAndThrowToSoundGoal(Mob mob) {
         this.mob = mob;
         this.targetingConditions = TargetingConditions.forNonCombat()
-                .range(this.getFollowDistance());
+                .range(this.getFollowDistance())
+                .selector((livingEntity, level) -> !livingEntity.isPassenger());
         this.setFlags(EnumSet.of(Flag.TARGET, Flag.MOVE, Flag.LOOK));
     }
 
@@ -45,38 +41,42 @@ public class PickUpAndThrowToSoundGoal extends Goal {
         if (this.mob.isVehicle()) return false;
         if (--this.cooldown > 0) return false;
 
-        double chance = EnhancedAICompat.getPickUpAndThrowChance(this.mob.level());
+
+        double chance = SoundAttractConfig.COMMON.pickUpChance.get();
         if (this.mob.getRandom().nextDouble() >= chance) return false;
+
 
         this.targetSound = SoundTracker.findNearestSound(this.mob, this.mob.level(), this.mob.blockPosition(), this.mob.getEyePosition());
         if (this.targetSound == null) return false;
 
+
         String canPickUpTagStr = SoundAttractConfig.COMMON.pickUpCanPickUpTag.get();
         if (canPickUpTagStr == null || canPickUpTagStr.isBlank()) return false;
-        TagKey<EntityType<?>> canPickUpTag = TagKey.create(Registries.ENTITY_TYPE, Identifier.parse(canPickUpTagStr));
+        Identifier canPickUpTagLoc = Identifier.tryParse(canPickUpTagStr);
+        if (canPickUpTagLoc == null) return false;
+        TagKey<EntityType<?>> canPickUpTag = TagKey.create(Registries.ENTITY_TYPE, canPickUpTagLoc);
         if (!this.mob.getType().is(canPickUpTag)) return false;
 
-        int minDist = EnhancedAICompat.getPickUpMinDistanceToPickUp();
+
+        int minDist = SoundAttractConfig.COMMON.pickUpMinDistanceToPickUp.get();
         double distToSound = Math.sqrt(this.mob.blockPosition().distSqr(this.targetSound.pos));
         if (distToSound < minDist) return false;
 
+
         String canBePickedUpTagStr = SoundAttractConfig.COMMON.pickUpCanBePickedUpTag.get();
         if (canBePickedUpTagStr == null || canBePickedUpTagStr.isBlank()) return false;
-        TagKey<EntityType<?>> canBePickedUpTag = TagKey.create(Registries.ENTITY_TYPE, Identifier.parse(canBePickedUpTagStr));
+        Identifier canBePickedUpTagLoc = Identifier.tryParse(canBePickedUpTagStr);
+        if (canBePickedUpTagLoc == null) return false;
+        TagKey<EntityType<?>> canBePickedUpTag = TagKey.create(Registries.ENTITY_TYPE, canBePickedUpTagLoc);
 
         this.targetingConditions.range(this.getFollowDistance());
-        var candidates = this.mob.level().getEntitiesOfClass(Mob.class,
-                this.mob.getBoundingBox().inflate(this.getFollowDistance()),
-                living -> living.getType().is(canBePickedUpTag) && !living.isPassenger());
-        this.pickUp = null;
-        double nearestDistSq = Double.MAX_VALUE;
-        for (Mob candidate : candidates) {
-            double distSq = candidate.distanceToSqr(this.mob);
-            if (distSq < nearestDistSq) {
-                nearestDistSq = distSq;
-                this.pickUp = candidate;
-            }
-        }
+        this.pickUp = this.mob.level().getEntitiesOfClass(Mob.class,
+                        this.mob.getBoundingBox().inflate(this.getFollowDistance()),
+                        living -> living.getType().is(canBePickedUpTag))
+                .stream()
+                .filter(candidate -> this.targetingConditions.test((net.minecraft.server.level.ServerLevel) this.mob.level(), this.mob, candidate))
+                .min(java.util.Comparator.comparingDouble(this.mob::distanceToSqr))
+                .orElse(null);
         return this.pickUp != null && this.pickUp.isAlive();
     }
 
@@ -89,7 +89,7 @@ public class PickUpAndThrowToSoundGoal extends Goal {
     public void start() {
         this.mob.getLookControl().setLookAt(this.pickUp);
         this.mob.getNavigation().stop();
-        this.mob.getNavigation().moveTo(this.pickUp, EnhancedAICompat.getPickUpSpeedModifier());
+        this.mob.getNavigation().moveTo(this.pickUp, SoundAttractConfig.COMMON.pickUpSpeedModifier.get());
         this.pickUp.getNavigation().stop();
     }
 
@@ -106,6 +106,7 @@ public class PickUpAndThrowToSoundGoal extends Goal {
 
     @Override
     public void tick() {
+
         if (this.targetSound == null || this.targetSound.ticksRemaining <= 0) {
             this.targetSound = SoundTracker.findNearestSound(this.mob, this.mob.level(), this.mob.blockPosition(), this.mob.getEyePosition());
             if (this.targetSound == null) {
@@ -116,16 +117,16 @@ public class PickUpAndThrowToSoundGoal extends Goal {
 
         if (!this.mob.isVehicle()) {
             this.pickUp.getNavigation().stop();
-            if (this.mob.getNavigation().isDone()) {
-                this.mob.getNavigation().moveTo(this.pickUp, EnhancedAICompat.getPickUpSpeedModifier());
-            }
+            if (this.mob.getNavigation().isDone())
+                this.mob.getNavigation().moveTo(this.pickUp, SoundAttractConfig.COMMON.pickUpSpeedModifier.get());
             if (this.mob.distanceToSqr(this.pickUp) <= 4f) {
-                this.pickUp.startRiding(this.mob);
+                this.pickUp.startRiding(this.mob, false, false);
                 this.cooldown = this.adjustedTickDelay(20);
             }
-        } else {
+        }
+        else {
             BlockPos soundPos = this.targetSound.pos;
-            int maxThrow = EnhancedAICompat.getPickUpMaxDistanceToThrow();
+            int maxThrow = SoundAttractConfig.COMMON.pickUpMaxDistanceToThrow.get();
             double distToSoundSq = this.mob.blockPosition().distSqr(soundPos);
             if (--this.cooldown <= 0 && distToSoundSq <= (double) (maxThrow * maxThrow)) {
                 double distanceY = soundPos.getY() + 0.5 - this.pickUp.getY();
@@ -138,13 +139,13 @@ public class PickUpAndThrowToSoundGoal extends Goal {
                 this.pickUp.setDeltaMovement(motion);
                 this.mob.playSound(SoundEvents.AXE_STRIP, 3f, 1.5F);
 
-                this.cooldown = this.adjustedTickDelay(EnhancedAICompat.getPickUpCooldownTicks());
+                this.cooldown = this.adjustedTickDelay(SoundAttractConfig.COMMON.pickUpCooldownTicks.get());
                 this.stop();
                 return;
             }
         }
         if (++this.unreachableTime > this.adjustedTickDelay(120)) {
-            this.cooldown = this.adjustedTickDelay(EnhancedAICompat.getPickUpCooldownTicks());
+            this.cooldown = this.adjustedTickDelay(SoundAttractConfig.COMMON.pickUpCooldownTicks.get());
             this.stop();
         }
     }

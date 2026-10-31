@@ -7,8 +7,6 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.enchantment.Enchantment;
 
 public class ModEnchantments {
-
-    public static final ResourceKey<Enchantment> CONCEAL = 
-        ResourceKey.create(Registries.ENCHANTMENT, Identifier.fromNamespaceAndPath(SoundAttractMod.MOD_ID, "conceal"));
-
+    public static final ResourceKey<Enchantment> CONCEAL =
+            ResourceKey.create(Registries.ENCHANTMENT, Identifier.fromNamespaceAndPath(SoundAttractMod.MOD_ID, "conceal"));
 }

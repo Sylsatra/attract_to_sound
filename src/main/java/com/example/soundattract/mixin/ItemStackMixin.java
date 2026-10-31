@@ -14,7 +14,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(ItemStack.class)
 public abstract class ItemStackMixin {
 
-    @Inject(method = "hasFoil", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "hasFoil", at = @At("HEAD"), cancellable = true, remap = false)
     private void soundattract_removeFoilForConceal(CallbackInfoReturnable<Boolean> cir) {
         ItemStack thisStack = (ItemStack) (Object) this;
 

@@ -1,32 +1,46 @@
 package com.example.soundattract;
 
+import com.example.soundattract.camo.CamoAttachments;
+import com.example.soundattract.config.ConfigHelper;
+import com.example.soundattract.config.SoundAttractConfig;
+import com.example.soundattract.config.separate.GeneralConfig;
+import com.example.soundattract.config.separate.GunsConfig;
+import com.example.soundattract.config.separate.IntegrationConfig;
+import com.example.soundattract.config.separate.PathfindingConfig;
+import com.example.soundattract.config.separate.PerformanceConfig;
+import com.example.soundattract.config.separate.RaidConfig;
+import com.example.soundattract.config.separate.ScentConfig;
+import com.example.soundattract.config.separate.StealthConfig;
+import com.example.soundattract.config.separate.VoiceConfig;
+import com.example.soundattract.enchantment.ModEnchantments;
+import com.example.soundattract.event.ArrowInvestigationEvents;
+import com.example.soundattract.event.FloorCreekEvents;
+import com.example.soundattract.event.FovEvents;
+import com.example.soundattract.event.ScentEvents;
+import com.example.soundattract.event.StealthDetectionEvents;
+import com.example.soundattract.event.client.SoundAttractClientEvents;
+import com.example.soundattract.integration.customnpcs.CustomNpcsStealthTargetBridge;
+import com.example.soundattract.integration.immersive_melodies.ImmersiveMelodiesIntegration;
+import com.example.soundattract.integration.voicechat.PlasmoVoiceBootstrap;
+import com.example.soundattract.quantified.QuantifiedIntegration;
+import com.example.soundattract.integration.pointblank.PointBlankIntegration;
+import com.example.soundattract.loot.ModLootModifiers;
+import com.example.soundattract.network.SoundAttractNetwork;
+import com.example.soundattract.registration.ModParticles;
+import com.example.soundattract.worker.WorkSchedulerManager;
+import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
-import com.example.soundattract.config.SoundAttractConfig;
-import com.example.soundattract.loot.ModLootModifiers;
-import com.example.soundattract.event.AIModificationEvents;
-// COMMENTED OUT FOR 1.21.11 - Integration mods not available
-// import com.example.soundattract.integration.TaczIntegrationServerEvents;
-// import com.example.soundattract.integration.PlasmoVoiceBootstrap;
-import com.example.soundattract.integration.VanillaIntegrationEvents;
-import com.mojang.logging.LogUtils;
-
 import net.neoforged.bus.api.IEventBus;
+import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
-import net.neoforged.fml.loading.FMLEnvironment;
-import net.neoforged.api.distmarker.Dist;
 import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
-import net.neoforged.neoforge.network.registration.PayloadRegistrar;
-import net.neoforged.neoforge.event.server.ServerStartingEvent;
-import net.neoforged.neoforge.event.server.ServerStoppingEvent;
-import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.neoforge.event.server.ServerAboutToStartEvent;
 
 @Mod(SoundAttractMod.MOD_ID)
 public class SoundAttractMod {
@@ -34,75 +48,88 @@ public class SoundAttractMod {
     public static final Logger LOGGER = LogUtils.getLogger();
 
     public SoundAttractMod(IEventBus modEventBus, ModContainer container) {
-
-        modEventBus.addListener(this::commonSetup);
-        modEventBus.addListener(this::clientSetup);
-        modEventBus.addListener(this::onConfigLoad);
-        modEventBus.addListener(this::onConfigReload);
         ModLootModifiers.register(modEventBus);
-        modEventBus.addListener(this::registerPacketHandlers);
+        com.example.soundattract.registration.ModSounds.register(modEventBus);
+        ModParticles.register(modEventBus);
+        CamoAttachments.register(modEventBus);
 
-        container.registerConfig(ModConfig.Type.COMMON, SoundAttractConfig.COMMON_SPEC);
+        modEventBus.addListener(this::onCommonSetup);
+        modEventBus.addListener(SoundAttractMod::onClientSetup);
+        modEventBus.addListener(this::onConfigLoading);
+        modEventBus.addListener(this::onConfigReloading);
+        modEventBus.addListener(SoundAttractNetwork::register);
 
-        NeoForge.EVENT_BUS.register(new FovEvents());
-        NeoForge.EVENT_BUS.register(new StealthDetectionEvents());
-        NeoForge.EVENT_BUS.register(new AIModificationEvents());
-        NeoForge.EVENT_BUS.register(new SoundAttractionEvents());
-        NeoForge.EVENT_BUS.register(VanillaIntegrationEvents.class);
-        // COMMENTED OUT FOR 1.21.11 - TACZ not available for NeoForge 1.21.11
-        // com.example.soundattract.integration.TaczIntegration.register();
+        ConfigHelper.register(container);
 
-        // COMMENTED OUT FOR 1.21.11 - Plasmo Voice not available for NeoForge 1.21.11
-        // NeoForge.EVENT_BUS.register(new PlasmoVoiceBootstrap());
-
-        modEventBus.addListener(this::onClientSetup);
-
+        NeoForge.EVENT_BUS.register(new FloorCreekEvents());
+        NeoForge.EVENT_BUS.register(new ArrowInvestigationEvents());
+        if (ModList.get().isLoaded("plasmovoice")) {
+            NeoForge.EVENT_BUS.register(new PlasmoVoiceBootstrap());
+        }
         NeoForge.EVENT_BUS.register(this);
     }
 
-    private void commonSetup(final FMLCommonSetupEvent event) {
+    public void onConfigLoading(final ModConfigEvent.Loading event) {
     }
 
-    private void onClientSetup(final FMLClientSetupEvent event) {
-        LOGGER.info("[SoundAttractMod] Registering SoundAttractClientEvents on client setup");
-        NeoForge.EVENT_BUS.register(new SoundAttractClientEvents());
-        LOGGER.info("[SoundAttractMod] SoundAttractClientEvents registered successfully");
-    }
-
-    private void onConfigLoad(final ModConfigEvent.Loading event) {
-        if (event.getConfig().getSpec() == SoundAttractConfig.COMMON_SPEC) {
-            LOGGER.info("Baking SoundAttractMod config values due to config event.");
+    public void onConfigReloading(final ModConfigEvent.Reloading event) {
+        if (isSoundAttractConfig(event) && SoundAttractConfig.isConfigReady()) {
             SoundAttractConfig.bakeConfig();
+            SoundAttractConfig.parseAndCachePlayerActionConfig();
         }
     }
 
-    private void onConfigReload(final ModConfigEvent.Reloading event) {
-        if (event.getConfig().getSpec() == SoundAttractConfig.COMMON_SPEC) {
-            LOGGER.info("Re-baking SoundAttractMod config values due to config reload.");
-            SoundAttractConfig.bakeConfig();
-        }
-    }
-
-    private void clientSetup(final FMLClientSetupEvent event) {
-        if (ModList.get().isLoaded("voicechat")) {
-            LOGGER.info("[SoundAttractMod] VoiceChat mod is loaded. Integration is active.");
-        } else {
-            LOGGER.info("[SoundAttractMod] VoiceChat mod not present; skipping integration");
-        }
-    }
-    private void registerPacketHandlers(final RegisterPayloadHandlersEvent event) {
-        final PayloadRegistrar registrar = event.registrar("1");
-
-        registrar.playToServer(SoundMessage.TYPE, SoundMessage.STREAM_CODEC, SoundMessage::handle);
+    private boolean isSoundAttractConfig(ModConfigEvent event) {
+        return event.getConfig().getSpec() == GeneralConfig.SPEC
+                || event.getConfig().getSpec() == StealthConfig.SPEC
+                || event.getConfig().getSpec() == GunsConfig.SPEC
+                || event.getConfig().getSpec() == VoiceConfig.SPEC
+                || event.getConfig().getSpec() == IntegrationConfig.SPEC
+                || event.getConfig().getSpec() == ScentConfig.SPEC
+                || event.getConfig().getSpec() == PerformanceConfig.SPEC
+                || event.getConfig().getSpec() == RaidConfig.SPEC
+                || event.getConfig().getSpec() == PathfindingConfig.SPEC
+                || event.getConfig().getSpec() == SoundAttractConfig.SERVER_SPEC;
     }
 
     @SubscribeEvent
-    public void onServerStarting(ServerStartingEvent event) {
-        SoundTracker.initialize();
+    public void onServerAboutToStart(ServerAboutToStartEvent event) {
+        SoundAttractConfig.migrateCommonToServerIfNeeded();
     }
 
-    @SubscribeEvent
-    public void onServerStopping(ServerStoppingEvent event) {
-        SoundTracker.shutdown();
+    private void onCommonSetup(final FMLCommonSetupEvent event) {
+        event.enqueueWork(() -> {
+            SoundAttractConfig.bakeConfig();
+            SoundAttractConfig.parseAndCachePlayerActionConfig();
+            SoundAttractConfig.markConfigReady();
+            QuantifiedIntegration.bootstrap();
+            CustomNpcsStealthTargetBridge.registerIfPresent();
+            registerToughAsNailsIntegrationIfPresent();
+            WorkSchedulerManager.refresh();
+        });
+    }
+
+    private static void registerToughAsNailsIntegrationIfPresent() {
+        if (!ModList.get().isLoaded("toughasnails") || !SoundAttractConfig.COMMON.enableToughAsNailsIntegration.get()) {
+            return;
+        }
+        try {
+            Class<?> integration = Class.forName("com.example.soundattract.integration.toughasnails.ToughAsNailsIntegration");
+            integration.getMethod("registerIfPresent", IEventBus.class).invoke(null, NeoForge.EVENT_BUS);
+        } catch (ReflectiveOperationException | LinkageError e) {
+            LOGGER.error("Failed to register ToughAsNails integration. ToughAsNails support will be disabled.", e);
+        }
+    }
+
+    private static void onClientSetup(final FMLClientSetupEvent event) {
+        event.enqueueWork(() -> {
+            if (ModList.get().isLoaded("voicechat")) {
+                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    LOGGER.info("[SoundAttractMod] VoiceChat mod is loaded; plugin registration is handled by Simple Voice Chat");
+                }
+            } else if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                LOGGER.info("[SoundAttractMod] VoiceChat mod not present; skipping integration");
+            }
+        });
     }
 }

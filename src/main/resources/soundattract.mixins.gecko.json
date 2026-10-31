@@ -1,0 +1,14 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "com.example.soundattract.mixin.gecko",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "com.example.soundattract.mixin.GeckoMixinPlugin",
+  "client": [
+    "MixinGeoEntityRenderer",
+    "MixinGeoArmorRenderer"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

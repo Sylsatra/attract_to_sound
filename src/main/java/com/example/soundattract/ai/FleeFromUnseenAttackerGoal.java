@@ -1,6 +1,6 @@
 package com.example.soundattract.ai;
 
-import com.example.soundattract.StealthDetectionEvents;
+import com.example.soundattract.event.StealthDetectionEvents;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.PathfinderMob; 

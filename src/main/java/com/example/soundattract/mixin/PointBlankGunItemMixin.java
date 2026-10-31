@@ -1,65 +1,71 @@
 package com.example.soundattract.mixin;
 
-// COMMENTED OUT FOR 1.21.11 - Vic's Point Blank not available for NeoForge 1.21.11
-// This mixin requires the PointBlankIntegration class which is also commented out
-
-/*
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
-import com.example.soundattract.integration.PointBlankIntegration;
+import com.example.soundattract.integration.pointblank.PointBlankIntegration;
 import com.vicmatskiv.pointblank.item.FireModeInstance;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.phys.HitResult;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.util.List;
 import java.util.UUID;
-
 
 @Mixin(targets = "com.vicmatskiv.pointblank.item.GunItem", priority = 1100, remap = false)
 public abstract class PointBlankGunItemMixin {
 
-    @Inject(method = "hitScanTarget(Lnet/minecraft/world/entity/player/Player;Lnet/minecraft/world/item/ItemStack;IILnet/minecraft/world/phys/HitResult;DLjava/util/List;)V",
-            at = @At("HEAD"), remap = false)
-    private void soundattract$onFire(Player player,
-                                     ItemStack itemStack,
-                                     int slotIndex,
-                                     int correlationId,
-                                     HitResult hitResult,
-                                     double maxHitScanDistance,
-                                     List<?> blockPosToDestroy,
-                                     CallbackInfo ci) {
-        if (SoundAttractConfig.COMMON == null || !SoundAttractConfig.COMMON.enablePointBlankIntegration.get()) return;
+    @Inject(method = "handleClientHitScanFireRequest", at = @At("RETURN"), remap = false, require = 1)
+    private void soundattract$onHitScanFire(ServerPlayer player,
+                                            FireModeInstance fireModeInstance,
+                                            UUID stateId,
+                                            int slotIndex,
+                                            int correlationId,
+                                            boolean isAiming,
+                                            long requestSeed,
+                                            CallbackInfo ci) {
+        if (!SoundAttractConfig.serverReady() || !SoundAttractConfig.SERVER.enablePointBlankIntegration.get()) return;
         if (SoundAttractConfig.COMMON.debugLogging.get()) {
-            SoundAttractMod.LOGGER.info("[PBMixin] hitScanTarget hooked for {} with item {}", player, itemStack);
+            SoundAttractMod.LOGGER.info("[PBMixin] handleClientHitScanFireRequest hooked for {} slot {}", player, slotIndex);
         }
-        if (player instanceof ServerPlayer serverPlayer) {
-            PointBlankIntegration.onGunShoot(serverPlayer, itemStack);
-        }
+        PointBlankIntegration.onGunShoot(player, player.getInventory().getItem(slotIndex));
     }
 
-    @Inject(method = "handleClientReloadRequest(Lnet/minecraft/server/level/ServerPlayer;Lnet/minecraft/world/item/ItemStack;Ljava/util/UUID;ILcom/vicmatskiv/pointblank/item/FireModeInstance;)V",
-            at = @At("HEAD"), remap = false)
-    private void soundattract$onReloadRequest(ServerPlayer player,
-                                              ItemStack itemStack,
-                                              UUID clientStateId,
-                                              int slotIndex,
-                                              FireModeInstance fireModeInstance,
-                                              CallbackInfo ci) {
-        if (SoundAttractConfig.COMMON == null || !SoundAttractConfig.COMMON.enablePointBlankIntegration.get()) return;
+    @Inject(method = "handleClientProjectileFireRequest", at = @At("RETURN"), remap = false, require = 1)
+    private void soundattract$onProjectileFire(ServerPlayer player,
+                                               FireModeInstance fireModeInstance,
+                                               UUID stateId,
+                                               int slotIndex,
+                                               int correlationId,
+                                               boolean isAiming,
+                                               double spawnPositionX,
+                                               double spawnPositionY,
+                                               double spawnPositionZ,
+                                               double spawnDirectionX,
+                                               double spawnDirectionY,
+                                               double spawnDirectionZ,
+                                               int targetEntityId,
+                                               long requestSeed,
+                                               CallbackInfo ci) {
+        if (!SoundAttractConfig.serverReady() || !SoundAttractConfig.SERVER.enablePointBlankIntegration.get()) return;
+        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            SoundAttractMod.LOGGER.info("[PBMixin] handleClientProjectileFireRequest hooked for {} slot {}", player, slotIndex);
+        }
+        PointBlankIntegration.onGunShoot(player, player.getInventory().getItem(slotIndex));
+    }
+
+    @Inject(method = "handleClientReloadRequest", at = @At("RETURN"), remap = false, require = 1)
+    private void soundattract$onReload(ServerPlayer player,
+                                      ItemStack itemStack,
+                                      UUID clientStateId,
+                                      int slotIndex,
+                                      FireModeInstance fireModeInstance,
+                                      CallbackInfo ci) {
+        if (!SoundAttractConfig.serverReady() || !SoundAttractConfig.SERVER.enablePointBlankIntegration.get()) return;
         if (SoundAttractConfig.COMMON.debugLogging.get()) {
             SoundAttractMod.LOGGER.info("[PBMixin] handleClientReloadRequest hooked for {} with item {}", player, itemStack);
         }
         PointBlankIntegration.onGunReload(player, itemStack);
     }
-}
-*/
-
-// Stub class to prevent compilation errors
-public abstract class PointBlankGunItemMixin {
 }

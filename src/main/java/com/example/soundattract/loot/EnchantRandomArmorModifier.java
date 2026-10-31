@@ -6,7 +6,7 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.world.item.equipment.ArmorType;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.enchantment.Enchantment;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
@@ -27,13 +27,11 @@ public class EnchantRandomArmorModifier extends LootModifier {
     @Override
     protected @NotNull ObjectArrayList<ItemStack> doApply(ObjectArrayList<ItemStack> generatedLoot, LootContext context) {
         var enchantmentRegistry = context.getLevel().registryAccess().lookupOrThrow(Registries.ENCHANTMENT);
-        var concealHolderOpt = enchantmentRegistry.get(ModEnchantments.CONCEAL);
-        if (concealHolderOpt.isEmpty()) return generatedLoot;
-        Holder<Enchantment> concealHolder = concealHolderOpt.get();
+        Holder<Enchantment> concealHolder = enchantmentRegistry.getOrThrow(ModEnchantments.CONCEAL);
 
         for (ItemStack stack : generatedLoot) {
             if (!stack.isEmpty() &&
-                stack.getItem().components().has(net.minecraft.core.component.DataComponents.EQUIPPABLE) &&
+                stack.has(DataComponents.EQUIPPABLE) &&
                 concealHolder.value().canEnchant(stack) &&
                 EnchantmentHelper.getItemEnchantmentLevel(concealHolder, stack) == 0) {
 
@@ -41,7 +39,7 @@ public class EnchantRandomArmorModifier extends LootModifier {
                 return generatedLoot;
             }
         }
-        
+
         return generatedLoot;
     }
 

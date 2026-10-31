@@ -2,8 +2,9 @@
   "required": false,
   "package": "com.example.soundattract.mixin",
   "compatibilityLevel": "JAVA_21",
-  "plugin": "com.example.soundattract.mixin.SoundAttractMixinPlugin",
+  "plugin": "com.example.soundattract.mixin.PointBlankMixinPlugin",
   "mixins": [
+    "PointBlankGunItemMixin"
   ],
   "injectors": {
     "defaultRequire": 1
