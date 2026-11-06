@@ -30,6 +30,7 @@ public class ScentManager {
     private final Level level;
 
     private final Map<ChunkPos, ConcurrentLinkedQueue<ScentNode>> scentMap = new ConcurrentHashMap<>();
+    private final Map<UUID, List<ScentNode>> windNodes = new ConcurrentHashMap<>();
 
     public ScentManager(Level level) {
         this.level = level;
@@ -41,13 +42,34 @@ public class ScentManager {
         queue.add(node);
     }
 
-    /**
-     * Gets all scent nodes in the specified chunk and its 8 neighbors (3x3 area).
-     * Returns a flat list of nodes.
-     */
+    public void replaceWindNodes(UUID owner, List<ScentNode> replacement) {
+        clearWindNodes(owner);
+        if (owner == null || replacement == null || replacement.isEmpty()) return;
+        List<ScentNode> copy = List.copyOf(replacement);
+        windNodes.put(owner, copy);
+        copy.forEach(this::addScentNode);
+    }
+
+    public void clearWindNodes(UUID owner) {
+        List<ScentNode> previous = windNodes.remove(owner);
+        if (previous == null) return;
+        for (ScentNode node : previous) {
+            ChunkPos chunk = ChunkPos.containing(node.getBlockPos());
+            ConcurrentLinkedQueue<ScentNode> nodes = scentMap.get(chunk);
+            if (nodes != null) {
+                nodes.remove(node);
+                if (nodes.isEmpty()) scentMap.remove(chunk, nodes);
+            }
+        }
+    }
+
+
+
+
+
     public List<ScentNode> getNodesInArea(ChunkPos centerChunk) {
         List<ScentNode> result = new ArrayList<>();
-        
+
         for (int x = -1; x <= 1; x++) {
             for (int z = -1; z <= 1; z++) {
                 ChunkPos pos = new ChunkPos(centerChunk.x() + x, centerChunk.z() + z);
@@ -63,16 +85,16 @@ public class ScentManager {
         return result;
     }
 
-    /**
-     * Cleans up expired nodes in the specified chunk.
-     * Can be called periodically or lazily when accessing a chunk.
-     */
+
+
+
+
     public void cleanUpChunk(ChunkPos chunkPos, long currentTime, long maxDuration) {
         ConcurrentLinkedQueue<ScentNode> nodes = scentMap.get(chunkPos);
         if (nodes == null) return;
 
         nodes.removeIf(node -> (currentTime - node.getTimestamp()) > maxDuration);
-        
+
         if (nodes.isEmpty()) {
             scentMap.remove(chunkPos);
         }
@@ -80,12 +102,13 @@ public class ScentManager {
 
     public void clear() {
         scentMap.clear();
+        windNodes.clear();
     }
 
-    /**
-     * Gets all scent nodes across all loaded chunks.
-     * Used by the persistent scent particle system.
-     */
+
+
+
+
     public List<ScentNode> getAllNodes() {
         List<ScentNode> result = new ArrayList<>();
 
@@ -95,7 +118,7 @@ public class ScentManager {
         }
         return result;
     }
-    
+
 
 
 
@@ -111,12 +134,12 @@ public class ScentManager {
         for (Map.Entry<ChunkPos, ConcurrentLinkedQueue<ScentNode>> entry : scentMap.entrySet()) {
             ChunkPos pos = entry.getKey();
             ConcurrentLinkedQueue<ScentNode> queue = entry.getValue();
-            
+
             if (queue.isEmpty()) continue;
 
             CompoundTag chunkTag = new CompoundTag();
             chunkTag.putLong("ChunkKey", pos.pack());
-            
+
             ListTag nodesTag = new ListTag();
             for (ScentNode node : queue) {
 
@@ -124,7 +147,7 @@ public class ScentManager {
                     nodesTag.add(node.save());
                 }
             }
-            
+
             if (!nodesTag.isEmpty()) {
                 chunkTag.put("Nodes", nodesTag);
                 chunksList.add(chunkTag);
@@ -137,19 +160,19 @@ public class ScentManager {
     public void deserializeNBT(CompoundTag tag) {
         scentMap.clear();
         ListTag chunksList = tag.getListOrEmpty("ScentChunks");
-        
+
         for (int i = 0; i < chunksList.size(); i++) {
             CompoundTag chunkTag = chunksList.getCompound(i).orElseGet(CompoundTag::new);
             long chunkKey = chunkTag.getLongOr("ChunkKey", ChunkPos.INVALID_CHUNK_POS);
             ChunkPos pos = ChunkPos.unpack(chunkKey);
-            
+
             ListTag nodesTag = chunkTag.getListOrEmpty("Nodes");
             ConcurrentLinkedQueue<ScentNode> queue = new ConcurrentLinkedQueue<>();
-            
+
             for (int j = 0; j < nodesTag.size(); j++) {
                 nodesTag.getCompound(j).ifPresent(nodeTag -> queue.add(ScentNode.load(nodeTag)));
             }
-            
+
             if (!queue.isEmpty()) {
                 scentMap.put(pos, queue);
             }

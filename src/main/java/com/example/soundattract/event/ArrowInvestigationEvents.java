@@ -138,13 +138,13 @@ public final class ArrowInvestigationEvents {
                     break;
                 }
             }
-            if (!anyPlayerNearby && level.players().size() > 0) {
-                state.prevPos = curr;
-                return false;
-            }
             AABB segmentAabb = new AABB(state.prevPos, curr).inflate(radius + 1.0);
 
             List<Mob> mobs = level.getEntitiesOfClass(Mob.class, segmentAabb, m -> m.isAlive() && hasSoundPursuitGoal(m));
+            if (!ArrowInvestigationHelper.shouldScanProjectileSegment(anyPlayerNearby, !mobs.isEmpty())) {
+                state.prevPos = curr;
+                return false;
+            }
             for (Mob mob : mobs) {
                 UUID mobId = mob.getUUID();
                 if (state.notifiedMobIds.contains(mobId)) continue;
@@ -156,6 +156,7 @@ public final class ArrowInvestigationEvents {
                 double d2 = ArrowInvestigationHelper.segmentToPointSquaredDistance(state.prevPos, curr, mobCenter);
                 if (d2 <= radiusSq) {
                     state.notifiedMobIds.add(mobId);
+                    AwarenessServerEvents.recordNearMiss(mob);
                     dispatchInvestigation(level, projectile, state.spawnPos, mob, "arrow_miss");
                 }
             }

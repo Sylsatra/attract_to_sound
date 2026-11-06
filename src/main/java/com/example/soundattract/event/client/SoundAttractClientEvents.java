@@ -3,7 +3,6 @@ package com.example.soundattract.event.client;
 
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.neoforged.api.distmarker.Dist;
-import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -24,11 +23,9 @@ import net.minecraft.client.resources.sounds.AbstractSoundInstance;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.phys.Vec3;
 
-@OnlyIn(Dist.CLIENT)
 @EventBusSubscriber(modid = SoundAttractMod.MOD_ID, value = Dist.CLIENT)
 public class SoundAttractClientEvents {
 
-    @OnlyIn(Dist.CLIENT)
     @SubscribeEvent
     public static void onPlaySoundEvent(PlaySoundEvent event) {
         if (event.getSound() == null) {

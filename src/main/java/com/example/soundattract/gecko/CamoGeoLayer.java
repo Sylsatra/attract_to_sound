@@ -15,12 +15,9 @@ import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.LivingEntity;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.api.distmarker.OnlyIn;
 
 import java.util.Optional;
 
-@OnlyIn(Dist.CLIENT)
 public class CamoGeoLayer<T extends GeoAnimatable, O, R extends GeoRenderState> extends GeoRenderLayer<T, O, R> {
     private static final DataTicket<LivingEntity> LIVING_ENTITY = DataTicket.create("soundattract_living_entity", LivingEntity.class);
 

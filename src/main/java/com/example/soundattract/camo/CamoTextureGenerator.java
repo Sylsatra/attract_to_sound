@@ -7,8 +7,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.Identifier;
-import net.minecraft.client.renderer.texture.AbstractTexture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
@@ -21,26 +19,44 @@ import java.util.HashSet;
 import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
 import com.mojang.blaze3d.systems.RenderSystem;
-import org.lwjgl.opengl.GL11;
-import java.nio.ByteBuffer;
-import org.lwjgl.BufferUtils;
-import com.example.soundattract.mixin.NativeImageAccessor;
 
 public class CamoTextureGenerator {
     private static final Logger LOGGER = LogManager.getLogger();
     private static final Map<Identifier, NativeImage> CAPTURED_MASKS = new ConcurrentHashMap<>();
+    private static final int MAX_CAPTURED_MASKS = 512;
+    private static final int MAX_GENERATED_TEXTURES = 256;
+    private static final int MAX_RESOURCE_LOOKUP_ENTRIES = 512;
     private static final Set<Identifier> READBACK_FAILURES = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private static final Map<Identifier, Identifier> REDIRECT_CACHE = new ConcurrentHashMap<>();
     private static final Identifier NULL_LOCATION = Identifier.tryBuild("soundattract", "null");
 
-    public static void recordCapturedMask(Identifier loc, NativeImage img) {
+    public static synchronized void recordCapturedMask(Identifier loc, NativeImage img) {
+        if (loc == null || img == null) return;
         NativeImage old = CAPTURED_MASKS.put(loc, img);
         if (old != null && old != img) {
             old.close();
         }
+        READBACK_FAILURES.remove(loc);
+        while (CAPTURED_MASKS.size() > MAX_CAPTURED_MASKS) {
+            Map.Entry<Identifier, NativeImage> eldest = CAPTURED_MASKS.entrySet().iterator().next();
+            if (CAPTURED_MASKS.remove(eldest.getKey(), eldest.getValue())) eldest.getValue().close();
+        }
     }
 
-    public static void releaseCapturedMask(Identifier loc) {
+    public static void recordCapturedMaskCopy(Identifier loc, NativeImage source) {
+        if (loc == null || source == null) return;
+        NativeImage copy = null;
+        try {
+            copy = new NativeImage(source.getWidth(), source.getHeight(), false);
+            copy.copyFrom(source);
+            recordCapturedMask(loc, copy);
+        } catch (RuntimeException e) {
+            if (copy != null) copy.close();
+            throw e;
+        }
+    }
+
+    public static synchronized void releaseCapturedMask(Identifier loc) {
         NativeImage img = CAPTURED_MASKS.remove(loc);
         if (img != null) {
             img.close();
@@ -63,7 +79,7 @@ public class CamoTextureGenerator {
             return existing;
         }
 
-        if (CACHE.size() > 256) {
+        if (CACHE.size() >= MAX_GENERATED_TEXTURES) {
             clearCaches();
         }
 
@@ -85,7 +101,7 @@ public class CamoTextureGenerator {
             return existing == NULL_LOCATION ? null : existing;
         }
 
-        if (MASKED_CACHE.size() > 256) {
+        if (MASKED_CACHE.size() >= MAX_GENERATED_TEXTURES) {
             clearCaches();
         }
 
@@ -120,64 +136,56 @@ public class CamoTextureGenerator {
     }
 
     private static NativeImage extractAlphaMask(Identifier loc) {
-        if (loc == null || READBACK_FAILURES.contains(loc)) return null;
+        if (loc == null) return null;
         
         if (loc.getNamespace().equals("minecraft") && !loc.getPath().startsWith("textures/") && !loc.getPath().startsWith("skins/")) {
-             READBACK_FAILURES.add(loc);
+             recordReadbackFailure(loc);
              return null;
         }
 
         try {
 
-            NativeImage captured = CAPTURED_MASKS.get(loc);
-            if (captured != null) {
-                NativeImage copy = new NativeImage(captured.getWidth(), captured.getHeight(), false);
-                copy.copyFrom(captured);
-                return copy;
+            synchronized (CamoTextureGenerator.class) {
+                NativeImage captured = CAPTURED_MASKS.get(loc);
+                if (captured != null) {
+                    NativeImage copy = new NativeImage(captured.getWidth(), captured.getHeight(), false);
+                    copy.copyFrom(captured);
+                    return copy;
+                }
             }
 
+            if (READBACK_FAILURES.contains(loc)) return null;
 
             var resource = Minecraft.getInstance().getResourceManager().getResource(loc);
             if (resource.isPresent()) {
-                return NativeImage.read(resource.get().open());
-            }
-
-
-
-        if (RenderSystem.isOnRenderThread()) {
-                Identifier targetLoc = loc;
-                
-                if (targetLoc.getNamespace().equals("minecraft")) {
-                    Identifier redirected = REDIRECT_CACHE.get(targetLoc);
-                    if (redirected != null) {
-                        targetLoc = redirected;
-                    }
-                }
-
-                boolean exists = Minecraft.getInstance().getResourceManager().getResource(targetLoc).isPresent();
-                if (!exists) {
-                     if (Minecraft.getInstance().getTextureManager().getTexture(targetLoc) == null) {
-                         READBACK_FAILURES.add(loc);
-                         return null;
-                     }
-                }
-
-                AbstractTexture texture = Minecraft.getInstance().getTextureManager().getTexture(targetLoc);
-                if (texture != null) {
-                    LOGGER.debug("[Camo] GPU texture readback is unavailable on the 26.2 renderer path: {}", loc);
+                try (var input = resource.get().open()) {
+                    return NativeImage.read(input);
                 }
             }
         } catch (Exception e) {
+            LOGGER.debug("[Camo] Could not load mask {}", loc, e);
         }
 
-        READBACK_FAILURES.add(loc);
+        recordReadbackFailure(loc);
         return null;
+    }
+
+    private static void recordReadbackFailure(Identifier loc) {
+        READBACK_FAILURES.add(loc);
+        while (READBACK_FAILURES.size() > MAX_RESOURCE_LOOKUP_ENTRIES) {
+            Identifier evicted = READBACK_FAILURES.iterator().next();
+            READBACK_FAILURES.remove(evicted);
+        }
     }
 
     private static Identifier generateMaskedTexture(MaskedTextureKey key) {
         if (key.maskLocs == null || key.maskLocs.isEmpty()) return null;
 
         java.util.List<NativeImage> masks = new java.util.ArrayList<>();
+        NativeImage masterMask = null;
+        NativeImage image = null;
+        DynamicTexture texture = null;
+        try {
         int maxWidth = 0;
         int maxHeight = 0;
 
@@ -192,7 +200,6 @@ public class CamoTextureGenerator {
 
         if (masks.isEmpty()) return null;
 
-        final NativeImage masterMask;
         if (masks.size() == 1) {
             masterMask = masks.get(0);
         } else {
@@ -216,7 +223,6 @@ public class CamoTextureGenerator {
                         }
                     }
                 }
-                if (m != masterMask) m.close();
             }
         }
 
@@ -226,7 +232,7 @@ public class CamoTextureGenerator {
         width = Math.max(16, Math.min(width, 4096));
         height = Math.max(16, Math.min(height, 4096));
 
-        NativeImage image = new NativeImage(width, height, true);
+        image = new NativeImage(width, height, true);
         Random random = new Random(key.seed);
 
 
@@ -306,19 +312,28 @@ public class CamoTextureGenerator {
             }
         }
 
-        if (masterMask != null) masterMask.close();
         int strengthCode = (int)(key.strength * 10);
         String maskHash = String.valueOf(key.maskLocs.hashCode());
         String name = "generated/camo_masked/" + Math.abs(key.seed) + "_" + strengthCode + "_" + key.color + "_" + maskHash + "_" + key.resolution;
-        DynamicTexture texture = new DynamicTexture(() -> name, image);
+        texture = new DynamicTexture(() -> name, image);
+        image = null;
         Identifier loc = Identifier.tryBuild("soundattract", name.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_/.]", "_"));
         Minecraft.getInstance().getTextureManager().register(loc, texture);
+        texture = null;
         return loc;
+        } finally {
+            if (image != null) image.close();
+            if (texture != null) texture.close();
+            if (masterMask != null && !masks.contains(masterMask)) masterMask.close();
+            for (NativeImage mask : masks) mask.close();
+        }
     }
 
     private static Identifier generateTexture(TextureKey key) {
         int res = key.resolution;
         NativeImage image = new NativeImage(res, res, true);
+        DynamicTexture texture = null;
+        try {
         Random random = new Random(key.seed);
 
 
@@ -396,10 +411,16 @@ public class CamoTextureGenerator {
 
         int strengthCode = (int)(key.strength * 10);
         String name = "generated/camo/" + Math.abs(key.seed) + "_" + strengthCode + "_" + key.color;
-        DynamicTexture texture = new DynamicTexture(() -> name, image);
+        texture = new DynamicTexture(() -> name, image);
+        image = null;
         Identifier loc = Identifier.tryBuild("soundattract", name.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_/.]", "_"));
         Minecraft.getInstance().getTextureManager().register(loc, texture);
+        texture = null;
         return loc;
+        } finally {
+            if (image != null) image.close();
+            if (texture != null) texture.close();
+        }
     }
 
     private record TextureKey(long seed, int color, float strength, int resolution, float erosion, float humidity, float temp) {}

@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-@EventBusSubscriber(modid = SoundAttractMod.MOD_ID, bus = EventBusSubscriber.Bus.GAME)
+@EventBusSubscriber(modid = SoundAttractMod.MOD_ID)
 public class ImmersiveMelodiesEvents {
 
     private static boolean initialized = false;

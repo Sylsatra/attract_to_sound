@@ -131,7 +131,7 @@ public final class ToughAsNailsIntegration {
 
     private static int countArmorPieces(ServerPlayer player, boolean wool) {
         int count = 0;
-        for (ItemStack stack : player.getArmorSlots()) {
+        for (ItemStack stack : com.example.soundattract.util.ArmorSlots.get(player)) {
             if (stack == null || stack.isEmpty()) continue;
             Item item = stack.getItem();
             if (wool ? isWoolArmor(item) : isLeafArmor(item)) {

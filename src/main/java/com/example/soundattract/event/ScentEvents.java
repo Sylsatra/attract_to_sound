@@ -89,6 +89,8 @@ public class ScentEvents {
             double blockFactor = camo.getScentBlockFactor();
             
             baseStrength *= (float) (1.0 - blockFactor);
+            baseStrength *= (float) com.example.soundattract.integration.hotbath.HotBathScentStateCache.scentMultiplier(player, currentTime);
+            baseStrength *= (float) com.example.soundattract.integration.toughasnails.ToughAsNailsStateCache.scentMultiplier(player, currentTime);
 
             if (baseStrength <= 0.05f) {
                 if (SoundAttractConfig.COMMON.debugLogging.get()) {
@@ -129,13 +131,15 @@ public class ScentEvents {
         }
 
 
-        if (!SoundAttractConfig.COMMON.enableGameplayScentParticles.get()) return;
-
-        int spawnInterval = SoundAttractConfig.COMMON.scentParticleSpawnInterval.get();
-        if (event.getLevel().getGameTime() % spawnInterval != 0) return;
-
         ServerLevel serverLevel = (ServerLevel) event.getLevel();
         long currentTime = serverLevel.getGameTime();
+        int spawnInterval = Math.max(1, SoundAttractConfig.COMMON.scentParticleSpawnInterval.get());
+        boolean regularParticlesDue = SoundAttractConfig.COMMON.enableGameplayScentParticles.get()
+                && currentTime % spawnInterval == 0;
+        int windInterval = Math.max(1, SoundAttractConfig.COMMON.windScentParticleIntervalTicks.get());
+        boolean windParticlesDue = SoundAttractConfig.COMMON.enableWindScentParticles.get()
+                && currentTime % windInterval == 0;
+        if (!regularParticlesDue && !windParticlesDue) return;
         long maxDuration = SoundAttractConfig.COMMON.scentNodeDurationTicks.get();
         double baseRenderDist = SoundAttractConfig.COMMON.scentParticleRenderDistance.get();
         final double renderDistSq = baseRenderDist * baseRenderDist;
@@ -150,8 +154,12 @@ public class ScentEvents {
 
             Map<UUID, Boolean> particleEnabledCache = new java.util.HashMap<>();
             Map<UUID, org.joml.Vector3f> colorCache = new java.util.HashMap<>();
+            Map<UUID, Integer> windParticlesPerViewer = new java.util.HashMap<>();
+            int maximumWindParticles = Math.max(1, SoundAttractConfig.COMMON.windScentParticleMaxPerViewer.get());
 
             for (ScentNode node : allNodes) {
+                boolean windNode = node.getSourceType() == com.example.soundattract.scents.ScentSourceType.PLAYER_WIND;
+                if (windNode ? !windParticlesDue : !regularParticlesDue) continue;
                 long age = currentTime - node.getTimestamp();
                 if (age > maxDuration || age < 0) continue;
 
@@ -199,16 +207,24 @@ public class ScentEvents {
 
                 for (ServerPlayer nearbyPlayer : serverLevel.players()) {
                     if (nearbyPlayer.position().distanceToSqr(pos) <= renderDistSq) {
+                        if (windNode && windParticlesPerViewer.getOrDefault(nearbyPlayer.getUUID(), 0) >= maximumWindParticles) continue;
                         com.example.soundattract.config.PlayerProfile2 viewerProfile = SoundAttractConfig.getMatchingPlayerProfile(nearbyPlayer);
                         boolean showScent = true;
                         if (viewerProfile != null && viewerProfile.scentVisibility().isPresent()) {
                             com.example.soundattract.config.ScentVisibilityConfig vis = viewerProfile.scentVisibility().get();
-                            showScent = switch (node.getSourceType()) {
+                            showScent = windNode ? vis.showWindScent() : switch (node.getSourceType()) {
                                 case PLAYER_WALK -> vis.showPlayerWalk();
+                                case PLAYER_WIND -> vis.showWindScent();
                                 case ARROW_PATH, ARROW_ORIGIN, MOB_PROJECTILE_PATH, MOB_PROJECTILE_ORIGIN -> vis.showArrowScent();
                             };
                         }
                         if (!showScent) continue;
+                        if (windNode) {
+                            particleCount = Math.min(particleCount, maximumWindParticles
+                                    - windParticlesPerViewer.getOrDefault(nearbyPlayer.getUUID(), 0));
+                            if (particleCount <= 0) continue;
+                            windParticlesPerViewer.merge(nearbyPlayer.getUUID(), particleCount, Integer::sum);
+                        }
                         serverLevel.sendParticles(nearbyPlayer, dustParticle, true, true,
                                 pos.x, pos.y + 0.3, pos.z,
                                 particleCount, 0.1, 0.05, 0.1, 0.0);

@@ -70,12 +70,12 @@ public class CamoClientEvents {
         if (renderer instanceof LivingEntityRenderer livingRenderer) {
             var model = livingRenderer.getModel();
             
-            if (model instanceof HumanoidModel humanoid) {
-                livingRenderer.addLayer(new GenericMobCamoLayer<HumanoidRenderState, HumanoidModel<HumanoidRenderState>>(livingRenderer, livingRenderer::getTextureLocation));
-            } else if (model instanceof IllagerModel illager) {
+            if (model instanceof IllagerModel illager) {
                 livingRenderer.addLayer(new GenericMobCamoLayer.Illager(livingRenderer, state -> livingRenderer.getTextureLocation(state)));
             } else if (model instanceof VillagerModel villager) {
                 livingRenderer.addLayer(new GenericMobCamoLayer.VillagerLayer(livingRenderer, state -> livingRenderer.getTextureLocation(state)));
+            } else if (model instanceof HumanoidModel humanoid) {
+                livingRenderer.addLayer(new GenericMobCamoLayer<HumanoidRenderState, HumanoidModel<HumanoidRenderState>>(livingRenderer, livingRenderer::getTextureLocation));
             }
         }
     }

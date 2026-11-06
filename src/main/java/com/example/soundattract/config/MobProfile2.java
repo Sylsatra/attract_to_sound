@@ -1,8 +1,11 @@
 package com.example.soundattract.config;
 
 import com.example.soundattract.SoundAttractMod;
+import com.mojang.datafixers.util.Either;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import net.minecraft.advancements.predicates.entity.EntityPredicate;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Mob;
@@ -39,6 +42,25 @@ public record MobProfile2(
             return condition.get().matches(serverLevel, mob.position(), mob);
         }
         return false;
+    }
+
+
+
+
+
+
+    public static JsonElement normalizeLegacyPredicate(JsonElement predicate) {
+        if (!predicate.isJsonObject()) return predicate;
+        JsonObject object = predicate.getAsJsonObject();
+        if (object.has("type") && object.get("type").isJsonPrimitive()
+                && object.get("type").getAsJsonPrimitive().isString()) {
+            JsonElement oldType = object.remove("type");
+            if (!object.has("minecraft:entity_type")) object.add("minecraft:entity_type", oldType);
+        }
+        for (String child : List.of("vehicle", "passenger", "targeted_entity")) {
+            if (object.has(child)) normalizeLegacyPredicate(object.get(child));
+        }
+        return object;
     }
 
     public Optional<SoundOverride> getSoundOverride(net.minecraft.resources.Identifier soundId) {

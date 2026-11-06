@@ -132,6 +132,7 @@ public class RaidManager {
     }
 
     public static void tick(ServerLevel level) {
+        LivingWallCoordinator.tick(level);
         PerWorldData d = getData(level);
         long now = level.getGameTime();
 

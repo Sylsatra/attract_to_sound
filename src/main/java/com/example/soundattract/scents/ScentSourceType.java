@@ -2,6 +2,7 @@ package com.example.soundattract.scents;
 
 public enum ScentSourceType {
     PLAYER_WALK,
+    PLAYER_WIND,
     ARROW_ORIGIN,
     ARROW_PATH,
     MOB_PROJECTILE_ORIGIN,

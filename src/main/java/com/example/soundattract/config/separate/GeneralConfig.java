@@ -106,7 +106,7 @@ public class GeneralConfig {
                 .defineInRange("soundNoveltyTimeTicks", 100, 1, 200);
 
         CONFIG_SCHEMA_VERSION = BUILDER.comment("Internal schema version for config migrations. Do not change.")
-                .defineInRange("configSchemaVersion", 18, 0, Integer.MAX_VALUE);
+                .defineInRange("configSchemaVersion", 19, 0, Integer.MAX_VALUE);
 
         BUILDER.pop();
 

@@ -12,7 +12,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.projectile.ThrowableItemProjectile;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrowableItemProjectile;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.material.Fluid;
@@ -94,7 +94,7 @@ public final class HotBathIntegration {
     }
 
     public static void applySplashWash(ThrowableItemProjectile projectile, Identifier fluidId) {
-        if (projectile == null || projectile.level().isClientSide || !isEnabledAndLoaded()) return;
+        if (projectile == null || projectile.level().isClientSide() || !isEnabledAndLoaded()) return;
         Identifier effectiveFluid = fluidId != null ? fluidId : fluidIdFromStack(projectile.getItem());
         if (effectiveFluid == null) return;
         HotBathConfigParser.CamoWashRate rate = HotBathScentRules.splashWashRate(effectiveFluid);

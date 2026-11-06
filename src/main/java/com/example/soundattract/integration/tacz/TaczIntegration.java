@@ -8,19 +8,17 @@ import com.tacz.guns.api.event.common.GunReloadEvent;
 import com.tacz.guns.api.event.common.GunShootEvent;
 import com.tacz.guns.api.item.IGun;
 import com.tacz.guns.api.item.attachment.AttachmentType;
+import cn.sh1rocu.tacz.api.LogicalSide;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.ItemStack;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.LogicalSide;
 import net.neoforged.fml.ModList;
 
 public class TaczIntegration {
 
     private static final Identifier TACZ_SOUND_ID = Identifier.fromNamespaceAndPath("tacz", "gun");
 
-    @SubscribeEvent
     public static void onGunShoot(GunShootEvent event) {
         if (!ModList.get().isLoaded("tacz")) return;
         if (!SoundAttractConfig.serverReady() || !SoundAttractConfig.SERVER.enableTaczIntegration.get()) return;
@@ -69,7 +67,6 @@ public class TaczIntegration {
         SoundTracker.addSound(null, pos, dimString, (int) range, weight, lifetime, soundIdToUse);
     }
 
-    @SubscribeEvent
     public static void onGunReload(GunReloadEvent event) {
         if (!ModList.get().isLoaded("tacz")) return;
         if (!SoundAttractConfig.serverReady() || !SoundAttractConfig.SERVER.enableTaczIntegration.get()) return;

@@ -13,12 +13,16 @@
     "SnowballMixin",
     "ThrownPotionMixin",
     "MobAccessor",
+    "LivingBridgePathNavigationMixin",
+    "WalkNodeEvaluatorMixin"
+  ],
+  "client": [
     "ItemInHandLayerMixin",
     "HumanoidArmorLayerMixin",
     "SimpleTextureMixin",
     "HttpTextureMixin",
-    "SimpleTextureTextureImageMixin",
-    "NativeImageAccessor"
+    "NativeImageAccessor",
+    "LivingEntityRenderStateMixin"
   ],
   "injectors": {
     "defaultRequire": 1

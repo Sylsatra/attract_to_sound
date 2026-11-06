@@ -4,6 +4,7 @@ package com.example.soundattract.event;
 import net.minecraft.core.registries.BuiltInRegistries;
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.PlayerStance;
+import com.example.soundattract.config.DebugLoggingConfig;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.util.CamoUtil;
 import com.example.soundattract.enchantment.ModEnchantments;
@@ -321,7 +322,7 @@ public class StealthDetectionEvents {
 
         if (!skipExpensive && SoundAttractConfig.COMMON.enableEnvironmentalCamouflage.get()) {
             int finalColor = CamoUtil.getFinalPerceptionColor(target);
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                 SoundAttractMod.LOGGER.info("[EnvCamo_Mob] {} finalColor=0x{}",
                         target.getName().getString(), String.format("%06X", finalColor));
             }
@@ -607,7 +608,7 @@ public class StealthDetectionEvents {
                 boolean feetClear = isPathClear(mob, newTarget, start, targetFeet, ignoreEntityBlockers);
 
                 if (!eyeClear && !centerClear && !feetClear) {
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                         SoundAttractMod.LOGGER.debug(
                             "[LivingChangeTargetEvent] Mob {} targeting of {} CANCELED. All line of sights blocked by entities/walls.",
                             mob.getName().getString(), newTarget.getName().getString()
@@ -623,14 +624,14 @@ public class StealthDetectionEvents {
 
     public static boolean canMobDetectLivingEntity(Mob mob, LivingEntity target) {
         if (mob == null || target == null) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.warn("[CanDetect] Called with null mob or target. Defaulting to detectable.");
             }
             return true;
         }
 
         if (com.example.soundattract.ai.MobGroupManager.isMobInHighWeightOverride(mob)) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.info("[CanDetect] Mob {} is blind due to high-weight sound override.", mob.getName().getString());
             }
             return false;
@@ -646,7 +647,7 @@ public class StealthDetectionEvents {
 
         if (target instanceof Player player) {
             if (player.isCreative() || player.isSpectator() || !player.isAlive()) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info("[CanDetect] Player {} is creative/spectator/dead. Bypassing stealth. Mob {}.", player.getName().getString(), mob.getName().getString());
                 }
                 return true;
@@ -678,7 +679,7 @@ public class StealthDetectionEvents {
         if (xrayRange > 0) {
             double distSqXray = mob.distanceToSqr(target);
             if (distSqXray <= xrayRange * xrayRange) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info(
                         "[XRAY] Mob {} detects {} within XRAY range {} (distSq {}).",
                         mob.getName().getString(), target.getName().getString(), String.format("%.2f", xrayRange), String.format("%.2f", distSqXray)
@@ -700,7 +701,7 @@ public class StealthDetectionEvents {
         double distSq = mob.distanceToSqr(target);
 
         if (distSq > detectionRange * detectionRange) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.info(
                         "[StealthQuery] {} is OUT OF RANGE for mob {} (distSq: {}, rangeSq: {}).",
                         target.getName().getString(), mob.getName().getString(),
@@ -712,7 +713,7 @@ public class StealthDetectionEvents {
         }
 
         if (!FovEvents.isTargetInFov(mob, target, true)) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.info(
                         "[StealthQuery] {} is IN RANGE for mob {} but OUTSIDE FOV. Denying detection.",
                         target.getName().getString(), mob.getName().getString()
@@ -727,18 +728,18 @@ public class StealthDetectionEvents {
                 boolean isDeserter = MobGroupManager.isDeserter(mob);
                 if (isEdge && !isDeserter) {
                     recordSuppressedEdgeDetection(mob);
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                         SoundAttractMod.LOGGER.info("[CanDetect] Suppressing EDGE mob {} (non-deserter) despite detectability; signaling RAID.", mob.getName().getString());
                     }
                     return false;
                 }
             } catch (Throwable t) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.warn("[CanDetect] Edge suppression check failed: {}", t.getMessage());
                 }
             }
         }
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
             SoundAttractMod.LOGGER.info(
                     "[StealthQuery] {} IS DETECTABLE by mob {} (in range and in FOV).",
                     target.getName().getString(), mob.getName().getString()
@@ -750,6 +751,12 @@ public class StealthDetectionEvents {
     @Deprecated
     public static boolean canMobDetectPlayer(Mob mob, Player player) {
         return canMobDetectLivingEntity(mob, player);
+    }
+
+    public static boolean canMobDetectPlayerWithRange(Mob mob, Player player, double detectionRange) {
+        return mob != null && player != null && player.isAlive() && detectionRange >= 0.0D
+                && mob.distanceToSqr(player) <= detectionRange * detectionRange
+                && canMobDetectPlayer(mob, player);
     }
 
     private static boolean canMobDetectTargetNoEdgeSuppression(Mob mob, LivingEntity target) {
@@ -964,7 +971,7 @@ public class StealthDetectionEvents {
 
                 if (canCurrentlyDetect) {
                     if (mobOutOfRangeTicks.remove(mobId) != null) {
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                             SoundAttractMod.LOGGER.info(
                                     "[TickCheck] Mob {} regained direct detection of {}. Grace period reset.",
                                     mob.getName().getString(), target.getName().getString()
@@ -974,7 +981,7 @@ public class StealthDetectionEvents {
                 } else {
                     int ticks = mobOutOfRangeTicks.getOrDefault(mobId, 0) + stealthCheckInterval;
                     if (ticks >= SoundAttractConfig.COMMON.stealthGracePeriodTicks.get()) {
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                             SoundAttractMod.LOGGER.info(
                                 "[TickCheck] Mob {} lost target {} due to stealth grace period timeout.",
                                 mob.getName().getString(), target.getName().getString()
@@ -990,7 +997,7 @@ public class StealthDetectionEvents {
                         mobOutOfRangeTicks.remove(mobId);
                     } else {
                         mobOutOfRangeTicks.put(mobId, ticks);
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                             SoundAttractMod.LOGGER.info(
                                 "[TickCheck] Mob {} cannot detect {}. In grace period ({}/{}).",
                                 mob.getName().getString(), target.getName().getString(),
@@ -1031,7 +1038,7 @@ public class StealthDetectionEvents {
         boolean isCrouching = player.isCrouching();
         float playerHeight = player.getDimensions(currentPose).height();
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
             SoundAttractMod.LOGGER.info(
                     "[DetermineStanceDetails] Player: {}, Pose: {}, isVisuallyCrawling: {}, isCrouching: {}, Height: {}",
                     player.getName().getString(),
@@ -1043,7 +1050,7 @@ public class StealthDetectionEvents {
         }
 
         if (isVisuallyCrawling || playerHeight <= 1.0F) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.info("[DetermineStance] Player {} is CRAWLING (VisualCrawl: true, Pose: {}, Height: {})",
                         player.getName().getString(), currentPose, String.format("%.2f", playerHeight));
             }
@@ -1051,14 +1058,14 @@ public class StealthDetectionEvents {
         }
 
         if (isCrouching) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.info("[DetermineStance] Player {} is SNEAKING (Pose: {}, Crouching: {}, Height: {})",
                         player.getName().getString(), currentPose, isCrouching, String.format("%.2f", playerHeight));
             }
             return PlayerStance.SNEAKING;
         }
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
             SoundAttractMod.LOGGER.info("[DetermineStance] Player {} is STANDING (Pose: {}, Height: {})",
                     player.getName().getString(), currentPose, String.format("%.2f", playerHeight));
         }
@@ -1084,7 +1091,7 @@ public class StealthDetectionEvents {
         PlayerStance currentStance = determinePlayerStance(player);
         if (gunshotRangeOpt.isPresent()) {
             baseRange = gunshotRangeOpt.get();
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.info(
                 "[GRSDR_Update] Player {} has active gunshot flash. Initial range set to {}.",
                 player.getName().getString(), String.format("%.2f", baseRange)
@@ -1105,7 +1112,7 @@ public class StealthDetectionEvents {
             }
             double poseReduction = Math.max(0, standingRange - currentPoseBaseRange); 
             baseRange -= poseReduction;
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
             SoundAttractMod.LOGGER.info(
                 "[GRSDR_Update] Gunshot range adjusted by pose {}. Reduction of {}. New range: {}.",
                 currentStance, String.format("%.2f", poseReduction), String.format("%.2f", baseRange)
@@ -1116,7 +1123,7 @@ public class StealthDetectionEvents {
             Optional<Double> override = (mobProfile != null) ? mobProfile.getDetectionOverride(currentStance) : Optional.empty();
             if (override.isPresent()) {
                 baseRange = override.get();
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info(
                     "[GRSDR_Update] Mob {} using profile '{}' detection range for stance {}: {}",
                     mob.getName().getString(), mobProfile.id(), currentStance, baseRange
@@ -1127,7 +1134,7 @@ public class StealthDetectionEvents {
                 Optional<Double> playerOverride = (playerProfile != null) ? playerProfile.getDetectionOverride(currentStance) : Optional.empty();
                 if (playerOverride.isPresent()) {
                     baseRange = playerOverride.get();
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                         SoundAttractMod.LOGGER.info(
                                 "[GRSDR_Update] Player {} matched player profile '{}' for stance {}: {}",
                                 player.getName().getString(), playerProfile.id(), currentStance, baseRange
@@ -1146,7 +1153,7 @@ public class StealthDetectionEvents {
                             baseRange = SoundAttractConfig.COMMON.standingDetectionRangePlayer.get();
                             break;
                     }
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                         if (mobProfile != null) {
                             SoundAttractMod.LOGGER.info(
                                     "[GRSDR_Update] Mob {} profile '{}' has no override for stance {}. No matching player profile override. Using default: {}",
@@ -1165,7 +1172,7 @@ public class StealthDetectionEvents {
         if (player.hasEffect(net.minecraft.world.effect.MobEffects.INVISIBILITY)) {
             double invisFactor = SoundAttractConfig.COMMON.invisibilityStealthFactor.get();
             baseRange *= invisFactor;
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.info(
                         "[GRSDR_Update] Player {} is invisible, reducing baseRange to {}",
                         player.getName().getString(), String.format("%.2f", baseRange)
@@ -1211,7 +1218,7 @@ public class StealthDetectionEvents {
         lightFactor = Math.max(SoundAttractConfig.COMMON.minLightFactor.get(), lightFactor);
         lightFactor = Math.min(SoundAttractConfig.COMMON.maxLightFactor.get(), lightFactor);
         baseRange *= lightFactor;
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
             SoundAttractMod.LOGGER.info("[GRSDR_Update] Light - EffectiveLight: {}, LightFactor (clamped): {}, baseRange: {}",
                     effectiveLight, String.format("%.2f", lightFactor), String.format("%.2f", baseRange));
         }
@@ -1224,7 +1231,7 @@ public class StealthDetectionEvents {
                 for (int i = 0; i < heldItemCount; i++) {
                     baseRange *= penaltyPerItem;
                 }
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info("[GRSDR_Update] Held Item Penalty: {} items, factor {} (applied {} times) -> {}",
                             heldItemCount, String.format("%.2f", penaltyPerItem), heldItemCount, String.format("%.2f", baseRange));
                 }
@@ -1242,7 +1249,7 @@ public class StealthDetectionEvents {
                 for (int i = 0; i < visiblyEnchantedArmorPieces; i++) {
                     baseRange *= armorPenaltyFactor;
                 }
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info("[GRSDR_Update] Armor Enchant Penalty: {} pieces, factor {} (applied {} times) -> {}",
                             visiblyEnchantedArmorPieces, String.format("%.2f", armorPenaltyFactor), visiblyEnchantedArmorPieces, String.format("%.2f", baseRange));
                 }
@@ -1259,7 +1266,7 @@ public class StealthDetectionEvents {
                 for (int i = 0; i < visiblyEnchantedHeldItems; i++) {
                     baseRange *= heldItemEnchantPenalty;
                 }
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info("[GRSDR_Update] Held Item Enchant Penalty: {} items, factor {} (applied {} times) -> {}",
                             visiblyEnchantedHeldItems, String.format("%.2f", heldItemEnchantPenalty), visiblyEnchantedHeldItems, String.format("%.2f", baseRange));
                 }
@@ -1270,7 +1277,7 @@ public class StealthDetectionEvents {
 
         if (SoundAttractConfig.COMMON.enableEnvironmentalCamouflage.get()) {
             int finalColor = CamoUtil.getFinalPerceptionColor(player);
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                 SoundAttractMod.LOGGER.info("[EnvCamo_Player] {} finalColor=0x{}",
                         player.getName().getString(), String.format("%06X", finalColor));
             }
@@ -1301,7 +1308,7 @@ public class StealthDetectionEvents {
                     double actualBonus = maxBonus * ratio * effectiveStrength;
                     baseRange *= (1.0 - actualBonus);
 
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                         SoundAttractMod.LOGGER.info(
                                 "[EnvCamo_Player] {} BONUS: finalColor=0x{}, envColor=0x{}, diff={}, strength={}, effect={}, newRange={}",
                                 player.getName().getString(), String.format("%06X", finalColor), String.format("%06X", envColor),
@@ -1313,7 +1320,7 @@ public class StealthDetectionEvents {
                     if (diff > mismatchThreshold) {
                         double penalty = SoundAttractConfig.COMMON.environmentalMismatchPenaltyFactor.get();
                         baseRange *= penalty;
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                             SoundAttractMod.LOGGER.info("[EnvCamo_Player] {} PENALTY: diff={}, penalty={}, newRange={}",
                                     player.getName().getString(), diff, String.format("%.2f", penalty), String.format("%.2f", baseRange));
                         }
@@ -1325,13 +1332,13 @@ public class StealthDetectionEvents {
         if (!skipExpensive) {
             if (level.isRainingAt(player.blockPosition())) {
                 baseRange *= SoundAttractConfig.COMMON.rainStealthFactor.get();
-                 if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                 if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info("[GRSDR_Update] Raining. Factor applied. baseRange: {}", String.format("%.2f", baseRange));
                 }
             }
             if (level.isThundering()) {
                 baseRange *= SoundAttractConfig.COMMON.thunderStealthFactor.get();
-                 if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                 if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info("[GRSDR_Update] Thundering. Factor applied. baseRange: {}", String.format("%.2f", baseRange));
                 }
             }
@@ -1340,17 +1347,17 @@ public class StealthDetectionEvents {
         if (currentStance != PlayerStance.SNEAKING && currentStance != PlayerStance.CRAWLING) {
             if (isPlayerMoving(player, SoundAttractConfig.COMMON.movementThreshold.get())) {
                 baseRange *= SoundAttractConfig.COMMON.movementStealthPenalty.get();
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info("[GRSDR_Update] Player moving (not sneak/crawl). Penalty applied. baseRange: {}", String.format("%.2f", baseRange));
                 }
             } else {
                 baseRange *= SoundAttractConfig.COMMON.stationaryStealthBonusFactor.get();
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info("[GRSDR_Update] Player stationary (not sneak/crawl). Bonus applied. baseRange: {}", String.format("%.2f", baseRange));
                 }
             }
         } else {
-             if (SoundAttractConfig.COMMON.debugLogging.get()) {
+             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.info("[GRSDR_Update] Player sneaking/crawling. Movement penalty/bonus not applied here (handled by stance base range). baseRange: {}", String.format("%.2f", baseRange));
             }
         }
@@ -1374,7 +1381,7 @@ public class StealthDetectionEvents {
                 if (SoundAttractConfig.COMMON.requireFullSetForCamouflageBonus.get()) {
                     if (isActuallyWearingFullSetOfListedItems) {
                         effectToApply = SoundAttractConfig.COMMON.fullArmorStealthBonus.get();
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                             SoundAttractMod.LOGGER.info(
                                     "[GRSDR_Update ItemCamo] Player {} wearing full set of listed items (requireFullSet=true). Applying fullArmorStealthBonus: {}",
                                     player.getName().getString(), effectToApply
@@ -1399,7 +1406,7 @@ public class StealthDetectionEvents {
                             }
                         }
                         effectToApply = totalEffectiveness;
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                              SoundAttractMod.LOGGER.info(
                                     "[GRSDR_Update ItemCamo] Player {} wearing partial listed camo (requireFullSet=true). Applying summed per-piece effectiveness: {}",
                                     player.getName().getString(), effectToApply
@@ -1409,7 +1416,7 @@ public class StealthDetectionEvents {
                 } else {
                     if (isActuallyWearingFullSetOfListedItems && SoundAttractConfig.COMMON.fullArmorStealthBonus.get() > 0) {
                         effectToApply = SoundAttractConfig.COMMON.fullArmorStealthBonus.get();
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                             SoundAttractMod.LOGGER.info(
                                     "[GRSDR_Update ItemCamo] Player {} wearing full set of listed items (requireFullSet=false, using full bonus). Applying fullArmorStealthBonus: {}",
                                     player.getName().getString(), effectToApply
@@ -1434,7 +1441,7 @@ public class StealthDetectionEvents {
                             }
                         }
                         effectToApply = totalEffectiveness;
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                             SoundAttractMod.LOGGER.info(
                                     "[GRSDR_Update ItemCamo] Player {} (requireFullSet=false). Applying summed per-piece effectiveness: {}",
                                     player.getName().getString(), effectToApply
@@ -1446,7 +1453,7 @@ public class StealthDetectionEvents {
                 if (effectToApply > 0.0) {
                     double itemCamoMultiplier = 1.0 - Math.min(effectToApply, 0.99);
                     baseRange *= itemCamoMultiplier;
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                         SoundAttractMod.LOGGER.info(
                                 "[GRSDR_Update ItemCamo] Player {} range after general item camouflage: {}. Applied multiplier: {} (Effect: {})",
                                 player.getName().getString(), String.format("%.2f", baseRange),
@@ -1456,7 +1463,7 @@ public class StealthDetectionEvents {
                 }
 
                 double finalCalculatedRange = Math.max(SoundAttractConfig.COMMON.minStealthDetectionRange.get(), Math.min(baseRange, SoundAttractConfig.COMMON.maxStealthDetectionRange.get()));
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info(
                             "[GRSDR_End] Mob: {}, Player: {}, Final Calculated Range (camo items processed): {}",
                             mob.getName().getString(), player.getName().getString(), String.format("%.2f", finalCalculatedRange)
@@ -1465,7 +1472,7 @@ public class StealthDetectionEvents {
                 return finalCalculatedRange;
             } else {
                 double finalCalculatedRange = Math.max(SoundAttractConfig.COMMON.minStealthDetectionRange.get(), Math.min(baseRange, SoundAttractConfig.COMMON.maxStealthDetectionRange.get()));
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                     SoundAttractMod.LOGGER.info(
                             "[GRSDR_End] Mob: {}, Player: {}, Item Camo enabled but no items configured. Final Range: {}",
                             mob.getName().getString(), player.getName().getString(), String.format("%.2f", finalCalculatedRange)
@@ -1475,7 +1482,7 @@ public class StealthDetectionEvents {
             }
         } else {
             double finalCalculatedRange = Math.max(SoundAttractConfig.COMMON.minStealthDetectionRange.get(), Math.min(baseRange, SoundAttractConfig.COMMON.maxStealthDetectionRange.get()));
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.info(
                         "[GRSDR_End] Mob: {}, Player: {}, Item Camo system disabled. Final Range: {}",
                         mob.getName().getString(), player.getName().getString(), String.format("%.2f", finalCalculatedRange)
@@ -1535,7 +1542,7 @@ public class StealthDetectionEvents {
         }
 
         if (blockColors.isEmpty()) {
-             if (SoundAttractConfig.COMMON.debugLogging.get()) {
+             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                  SoundAttractMod.LOGGER.info("[GetEnvColor] No block map colors found in sampling area.");
             }
             return Optional.empty();
@@ -1550,7 +1557,7 @@ public class StealthDetectionEvents {
 
         int numColors = blockColors.size();
         if (numColors == 0) {
-             if (SoundAttractConfig.COMMON.debugLogging.get()) {
+             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                  SoundAttractMod.LOGGER.warn("[GetEnvColor] numColors is 0 after processing, this should not happen if blockColors list was not empty.");
             }
             return Optional.empty();
@@ -1560,7 +1567,7 @@ public class StealthDetectionEvents {
         int avgB = (int) (totalB / numColors);
         int finalAvgColor = (avgR << 16) | (avgG << 8) | avgB;
 
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
             SoundAttractMod.LOGGER.info("[GetEnvColor] Average environment color: 0x{} from {} blocks.",
                     String.format("%06X", finalAvgColor), numColors);
         }
@@ -1606,7 +1613,7 @@ public class StealthDetectionEvents {
         );
         
         if (hit != null) {
-             if (SoundAttractConfig.COMMON.debugLogging.get()) {
+             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                  Entity blocker = hit.getEntity();
                  SoundAttractMod.LOGGER.info("[FriendlyFire] Path from {} to {} blocked by {}", 
                      looker.getName().getString(), target.getName().getString(), blocker.getName().getString());

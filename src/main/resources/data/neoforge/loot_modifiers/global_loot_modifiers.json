@@ -1,8 +1,0 @@
-{
-  "replace": false,
-  "entries": [
-    "soundattract:add_conceal_book",
-    "soundattract:enchant_conceal_armor",
-    "soundattract:enchant_conceal_tool"
-  ]
-}

@@ -2,10 +2,12 @@ package com.example.soundattract;
 
 import com.example.soundattract.camo.CamoAttachments;
 import com.example.soundattract.config.ConfigHelper;
+import com.example.soundattract.config.DebugLoggingConfig;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.config.separate.GeneralConfig;
 import com.example.soundattract.config.separate.GunsConfig;
 import com.example.soundattract.config.separate.IntegrationConfig;
+import com.example.soundattract.config.separate.LivingWallConfig;
 import com.example.soundattract.config.separate.PathfindingConfig;
 import com.example.soundattract.config.separate.PerformanceConfig;
 import com.example.soundattract.config.separate.RaidConfig;
@@ -46,6 +48,7 @@ public class SoundAttractMod {
     public SoundAttractMod(IEventBus modEventBus, ModContainer container) {
         ModLootModifiers.register(modEventBus);
         com.example.soundattract.registration.ModSounds.register(modEventBus);
+        com.example.soundattract.registration.ModParticles.register(modEventBus);
         CamoAttachments.register(modEventBus);
 
         modEventBus.addListener(this::onCommonSetup);
@@ -84,6 +87,8 @@ public class SoundAttractMod {
                 || event.getConfig().getSpec() == PerformanceConfig.SPEC
                 || event.getConfig().getSpec() == RaidConfig.SPEC
                 || event.getConfig().getSpec() == PathfindingConfig.SPEC
+                || event.getConfig().getSpec() == LivingWallConfig.SPEC
+                || event.getConfig().getSpec() == DebugLoggingConfig.SPEC
                 || event.getConfig().getSpec() == SoundAttractConfig.SERVER_SPEC;
     }
 
@@ -98,8 +103,34 @@ public class SoundAttractMod {
             SoundAttractConfig.parseAndCachePlayerActionConfig();
             SoundAttractConfig.markConfigReady();
             QuantifiedIntegration.bootstrap();
+            registerTaczIntegrationIfPresent();
+            registerToughAsNailsIntegrationIfPresent();
             WorkSchedulerManager.refresh();
         });
+    }
+
+    private static void registerToughAsNailsIntegrationIfPresent() {
+        if (!ModList.get().isLoaded("toughasnails") || !SoundAttractConfig.COMMON.enableToughAsNailsIntegration.get()) {
+            return;
+        }
+        try {
+            Class<?> integration = Class.forName("com.example.soundattract.integration.toughasnails.ToughAsNailsIntegration");
+            integration.getMethod("registerIfPresent", IEventBus.class).invoke(null, NeoForge.EVENT_BUS);
+        } catch (ReflectiveOperationException | LinkageError exception) {
+            LOGGER.error("Failed to register ToughAsNails integration. Support will be disabled.", exception);
+        }
+    }
+
+    private static void registerTaczIntegrationIfPresent() {
+        if (!ModList.get().isLoaded("tacz") || !SoundAttractConfig.COMMON.enableTaczIntegration.get()) {
+            return;
+        }
+        try {
+            Class<?> integration = Class.forName("com.example.soundattract.integration.tacz.TaczIntegrationHandler");
+            integration.getMethod("register").invoke(null);
+        } catch (ReflectiveOperationException | LinkageError exception) {
+            LOGGER.error("Failed to register TaCZ integration. Support will be disabled.", exception);
+        }
     }
 
     private static void onClientSetup(final FMLClientSetupEvent event) {

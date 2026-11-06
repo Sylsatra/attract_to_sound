@@ -1,35 +1,23 @@
 package com.example.soundattract.mixin;
 
+import com.example.soundattract.camo.CamoTextureGenerator;
 import com.mojang.blaze3d.platform.NativeImage;
+import java.util.concurrent.CompletableFuture;
+import net.minecraft.core.ClientAsset;
 import net.minecraft.resources.Identifier;
+import net.minecraft.client.renderer.texture.SkinTextureDownloader;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import com.example.soundattract.camo.CamoTextureGenerator;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-@Mixin(targets = "net.minecraft.client.renderer.texture.SkinTextureDownloader")
-public abstract class HttpTextureMixin extends SimpleTextureMixin {
-
-    /**
-     * Captures the skin NativeImage after it finishes downloading.
-     * Target names:
-     * - onLoadingFinished / loadCallback (Mojang)
-     * - onDownload (MCP/Mappings)
-     * - m_118010_ (Searge/Runtime)
-     */
-    @Inject(
-        method = {"onLoadingFinished", "loadCallback", "onDownload", "m_118010_"}, 
-        at = @At("HEAD"), 
-        remap = false, 
-        require = 0
-    )
-    private void soundattract$onDownload(NativeImage img, CallbackInfo ci) {
-        Identifier loc = this.soundattract$getLocation();
-        if (loc != null) {
-            NativeImage copy = new NativeImage(img.getWidth(), img.getHeight(), false);
-            copy.copyFrom(img);
-            CamoTextureGenerator.recordCapturedMask(loc, copy);
-        }
+@Mixin(SkinTextureDownloader.class)
+public abstract class HttpTextureMixin {
+    @Inject(method = "registerTextureInManager", at = @At("HEAD"), require = 0)
+    private void soundattract$captureSkin(ClientAsset.Texture textureId, NativeImage image,
+                                          CallbackInfoReturnable<CompletableFuture<ClientAsset.Texture>> cir) {
+        if (textureId == null || image == null) return;
+        Identifier location = textureId.texturePath();
+        CamoTextureGenerator.recordCapturedMaskCopy(location, image);
     }
 }

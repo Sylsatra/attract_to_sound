@@ -75,7 +75,7 @@ public final class HotBathScentRules {
         if (matcher.isTag()) {
             return holder.is(TagKey.create(Registries.BIOME, matcher.id()));
         }
-        Identifier biomeId = level.registryAccess().registryOrThrow(Registries.BIOME).getKey(holder.value());
+        Identifier biomeId = level.registryAccess().lookupOrThrow(Registries.BIOME).getKey(holder.value());
         return matcher.id().equals(biomeId);
     }
 

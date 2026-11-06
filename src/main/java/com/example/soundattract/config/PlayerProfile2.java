@@ -1,5 +1,6 @@
 package com.example.soundattract.config;
 
+import com.mojang.datafixers.util.Either;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.advancements.predicates.entity.EntityPredicate;
@@ -34,7 +35,7 @@ public record PlayerProfile2(
     public boolean matches(Player player) {
         if (condition.isEmpty()) return true;
         if (player instanceof ServerPlayer serverPlayer) {
-            return condition.get().matches(serverPlayer.level(), serverPlayer.position(), serverPlayer);
+            return condition.get().matches((ServerLevel) serverPlayer.level(), serverPlayer.position(), serverPlayer);
         }
         return false;
     }

@@ -1,6 +1,7 @@
 package com.example.soundattract.network;
 
 import com.example.soundattract.SoundAttractMod;
+import com.example.soundattract.config.DebugLoggingConfig;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.tracking.SoundTracker;
 import java.util.Optional;
@@ -158,7 +159,7 @@ public class SoundMessage implements CustomPacketPayload {
                         && !msg.soundId.equals(VOICE_CHAT_SOUND_ID)
                         && !msg.soundId.equals(POINT_BLANK_SOUND_ID)
                         && !isIntegration) {
-                    if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_TRACKING)) {
                         SoundAttractMod.LOGGER.info("[SoundMessage] Dropping sound {} because it is not in whitelist (dim={})", loc, msg.dimension);
                     }
                     return;
@@ -193,7 +194,7 @@ public class SoundMessage implements CustomPacketPayload {
                     Integer r = SoundAttractConfig.PLAYER_ACTION_RANGES_CACHE.get(msg.action);
                     Double w = SoundAttractConfig.PLAYER_ACTION_WEIGHTS_CACHE.get(msg.action);
                     if (r == null || w == null) {
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_TRACKING)) {
                             SoundAttractMod.LOGGER.info("[SoundMessage] Unknown action {}, dropping", msg.action);
                         }
                         return;
@@ -214,7 +215,7 @@ public class SoundMessage implements CustomPacketPayload {
                     SoundAttractConfig.SoundDefaultEntry def =
                             SoundAttractConfig.SOUND_DEFAULT_ENTRIES_CACHE.get(msg.soundId);
                     if (def == null) {
-                        if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_TRACKING)) {
                             SoundAttractMod.LOGGER.info("[SoundMessage] No default entry for {}, dropping", msg.soundId);
                         }
                         return;
@@ -225,7 +226,7 @@ public class SoundMessage implements CustomPacketPayload {
 
                 range = Math.min(range, SoundAttractConfig.SERVER.maxClientSoundRange.get());
 
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_TRACKING)) {
                     SoundAttractMod.LOGGER.info(
                             "[SoundMessage] resolved soundId={} action={} whispering={} intensity01={} -> range={} weight={}",
                             msg.soundId, msg.action, msg.whispering, msg.intensity01, range, weight);

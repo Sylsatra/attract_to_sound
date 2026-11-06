@@ -44,6 +44,14 @@ public class FollowScentGoal extends Goal {
         this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
     }
 
+    public boolean isFollowingScent() {
+        return targetPos != null;
+    }
+
+    public Vec3 getTargetPosition() {
+        return targetPos;
+    }
+
     @Override
     public boolean canUse() {
         if (!SoundAttractConfig.COMMON.enableScentSystem.get()) return false;
@@ -326,7 +334,7 @@ public class FollowScentGoal extends Goal {
     private static double getSourceTypeWeightMultiplier(ScentSourceType type) {
         if (type == null) return 1.0;
         return switch (type) {
-            case PLAYER_WALK -> 1.0;
+            case PLAYER_WALK, PLAYER_WIND -> 1.0;
             case ARROW_PATH, ARROW_ORIGIN -> 0.8;
             case MOB_PROJECTILE_PATH, MOB_PROJECTILE_ORIGIN -> 0.6;
         };

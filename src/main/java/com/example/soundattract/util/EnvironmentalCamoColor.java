@@ -1,6 +1,7 @@
 package com.example.soundattract.util;
 
 import com.example.soundattract.SoundAttractMod;
+import com.example.soundattract.config.DebugLoggingConfig;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.quantified.QuantifiedCacheCompat;
 import net.minecraft.core.BlockPos;
@@ -116,14 +117,14 @@ public final class EnvironmentalCamoColor {
 
         int minSamples = Math.max(1, SoundAttractConfig.COMMON.envBackdropMinSamples.get());
         if (colors.size() < minSamples) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
                 SoundAttractMod.LOGGER.info("[EnvBackdrop] Found {} backdrop samples, need {}.", colors.size(), minSamples);
             }
             return Optional.empty();
         }
 
         Optional<Integer> average = average(colors);
-        if (average.isPresent() && SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (average.isPresent() && DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
             SoundAttractMod.LOGGER.info("[EnvBackdrop] Backdrop color: 0x{} from {} samples.",
                     String.format("%06X", average.get()), colors.size());
         }
@@ -245,7 +246,7 @@ public final class EnvironmentalCamoColor {
     }
 
     private static void logFallback(String reason, double tps) {
-        if (SoundAttractConfig.COMMON != null && SoundAttractConfig.COMMON.debugLogging.get()) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
             SoundAttractMod.LOGGER.info("[EnvBackdrop] Using average-area fallback: {} at {} TPS.", reason, String.format("%.2f", tps));
         }
     }
