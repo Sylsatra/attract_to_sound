@@ -66,16 +66,17 @@ public final class NavLimiter {
         STATE.invalidateAll();
         TEAM_BUDGET.invalidateAll();
         NodeRouter.clear();
+        PathTaskScheduler.clear();
     }
 
     public static boolean maybeMoveTo(Mob mob, double x, double y, double z, double speed) {
+        return maybeMoveTo(mob, x, y, z, speed, PathTaskScheduler.Priority.OPTIONAL);
+    }
+
+    public static boolean maybeMoveTo(Mob mob, double x, double y, double z, double speed, PathTaskScheduler.Priority priority) {
         if (mob == null || mob.level() == null) return false;
         State s = STATE.get(mob, ignored -> new State());
         long now = mob.level().getGameTime();
-        if (!tryConsumeTeamMoveBudget(mob, now)) {
-            PFStats.moveToDroppedCooldown++;
-            return false;
-        }
         int baseCooldown = 5;
         double baseMinDelta = 0.5;
         try {
@@ -107,8 +108,12 @@ public final class NavLimiter {
             PFStats.moveToDroppedCooldown++;
             return false;
         }
-        Vec3 desiredWaypoint = NodeRouter.getWaypoint(mob, desired);
-        boolean ok = PursuitMoveExecutor.issueVanillaMove(mob, desiredWaypoint, speed);
+        if (!tryConsumeTeamMoveBudget(mob, now)) {
+            PFStats.moveToDroppedCooldown++;
+            return false;
+        }
+        Vec3 desiredWaypoint = NodeRouter.getWaypoint(mob, desired, priority);
+        boolean ok = PursuitMoveExecutor.issueVanillaMove(mob, desiredWaypoint, speed, priority);
         if (ok) {
             s.lastMoveTick = now;
             s.lastDest = desired;

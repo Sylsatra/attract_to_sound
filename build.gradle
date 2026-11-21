@@ -76,7 +76,7 @@ minecraft {
                     ]        
                 }
         gameTestServer {
-            property 'forge.enabledGameTestNamespaces', project.property('mod_id')
+            property 'forge.enabledGameTestNamespaces', project.findProperty('gameTestNamespace') ?: project.property('mod_id')
             if (project.hasProperty('livingBridgeGameTestDirectory')) {
                 workingDirectory project.file(project.property('livingBridgeGameTestDirectory'))
             }
@@ -140,6 +140,7 @@ dependencies {
     compileOnly "maven.modrinth:smartbrainlib:1.15"
     compileOnly files(quantifiedApiJar)
     compileOnly fg.deobf('local.weather2:weather2-1.20.1:2.8.3')
+    compileOnly fg.deobf('local.projectatmosphere:Forge-projectatmosphere:0.9.4')
     compileOnly fg.deobf('local.coroutil:coroutil-forge-1.20.1:1.3.7')
     compileOnly files('libs/relentlessundead-1.20.1-0.0.2-ALPHA.jar')
     compileOnly files('libs/spore_2.2.0_1.20.1.jar')
@@ -231,6 +232,10 @@ tasks.named('jar', Jar).configure {
         ])
     }
     finalizedBy 'reobfJar'
+}
+
+tasks.named('jarJar').configure {
+    finalizedBy 'reobfJarJar'
 }
 
 publishing {

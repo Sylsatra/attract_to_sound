@@ -509,6 +509,7 @@ public class SoundAttractConfig {
 
         public final ForgeConfigSpec.BooleanValue edgeMobSmartBehavior = RaidConfig.EDGE_MOB_SMART_BEHAVIOR;
         public final ForgeConfigSpec.BooleanValue enableFleeFromUnseenAttackerGoal = GeneralConfig.ENABLE_FLEE_FROM_UNSEEN_ATTACKER_GOAL;
+        public final ForgeConfigSpec.BooleanValue enableSecondBrain = GeneralConfig.ENABLE_SECOND_BRAIN;
         public final ForgeConfigSpec.IntValue soundLifetimeTicks = GeneralConfig.SOUND_LIFETIME_TICKS;
         public final ForgeConfigSpec.DoubleValue arrivalDistance = GeneralConfig.ARRIVAL_DISTANCE;
         public final ForgeConfigSpec.DoubleValue followLeaderSpreadOutDistance = RaidConfig.FOLLOW_LEADER_SPREAD_OUT_DISTANCE;
@@ -524,10 +525,12 @@ public class SoundAttractConfig {
         public final ForgeConfigSpec.IntValue raycastCacheTtlTicks = PerformanceConfig.RAYCAST_CACHE_TTL_TICKS;
         public final ForgeConfigSpec.IntValue raycastCacheMaxEntries = PerformanceConfig.RAYCAST_CACHE_MAX_ENTRIES;
         public final ForgeConfigSpec.IntValue scanCooldownTicks = PerformanceConfig.SCAN_COOLDOWN_TICKS;
+        public final ForgeConfigSpec.IntValue cueScansPerTick = PerformanceConfig.CUE_SCANS_PER_TICK;
         public final ForgeConfigSpec.DoubleValue cooldownTicksPerMob = PerformanceConfig.COOLDOWN_TICKS_PER_MOB;
         public final ForgeConfigSpec.DoubleValue minTpsForScanCooldown = PerformanceConfig.MIN_TPS_FOR_SCAN_COOLDOWN;
         public final ForgeConfigSpec.DoubleValue maxTpsForScanCooldown = PerformanceConfig.MAX_TPS_FOR_SCAN_COOLDOWN;
         public final ForgeConfigSpec.BooleanValue enableTieredStealthPerformance = PerformanceConfig.ENABLE_TIERED_STEALTH_PERFORMANCE;
+        public final ForgeConfigSpec.BooleanValue legacyStealthVanillaFallback = PerformanceConfig.LEGACY_STEALTH_VANILLA_FALLBACK;
         public final ForgeConfigSpec.DoubleValue stealthTierSkipExpensiveChecksTps = PerformanceConfig.STEALTH_TIER_SKIP_EXPENSIVE_CHECKS_TPS;
         public final ForgeConfigSpec.DoubleValue stealthTierCurrentTargetsOnlyTps = PerformanceConfig.STEALTH_TIER_CURRENT_TARGETS_ONLY_TPS;
         public final ForgeConfigSpec.DoubleValue stealthTierSharedRangeTps = PerformanceConfig.STEALTH_TIER_SHARED_RANGE_TPS;
@@ -556,6 +559,7 @@ public class SoundAttractConfig {
         public final ForgeConfigSpec.DoubleValue moveToMinDelta = PathfindingConfig.MOVE_TO_MIN_DELTA;
         public final ForgeConfigSpec.IntValue moveToTeamBudgetPerTick = PathfindingConfig.MOVE_TO_TEAM_BUDGET_PER_TICK;
         public final ForgeConfigSpec.IntValue maxPathAttemptsPerTick = PathfindingConfig.MAX_PATH_ATTEMPTS_PER_TICK;
+        public final ForgeConfigSpec.IntValue maxPathAttemptsPerServerTick = PathfindingConfig.MAX_PATH_ATTEMPTS_PER_SERVER_TICK;
         public final ForgeConfigSpec.BooleanValue enableNodeRouter = PathfindingConfig.ENABLE_NODE_ROUTER;
         public final ForgeConfigSpec.BooleanValue enableSoundRaid = RaidConfig.ENABLE_SOUND_RAID;
         public final ForgeConfigSpec.BooleanValue enableScentRaid = RaidConfig.ENABLE_SCENT_RAID;
@@ -603,6 +607,7 @@ public class SoundAttractConfig {
         public final ForgeConfigSpec.IntValue windScentParticleIntervalTicks = ScentConfig.WIND_SCENT_PARTICLE_INTERVAL_TICKS;
         public final ForgeConfigSpec.IntValue windScentParticleMaxPerViewer = ScentConfig.WIND_SCENT_PARTICLE_MAX_PER_VIEWER;
         public final ForgeConfigSpec.BooleanValue enableWeather2WindIntegration = IntegrationConfig.ENABLE_WEATHER2_WIND_INTEGRATION;
+        public final ForgeConfigSpec.BooleanValue enableProjectAtmosphereWindIntegration = IntegrationConfig.ENABLE_PROJECT_ATMOSPHERE_WIND_INTEGRATION;
 
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> attractedEntities = GeneralConfig.ATTRACTED_ENTITIES;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> stealthBypassMobIds = GeneralConfig.STEALTH_BYPASS_MOB_IDS;
@@ -1623,6 +1628,7 @@ public class SoundAttractConfig {
         com.example.soundattract.integration.hotbath.HotBathScentRules.rebuildFromConfig();
 
         com.example.soundattract.event.StealthDetectionEvents.reinitializeCaches();
+        com.example.soundattract.ai.ClueDirector.invalidatePolicy();
         com.example.soundattract.event.ScentEvents.reinitializeCaches();
         com.example.soundattract.pathfinding.PathTaskScheduler.reinitializeCaches();
 

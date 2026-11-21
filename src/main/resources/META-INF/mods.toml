@@ -103,6 +103,13 @@ Also camouflage is a thing.
     side="BOTH"
 
 [[dependencies.soundattract]]
+    modId="projectatmosphere"
+    mandatory=false
+    versionRange="[0,)"
+    ordering="AFTER"
+    side="BOTH"
+
+[[dependencies.soundattract]]
     modId="smartbrainlib"
     mandatory=false
     versionRange="[1.15,)"

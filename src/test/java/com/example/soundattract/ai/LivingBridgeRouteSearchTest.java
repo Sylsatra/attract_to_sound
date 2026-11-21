@@ -1,5 +1,6 @@
 package com.example.soundattract.ai;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -28,6 +29,22 @@ class LivingBridgeRouteSearchTest {
         assertTrue(isConnected(first));
         assertEquals(0.6D, world.lastBodyWidth);
         assertEquals(1.8D, world.lastBodyHeight);
+    }
+
+    @Test
+    void skipsClearanceChecksForNeighborsThatCannotImproveTheRoute() {
+        BlockPos start = new BlockPos(0, 0, 0);
+        BlockPos end = new BlockPos(3, 0, 0);
+        TestWorld world = new TestWorld(0, 3, 0, 0, 0, 2);
+        world.blocked.add(new BlockPos(2, 0, 0));
+        world.blocked.add(new BlockPos(2, 0, 1));
+
+        List<BlockPos> route = LivingBridgeRouteSearch.findRoute(world, start, end, 0.6D, 1.8D, 64);
+
+        assertEquals(List.of(start, new BlockPos(1, 0, 0), new BlockPos(1, 0, 1), new BlockPos(1, 0, 2),
+                new BlockPos(2, 0, 2), new BlockPos(3, 0, 2), new BlockPos(3, 0, 1), end), route);
+        assertAll(() -> assertEquals(15, world.bodyClearanceChecks),
+                () -> assertEquals(9, world.transitionClearanceChecks));
     }
 
     @Test
@@ -102,6 +119,8 @@ class LivingBridgeRouteSearchTest {
         private final Set<BlockPos> blocked = new HashSet<>();
         private final Set<BlockPos> lava = new HashSet<>();
         private final Set<BlockPos> unloaded = new HashSet<>();
+        private int bodyClearanceChecks;
+        private int transitionClearanceChecks;
         private double lastBodyWidth;
         private double lastBodyHeight;
 
@@ -129,6 +148,7 @@ class LivingBridgeRouteSearchTest {
 
         @Override
         public boolean isBodyClear(BlockPos feet, double bodyWidth, double bodyHeight) {
+            bodyClearanceChecks++;
             lastBodyWidth = bodyWidth;
             lastBodyHeight = bodyHeight;
             return !blocked.contains(feet) && !lava.contains(feet);
@@ -136,6 +156,7 @@ class LivingBridgeRouteSearchTest {
 
         @Override
         public boolean isTransitionClear(BlockPos from, BlockPos to, double bodyWidth, double bodyHeight) {
+            transitionClearanceChecks++;
             return !blocked.contains(from) && !blocked.contains(to)
                     && !lava.contains(from) && !lava.contains(to);
         }

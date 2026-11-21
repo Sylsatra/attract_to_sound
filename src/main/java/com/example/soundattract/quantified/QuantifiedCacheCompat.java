@@ -92,11 +92,6 @@ public final class QuantifiedCacheCompat {
             return loader.get();
         }
 
-        long clampedTtlTicks = Math.max(1L, ttlTicks);
-        long tickMillis = estimateMillisPerTick();
-        long ttlMillis = boundedTtlMillis(clampedTtlTicks, tickMillis);
-        Duration ttl = Duration.ofMillis(ttlMillis);
-        long clampedMax = Math.min(65536L, Math.max(64L, maxSize));
         LocalKey localKey = new LocalKey(cacheName, key);
         long now = System.nanoTime();
         LocalValue cached = LIVE_STATE_CACHE.getIfPresent(localKey);
@@ -110,6 +105,7 @@ public final class QuantifiedCacheCompat {
         }
 
         LocalValue loaded = LIVE_STATE_CACHE.get(localKey, ignored -> {
+            long ttlMillis = boundedTtlMillis(ttlTicks, estimateMillisPerTick());
             T value = null;
             if (isUsable()) {
                 value = QuantifiedOptionalBridge.tryGetCached(
@@ -117,8 +113,8 @@ public final class QuantifiedCacheCompat {
                         cacheName,
                         key,
                         loader,
-                        ttl,
-                        clampedMax,
+                        Duration.ofMillis(ttlMillis),
+                        Math.min(65536L, Math.max(64L, maxSize)),
                         useDisk);
             }
             if (value == null) {

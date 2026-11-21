@@ -15,7 +15,8 @@
     "ThrownPotionMixin",
     "MobAccessor",
     "WalkNodeEvaluatorMixin",
-    "LivingBridgePathNavigationMixin"
+    "LivingBridgePathNavigationMixin",
+    "SharedMeleeAttackGoalMixin"
   ],
   "client": [
     "HumanoidArmorLayerMixin",

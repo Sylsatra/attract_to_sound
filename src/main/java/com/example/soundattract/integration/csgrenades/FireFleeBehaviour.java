@@ -62,7 +62,7 @@ public class FireFleeBehaviour<E extends PathfinderMob> extends ExtendedBehaviou
 
     @Override
     protected void tick(E mob) {
-        // Stop TACZ's combat movement and shooting from taking priority while fleeing.
+
         suppressCombat(mob);
         if (fleePath == null || mob.getNavigation().getPath() != fleePath || mob.getNavigation().isDone()) {
             if (findFleePath(mob)) {
@@ -104,6 +104,10 @@ public class FireFleeBehaviour<E extends PathfinderMob> extends ExtendedBehaviou
                 continue;
             }
 
+            if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                    mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMBAT)) {
+                break;
+            }
             Path candidate = mob.getNavigation().createPath(fleePos.x, fleePos.y, fleePos.z, 0);
             if (candidate != null && candidate.canReach()) {
                 fleePath = candidate;

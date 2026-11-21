@@ -1,6 +1,7 @@
 package com.example.soundattract.scents;
 
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.server.level.ServerLevel;
@@ -33,10 +34,15 @@ public class ScentManager {
     private static final int MAX_NODES_PER_CHUNK = 512;
     private static final int MAX_PERSISTED_CHUNKS = 4096;
     private static final int CLEANUP_CHUNKS_PER_PASS = 64;
+    private record AreaQueryKey(int chunkX, int chunkZ, long revision) {}
 
     private final Level level;
     private int scentCleanupCursor;
     private int transientCleanupCursor;
+    private long revision;
+    private final Cache<AreaQueryKey, List<ScentNode>> areaQueryCache = Caffeine.newBuilder()
+            .maximumSize(256)
+            .build();
 
     private final Map<ChunkPos, ConcurrentLinkedQueue<ScentNode>> scentMap = Caffeine.newBuilder()
             .maximumSize(MAX_PERSISTED_CHUNKS)
@@ -48,7 +54,7 @@ public class ScentManager {
             .asMap();
     private final Cache<UUID, Set<ChunkPos>> windChunksByOwner = Caffeine.newBuilder()
             .maximumSize(4096)
-            .removalListener((UUID owner, Set<ChunkPos> chunks, com.github.benmanes.caffeine.cache.RemovalCause cause) -> {
+            .evictionListener((UUID owner, Set<ChunkPos> chunks, com.github.benmanes.caffeine.cache.RemovalCause cause) -> {
                 if (owner == null || chunks == null) {
                     return;
                 }
@@ -79,6 +85,8 @@ public class ScentManager {
         while (queue.size() > MAX_NODES_PER_CHUNK) {
             queue.poll();
         }
+        revision++;
+        publishDirectorClue(node);
     }
 
     public synchronized void replaceWindNodes(UUID owner, List<ScentNode> nodes) {
@@ -100,6 +108,7 @@ public class ScentManager {
             }
         }
         if (nodes == null) {
+            revision++;
             return;
         }
         for (ScentNode node : nodes) {
@@ -113,7 +122,9 @@ public class ScentManager {
             while (queue.size() > MAX_NODES_PER_CHUNK) {
                 queue.poll();
             }
+            publishDirectorClue(node);
         }
+        revision++;
     }
 
     public void clearWindNodes(UUID owner) {
@@ -122,10 +133,44 @@ public class ScentManager {
 
 
     public List<ScentNode> getNodesInArea(ChunkPos centerChunk) {
-        List<ScentNode> result = new ArrayList<>();
         if (centerChunk == null) {
-            return result;
+            return List.of();
         }
+        AreaQueryKey key = new AreaQueryKey(centerChunk.x, centerChunk.z, revision);
+        return areaQueryCache.get(key, ignored -> collectNodesInArea(centerChunk));
+    }
+
+    @Nullable
+    public ScentNode findFreshPlayerScentAt(BlockPos samplePosition, long now, long maxAge, double radius) {
+        if (samplePosition == null || !Double.isFinite(radius) || radius < 0.0) return null;
+        ChunkPos chunk = new ChunkPos(samplePosition);
+        if (!level.isLoaded(chunk.getWorldPosition())) return null;
+        double radiusSq = radius * radius;
+        ScentNode best = null;
+        double bestScore = Double.NEGATIVE_INFINITY;
+        List<ConcurrentLinkedQueue<ScentNode>> nodeLists = new ArrayList<>(2);
+        ConcurrentLinkedQueue<ScentNode> stored = scentMap.get(chunk);
+        ConcurrentLinkedQueue<ScentNode> transientNodes = transientScentMap.get(chunk);
+        if (stored != null) nodeLists.add(stored);
+        if (transientNodes != null) nodeLists.add(transientNodes);
+        for (ConcurrentLinkedQueue<ScentNode> nodes : nodeLists) {
+            for (ScentNode node : nodes) {
+                if (node.getOwnerUUID() == null || now < node.getTimestamp() || now - node.getTimestamp() > maxAge
+                        || (node.getSourceType() != ScentSourceType.PLAYER_WALK
+                        && node.getSourceType() != ScentSourceType.PLAYER_WIND)
+                        || node.getPosition().distanceToSqr(Vec3.atCenterOf(samplePosition)) > radiusSq) continue;
+                double score = node.getTimestamp() + node.getStrength() * 0.01;
+                if (score > bestScore) {
+                    best = node;
+                    bestScore = score;
+                }
+            }
+        }
+        return best;
+    }
+
+    private List<ScentNode> collectNodesInArea(ChunkPos centerChunk) {
+        List<ScentNode> result = new ArrayList<>();
 
         for (int x = -1; x <= 1; x++) {
             for (int z = -1; z <= 1; z++) {
@@ -143,7 +188,43 @@ public class ScentManager {
                 }
             }
         }
-        return result;
+        return List.copyOf(result);
+    }
+
+    public void forEachNodeInArea(ChunkPos centerChunk, java.util.function.Consumer<ScentNode> consumer) {
+        if (centerChunk == null || consumer == null) return;
+        for (int x = -1; x <= 1; x++) {
+            for (int z = -1; z <= 1; z++) {
+                ChunkPos pos = new ChunkPos(centerChunk.x + x, centerChunk.z + z);
+                if (!level.isLoaded(pos.getWorldPosition())) continue;
+                ConcurrentLinkedQueue<ScentNode> nodes = scentMap.get(pos);
+                if (nodes != null) nodes.forEach(consumer);
+                ConcurrentLinkedQueue<ScentNode> transientNodes = transientScentMap.get(pos);
+                if (transientNodes != null) transientNodes.forEach(consumer);
+            }
+        }
+    }
+
+    public long revision() {
+        return revision;
+    }
+
+    public boolean containsNodeIdentity(ScentNode node) {
+        if (node == null || level.isClientSide || !level.hasChunkAt(node.getBlockPos())) return false;
+        ChunkPos chunkPos = new ChunkPos(node.getBlockPos());
+        ConcurrentLinkedQueue<ScentNode> persistent = scentMap.get(chunkPos);
+        if (persistent != null && persistent.contains(node)) return true;
+        ConcurrentLinkedQueue<ScentNode> transientNodes = transientScentMap.get(chunkPos);
+        return transientNodes != null && transientNodes.contains(node);
+    }
+
+    private void publishDirectorClue(ScentNode node) {
+        if (!(level instanceof ServerLevel serverLevel) || node.getOwnerUUID() == null) return;
+        if (node.getSourceType() != ScentSourceType.PLAYER_WALK
+                && node.getSourceType() != ScentSourceType.PLAYER_WIND) return;
+        com.example.soundattract.ai.ClueDirector.onScentAccepted(serverLevel, node.getBlockPos(),
+                node.getTimestamp(), SoundAttractConfig.COMMON.scentNodeDurationTicks.get(),
+                SoundAttractConfig.COMMON.scentDetectionRadius.get(), node.getStrength(), node.getOwnerUUID());
     }
 
 
@@ -158,6 +239,7 @@ public class ScentManager {
     public void cleanupExpired(long currentTime, long maxDuration) {
         scentCleanupCursor = cleanupMap(scentMap, scentCleanupCursor, currentTime, maxDuration);
         transientCleanupCursor = cleanupMap(transientScentMap, transientCleanupCursor, currentTime, maxDuration);
+        revision++;
     }
 
     private int cleanupMap(Map<ChunkPos, ConcurrentLinkedQueue<ScentNode>> map,
@@ -197,6 +279,7 @@ public class ScentManager {
         scentMap.clear();
         transientScentMap.clear();
         windChunksByOwner.invalidateAll();
+        revision++;
         scentCleanupCursor = 0;
         transientCleanupCursor = 0;
     }
@@ -281,6 +364,7 @@ public class ScentManager {
         scentMap.clear();
         transientScentMap.clear();
         windChunksByOwner.invalidateAll();
+        revision++;
         if (tag == null) {
             return;
         }

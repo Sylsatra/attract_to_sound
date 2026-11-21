@@ -8,6 +8,7 @@ import java.util.Map;
 public final class DebugLoggingConfig {
     public enum Feature {
         SOUND_ATTRACTION("ai", "soundAttraction"),
+        SECOND_BRAIN("ai", "secondBrain"),
         MOB_GROUPS("ai", "mobGroups"),
         BLOCK_BREAKING("ai", "blockBreaking"),
         RAIDS("ai", "raids"),

@@ -49,6 +49,12 @@ public final class AsyncManager {
         return ModList.get().isLoaded("quantified");
     }
 
+    public static boolean canAcceptCompute() {
+        synchronized (WORK_LIFECYCLE_LOCK) {
+            return ACCEPTING_WORK.get() && PENDING_COMPUTE_FUTURES.size() < MAX_PENDING_COMPUTE_FUTURES;
+        }
+    }
+
     public static <T> CompletableFuture<T> submit(String taskName, Supplier<T> supplier, Priority priority, boolean threadSafe) {
         if (supplier == null) {
             return CompletableFuture.completedFuture(null);

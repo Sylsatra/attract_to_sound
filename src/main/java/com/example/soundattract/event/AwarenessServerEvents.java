@@ -6,8 +6,7 @@ import com.example.soundattract.ai.MobGroupManager;
 import com.example.soundattract.ai.RaidManager;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.config.DebugLoggingConfig;
-import com.example.soundattract.integration.weather2.Weather2WindCompat;
-import com.example.soundattract.integration.weather2.Weather2WindDebugLog;
+import com.example.soundattract.integration.wind.AtmosphericWindCompat;
 import com.example.soundattract.integration.spoiled.SpoiledScentIntegration;
 import com.example.soundattract.event.StealthDetectionEvents;
 import com.example.soundattract.network.AwarenessSnapshotMessage;
@@ -39,7 +38,6 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.server.ServerStoppedEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.ModList;
 import net.minecraftforge.fml.common.Mod;
 
 @Mod.EventBusSubscriber(modid = SoundAttractMod.MOD_ID, bus = Mod.EventBusSubscriber.Bus.FORGE)
@@ -49,6 +47,7 @@ public final class AwarenessServerEvents {
     private static final int ALERT_NEAR_MISS = 3;
     private static final int ALERT_SCENT = 4;
     private static final int ALERT_RAID = 5;
+    private static final int MAX_ALERTS = 128;
 
 
     private static final Cache<UUID, AlertEntry> EXTRA_ALERTS = Caffeine.newBuilder()
@@ -279,22 +278,8 @@ public final class AwarenessServerEvents {
     }
 
     public static boolean isWindshielded(ServerLevel level, ServerPlayer player) {
-        boolean weather2Enabled = SoundAttractConfig.COMMON.enableWeather2WindIntegration.get()
-                && ModList.get().isLoaded("weather2");
-        Weather2WindCompat.WindSample windSample;
-        double windSpeed;
-        if (weather2Enabled) {
-            windSample = Weather2WindCompat.sample(level, player.blockPosition(), true);
-            windSpeed = windSample.weather2Backed() ? windSample.speed() : 1.0;
-        } else {
-            boolean integrationEnabled = SoundAttractConfig.COMMON.enableWeather2WindIntegration.get();
-            String reason = integrationEnabled ? "weather2_missing" : "disabled_by_config";
-            Weather2WindDebugLog.report(level, "windshield", reason,
-                    () -> "Windshield check is using westward fallback wind in " + level.dimension().location()
-                            + (integrationEnabled ? " because Weather2 is not installed." : " because Weather2 integration is disabled by config."));
-            windSample = new Weather2WindCompat.WindSample(new Vec3(-1.0, 0.0, 0.0), 1.0, false);
-            windSpeed = 1.0;
-        }
+        AtmosphericWindCompat.WindSample windSample = AtmosphericWindCompat.sample(level, player.blockPosition());
+        double windSpeed = windSample.speed();
         WindshieldCoverage coverage = getWindshieldCoverage(level, player, windSample.direction());
         UUID playerId = player.getUUID();
         ResourceLocation dimension = level.dimension().location();
@@ -314,9 +299,9 @@ public final class AwarenessServerEvents {
                     || previousState.active() != active;
             if (stateChanged || previousLog == null || level.getGameTime() - previousLog >= 100L) {
                 String reason = active ? "protected" : !speedSufficient ? "wind_below_minimum" : "coverage_below_threshold";
-                SoundAttractMod.LOGGER.info("[Weather2 Wind] Windshield for {} in {}: state={}, reason={}, source={}, speed={}, minimumSpeed={}, direction={}, laneCoverage=[{},{},{}], strength={}, threshold={}, canSeeSky={}",
+                SoundAttractMod.LOGGER.info("[Wind Integration] Windshield for {} in {}: state={}, reason={}, source={}, speed={}, minimumSpeed={}, direction={}, laneCoverage=[{},{},{}], strength={}, threshold={}, canSeeSky={}",
                         player.getName().getString(), dimension, active, reason,
-                        windSample.weather2Backed() ? "Weather2" : "fallback", windSpeed, minimumWindSpeed,
+                        windSample.source().label(), windSpeed, minimumWindSpeed,
                         windSample.direction(), coverage.firstLane(), coverage.middleLane(), coverage.lastLane(),
                         coverage.strength(), threshold, coverage.canSeeSky());
                 LAST_WINDSHIELD_DEBUG_LOG.put(playerId, level.getGameTime());
@@ -383,15 +368,17 @@ public final class AwarenessServerEvents {
         return new WindshieldCoverage(firstLane, middleLane, lastLane, true);
     }
 
-    private static AwarenessScan scanAwareness(ServerLevel level, ServerPlayer player) {
+    static AwarenessScan scanAwareness(ServerLevel level, ServerPlayer player) {
         double maximum = 0.0;
-        List<AwarenessSnapshotMessage.Alert> alerts = new ArrayList<>(128);
+        List<AwarenessSnapshotMessage.Alert> alerts = null;
         long now = level.getGameTime();
         double maxConfigRange = SoundAttractConfig.COMMON.maxStealthDetectionRange.get();
         double alertRadius = Math.max(48.0, maxConfigRange);
+        double alertRadiusSq = alertRadius * alertRadius;
         net.minecraft.world.phys.AABB alertBounds = player.getBoundingBox().inflate(alertRadius);
         double maxConfigRangeSq = maxConfigRange * maxConfigRange;
-        for (Mob mob : level.getEntitiesOfClass(Mob.class, alertBounds, Mob::isAlive)) {
+        List<Mob> candidates = level.getEntitiesOfClass(Mob.class, alertBounds, Mob::isAlive);
+        for (Mob mob : candidates) {
             double distSq = mob.distanceToSqr(player);
             double detectionRange;
             if (distSq <= maxConfigRangeSq) {
@@ -400,64 +387,66 @@ public final class AwarenessServerEvents {
             } else {
                 detectionRange = 0.0;
             }
-            if (distSq > alertRadius * alertRadius) {
+            if (distSq > alertRadiusSq) {
                 continue;
             }
-            AwarenessSnapshotMessage.Alert alert = createAlert(level, player, mob, detectionRange, distSq, now);
+            AwarenessSnapshotMessage.Alert alert = createAlert(player, mob, detectionRange, distSq, now);
             if (alert != null) {
+                if (alerts == null) {
+                    alerts = new ArrayList<>(Math.min(MAX_ALERTS, candidates.size()));
+                }
                 alerts.add(alert);
-                if (alerts.size() >= 128) {
+                if (alerts.size() >= MAX_ALERTS) {
                     break;
                 }
             }
         }
-        return new AwarenessScan(maximum, alerts);
+        return new AwarenessScan(maximum, alerts == null ? List.of() : alerts);
     }
 
-    private static AwarenessSnapshotMessage.Alert createAlert(ServerLevel level, ServerPlayer player, Mob mob,
+    private static AwarenessSnapshotMessage.Alert createAlert(ServerPlayer player, Mob mob,
                                                               double detectionRange, double distSq, long now) {
-        double distance = Math.sqrt(distSq);
-        AlertEntry extra = EXTRA_ALERTS.getIfPresent(mob.getUUID());
-        DetectionKey detectionKey = new DetectionKey(mob.getUUID(), player.getUUID());
-        Long detectedUntil = LAST_DETECTED.getIfPresent(detectionKey);
+        UUID mobId = mob.getUUID();
+        AlertEntry extra = EXTRA_ALERTS.getIfPresent(mobId);
         if (extra != null) {
             if (extra.expiresAt() >= now) {
-                return new AwarenessSnapshotMessage.Alert(mob.getUUID(), mob.getId(), extra.type(), extra.color(), extra.progress());
-            } else {
-                EXTRA_ALERTS.invalidate(mob.getUUID());
+                return new AwarenessSnapshotMessage.Alert(mobId, mob.getId(), extra.type(), extra.color(), extra.progress());
             }
+            EXTRA_ALERTS.invalidate(mobId);
         }
-        if (detectionRange > 0.0 && distSq <= detectionRange * detectionRange) {
-            if (StealthDetectionEvents.canMobDetectPlayerWithRange(mob, player, detectionRange)) {
-                LAST_DETECTED.put(detectionKey, now + 40L);
-                return new AwarenessSnapshotMessage.Alert(mob.getUUID(), mob.getId(), ALERT_DETECTED, 0xFFFF3030, 1.0f);
-            }
-        } else if (detectionRange <= 0.0) {
-            if (StealthDetectionEvents.canMobDetectPlayerWithRange(mob, player, 0.0)) {
-                LAST_DETECTED.put(detectionKey, now + 40L);
-                return new AwarenessSnapshotMessage.Alert(mob.getUUID(), mob.getId(), ALERT_DETECTED, 0xFFFF3030, 1.0f);
-            }
+        DetectionKey detectionKey = new DetectionKey(mobId, player.getUUID());
+        double detectionRangeSq = detectionRange * detectionRange;
+        if ((detectionRange <= 0.0 || distSq <= detectionRangeSq)
+                && StealthDetectionEvents.canMobDetectPlayerWithRange(mob, player, Math.max(0.0, detectionRange))) {
+            LAST_DETECTED.put(detectionKey, now + 40L);
+            return new AwarenessSnapshotMessage.Alert(mobId, mob.getId(), ALERT_DETECTED, 0xFFFF3030, 1.0f);
         }
+        Long detectedUntil = LAST_DETECTED.getIfPresent(detectionKey);
         if (detectedUntil != null) {
             if (detectedUntil >= now) {
-                return new AwarenessSnapshotMessage.Alert(mob.getUUID(), mob.getId(), ALERT_DETECTED, 0xFFFF3030, 1.0f);
-            } else {
-                LAST_DETECTED.invalidate(detectionKey);
+                return new AwarenessSnapshotMessage.Alert(mobId, mob.getId(), ALERT_DETECTED, 0xFFFF3030, 1.0f);
             }
+            LAST_DETECTED.invalidate(detectionKey);
         }
-        if (isRaidLeader(mob) && (RaidManager.isRaidTicking(mob) || RaidManager.isRaidAdvancing(mob))) {
-            return new AwarenessSnapshotMessage.Alert(mob.getUUID(), mob.getId(), ALERT_RAID,
-                    RaidManager.isRaidAdvancing(mob) ? 0xFFFF3030 : 0xFFFFC040, 1.0f);
+        if (isRaidLeader(mob)) {
+            boolean advancing = RaidManager.isRaidAdvancing(mob);
+            if (advancing || RaidManager.isRaidTicking(mob)) {
+                return new AwarenessSnapshotMessage.Alert(mobId, mob.getId(), ALERT_RAID,
+                        advancing ? 0xFFFF3030 : 0xFFFFC040, 1.0f);
+            }
         }
         FollowScentGoal scentGoal = getScentGoal(mob);
         if (scentGoal != null && scentGoal.isFollowingScent()) {
-            double targetDistance = scentGoal.getTargetPosition() == null ? 0.0 : mob.position().distanceTo(scentGoal.getTargetPosition());
+            Vec3 targetPosition = scentGoal.getTargetPosition();
+            double targetDistance = targetPosition == null ? 0.0 : mob.position().distanceTo(targetPosition);
             float progress = clamp((float) (1.0 - targetDistance / Math.max(1.0, SoundAttractConfig.COMMON.scentDetectionRadius.get())));
-            return new AwarenessSnapshotMessage.Alert(mob.getUUID(), mob.getId(), ALERT_SCENT,
+            return new AwarenessSnapshotMessage.Alert(mobId, mob.getId(), ALERT_SCENT,
                     blendColor(0xFFFFFF30, 0xFFFF3030, progress), progress);
         }
-        if (detectionRange > 0.0 && distance >= detectionRange * 0.8 && distance < detectionRange) {
-            return new AwarenessSnapshotMessage.Alert(mob.getUUID(), mob.getId(), ALERT_PROXIMITY, 0xFFFFFF30, 0.0f);
+        double proximityStart = detectionRange * 0.8D;
+        double proximityStartSq = proximityStart * proximityStart;
+        if (detectionRange > 0.0 && distSq >= proximityStartSq && distSq < detectionRangeSq) {
+            return new AwarenessSnapshotMessage.Alert(mobId, mob.getId(), ALERT_PROXIMITY, 0xFFFFFF30, 0.0f);
         }
         return null;
     }
@@ -510,6 +499,6 @@ public final class AwarenessServerEvents {
     private record DetectionKey(UUID mobId, UUID playerId) {
     }
 
-    private record AwarenessScan(double maximumDetectionRange, List<AwarenessSnapshotMessage.Alert> alerts) {
+    record AwarenessScan(double maximumDetectionRange, List<AwarenessSnapshotMessage.Alert> alerts) {
     }
 }

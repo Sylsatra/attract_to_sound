@@ -28,7 +28,7 @@ import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.gametest.GameTestHolder;
 
-@GameTestHolder("soundattract")
+@GameTestHolder("soundattract_bridge_safebase")
 public class LivingBridgeSafeBaseRouteGameTests {
     private record ReentryEvidence(boolean leftLevel, boolean loadedFromDisk, boolean heldBeforeTick,
                                    boolean rawPreserved, boolean archived, boolean savedAgreement) {
@@ -482,7 +482,7 @@ public class LivingBridgeSafeBaseRouteGameTests {
                 timeoutReservation);
         installActiveRoute(data, view.worker, timeoutOwner);
         structuralLanes.put(view.worker.getUUID(), newStructuralLane(formationId, view.worker));
-        Field retryLimit = LivingWallCoordinator.class.getDeclaredField("RECRUITER_RETRY_WINDOWS");
+        Field retryLimit = LivingWallCoordinator.class.getDeclaredField("STRUCTURAL_ROUTE_RETRY_WINDOWS");
         retryLimit.setAccessible(true);
         setField(view.formation, "activeStructuralRouteRetries", retryLimit.getInt(null));
         Method reroute = LivingWallCoordinator.class.getDeclaredMethod("rerouteOrReleaseStructuralMember",
@@ -627,7 +627,7 @@ public class LivingBridgeSafeBaseRouteGameTests {
         mob.getPersistentData().put("livingBridgeControl", capsule);
     }
 
-    @GameTest(template = "empty")
+    @GameTest(template = "empty", timeoutTicks = 120, batch = "safeBaseRecovery")
     public void boundedSafeRecoveryHoldsOnBlockedSegmentThenRetiresAtEndpoint(GameTestHelper helper) {
         net.minecraft.server.level.ServerLevel level = helper.getLevel();
         BlockPos localStart = new BlockPos(2, 2, 2);
@@ -640,8 +640,8 @@ public class LivingBridgeSafeBaseRouteGameTests {
             helper.setBlock(cell, Blocks.AIR.defaultBlockState());
             helper.setBlock(cell.above(), Blocks.AIR.defaultBlockState());
         }
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
                 BlockPos support = localEndpoint.offset(dx, -1, dz);
                 helper.setBlock(support, Blocks.STONE.defaultBlockState());
                 helper.setBlock(support.above(), Blocks.AIR.defaultBlockState());
@@ -738,13 +738,23 @@ public class LivingBridgeSafeBaseRouteGameTests {
             return;
         }
         helper.setBlock(obstruction, Blocks.AIR.defaultBlockState());
-        boolean recovered = false;
-        for (int step = 0; step < 66 && !recovered; step++) {
-            invokeSafeRecovery(level, worker, data);
+        continueSafeRecovery(helper, level, worker, data, reservationId, endpoint, helper.absolutePos(obstruction), 0);
+    }
+
+    private static void continueSafeRecovery(GameTestHelper helper, net.minecraft.server.level.ServerLevel level,
+                                             Mob worker, LivingBridgeRouteData data, UUID reservationId,
+                                             BlockPos endpoint, BlockPos obstruction, int attempts) {
+        helper.runAfterDelay(1, () -> {
+            boolean advanced = invokeSafeRecovery(level, worker, data);
+            if (!advanced) invokeCompleteSafeRecovery(level, worker, data);
             LivingBridgeRouteSnapshot current = data.snapshot(reservationId);
-            recovered = current != null && LivingBridgeRouteData.isTerminalLaneState(current.lifecycleState())
+            boolean recovered = current != null && LivingBridgeRouteData.isTerminalLaneState(current.lifecycleState())
                     && "SAFE_RECOVERY_COMPLETE".equals(current.lifecycleState());
-        }
+            if (!recovered && attempts + 1 < 66) {
+                continueSafeRecovery(helper, level, worker, data, reservationId, endpoint, obstruction, attempts + 1);
+                return;
+            }
+
         LivingBridgeRouteSnapshot terminal = data.snapshot(reservationId);
         int recoveryIndex = terminal == null ? -1 : terminal.recoveryIndex();
         List<LivingBridgeRouteSnapshot.Point> recoveryRoute = terminal == null ? List.of() : terminal.recoveryRoute();
@@ -763,7 +773,7 @@ public class LivingBridgeSafeBaseRouteGameTests {
         if (!recovered || terminal == null || !"SAFE_RECOVERY_COMPLETE".equals(terminal.lifecycleState())
                 || !LivingBridgeRouteData.isTerminalLaneState(terminal.lifecycleState())
                 || worker.isNoGravity() || worker.noPhysics
-                || !data.admissionBlocked(active.dimension())
+                || !data.admissionBlocked(level.dimension().location().toString())
                 || !terminal.exactlyEquals(LivingBridgeRouteSnapshot.fromTag(worker.getPersistentData()
                 .getCompound("livingBridgeControl").getCompound("snapshot")))) {
             helper.fail("safe endpoint recovery failed recovered=" + recovered
@@ -774,17 +784,50 @@ public class LivingBridgeSafeBaseRouteGameTests {
                     + " recoveryLaneConflict=" + recoveryLaneConflict
                     + " exactOwner=" + (terminal != null && data.canRecoverOwner(terminal))
                     + " position=" + worker.position() + " endpoint=" + endpoint
-                    + " obstruction=" + level.getBlockState(helper.absolutePos(obstruction))
+                    + " obstruction=" + level.getBlockState(obstruction)
+                    + " safeSite=" + invokeSafeSite(level, endpoint)
+                    + " safeGround=" + com.example.soundattract.pathfinding.HazardClassifier
+                    .isSafeGroundUncached(level, endpoint)
+                    + " strictContact=" + invokeBoolean(LivingWallCoordinator.class,
+                    "hasStrictRecoveryContact", new Class<?>[]{net.minecraft.server.level.ServerLevel.class,
+                    Mob.class, net.minecraft.world.phys.AABB.class}, level, worker, worker.getBoundingBox())
+                    + " supportFootprint=" + supportFootprint(level, endpoint)
+                    + " noCollision=" + level.noCollision(worker, worker.getBoundingBox())
+                    + " inLava=" + worker.isInLava()
                     + " noGravity=" + worker.isNoGravity() + " noPhysics=" + worker.noPhysics);
             return;
         }
         helper.succeed();
+        });
+    }
+
+    private static String supportFootprint(net.minecraft.server.level.ServerLevel level, BlockPos feet) {
+        List<String> cells = new ArrayList<>(9);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                BlockPos support = feet.offset(dx, -1, dz);
+                cells.add(support + "=" + level.getBlockState(support));
+            }
+        }
+        return cells.toString();
     }
 
     private static boolean invokeSafeRecovery(net.minecraft.server.level.ServerLevel level, Mob worker,
                                               LivingBridgeRouteData data) {
         try {
             Method method = LivingWallCoordinator.class.getDeclaredMethod("advanceControlledSafeRecovery",
+                    net.minecraft.server.level.ServerLevel.class, Mob.class, LivingBridgeRouteData.class);
+            method.setAccessible(true);
+            return (Boolean) method.invoke(null, level, worker, data);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException(failure);
+        }
+    }
+
+    private static boolean invokeCompleteSafeRecovery(net.minecraft.server.level.ServerLevel level, Mob worker,
+                                                       LivingBridgeRouteData data) {
+        try {
+            Method method = LivingWallCoordinator.class.getDeclaredMethod("completeSafeRecoveryAtPersistedEndpoint",
                     net.minecraft.server.level.ServerLevel.class, Mob.class, LivingBridgeRouteData.class);
             method.setAccessible(true);
             return (Boolean) method.invoke(null, level, worker, data);

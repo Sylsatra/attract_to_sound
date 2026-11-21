@@ -50,6 +50,9 @@ public class SoundAttractMod {
 
         MinecraftForge.EVENT_BUS.register(new FovEvents());
         MinecraftForge.EVENT_BUS.register(new StealthDetectionEvents());
+        com.example.soundattract.ai.GroupTargetSharingManager.setConfirmedSightListener(sight ->
+                com.example.soundattract.ai.ClueDirector.onConfirmedSight(
+                        sight.level(), sight.position(), sight.seenTick(), sight.sourceId(), sight.targetId()));
         MinecraftForge.EVENT_BUS.register(new PlasmoVoiceBootstrap());
         MinecraftForge.EVENT_BUS.register(new VanillaIntegrationEvents());
         MinecraftForge.EVENT_BUS.register(new com.example.soundattract.event.ScentEvents());

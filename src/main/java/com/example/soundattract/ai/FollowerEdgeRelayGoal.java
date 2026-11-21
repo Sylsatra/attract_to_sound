@@ -89,9 +89,16 @@ public class FollowerEdgeRelayGoal extends Goal {
     }
 
     private SoundTracker.SoundRecord getCachedNearestSound() {
+        return getCachedNearestSound(false);
+    }
+
+    private SoundTracker.SoundRecord getCachedNearestSound(boolean budgetGranted) {
         long currentTick = this.mob.level().getGameTime();
         if (this.cacheTick == currentTick) {
             return this.soundResultCache;
+        }
+        if (!budgetGranted && !CueScanBudget.tryAcquire(this.mob)) {
+            return this.soundResultCache != null ? this.soundResultCache : this.cachedSound;
         }
         this.cacheTick = currentTick;
         this.soundResultCache = SoundTracker.findNearestSound(
@@ -166,12 +173,16 @@ public class FollowerEdgeRelayGoal extends Goal {
             scanCooldownCounter--;
             return false;
         }
+        if (this.cacheTick != this.mob.level().getGameTime() && !CueScanBudget.tryAcquire(this.mob)) {
+            return false;
+        }
         scanCooldownCounter = scanCooldownTicks();
 
-        SoundTracker.SoundRecord newSound = getCachedNearestSound();
+        SoundTracker.SoundRecord newSound = getCachedNearestSound(true);
         if (newSound == null) {
             return false;
         }
+        relaySoundCue(newSound);
 
         if (this.mob.getTarget() != null && this.mob.getTarget().isAlive()) {
             double threshold = SoundAttractConfig.COMMON.highSoundWeightTargetOverride.get();
@@ -349,6 +360,7 @@ public class FollowerEdgeRelayGoal extends Goal {
             SoundTracker.SoundRecord fresh = getCachedNearestSound();
             double switchRatio = SoundAttractConfig.COMMON.soundSwitchRatio.get();
             if (fresh != null) {
+                relaySoundCue(fresh);
                 if (this.targetSoundPos != null && fresh.pos.equals(this.targetSoundPos)) {
                     this.cachedSound = fresh;
                     this.currentTargetWeight = fresh.weight;
@@ -375,6 +387,7 @@ public class FollowerEdgeRelayGoal extends Goal {
         if (targetSoundPos == null && this.edgeMobState != EdgeMobState.RETURNING_TO_LEADER) {
             return;
         }
+        startSoundSourceBreakerIfArrived();
 
         if (scanCooldownCounter > 0) {
             scanCooldownCounter--;
@@ -422,7 +435,12 @@ public class FollowerEdgeRelayGoal extends Goal {
                                 double timeMultiplier = SoundAttractConfig.COMMON.blockBreakingTimeMultiplier.get();
                                 boolean toolOnly = SoundAttractConfig.COMMON.blockBreakingToolOnly.get();
                                 boolean properTool = SoundAttractConfig.COMMON.blockBreakingProperToolOnly.get();
-                                BlockBreakerPosGoal newGoal = new BlockBreakerPosGoal(this.mob, destination, timeMultiplier, toolOnly, properTool, properTool);
+                                BlockBreakerPosGoal newGoal = this.edgeMobState != EdgeMobState.RETURNING_TO_LEADER
+                                        && destination != null && destination.equals(this.targetSoundPos)
+                                        ? BlockBreakerPosGoal.forSoundSource(this.mob, destination, this.cachedSound,
+                                                timeMultiplier, toolOnly, properTool, properTool)
+                                        : new BlockBreakerPosGoal(this.mob, destination, timeMultiplier,
+                                                toolOnly, properTool, properTool);
                                 BlockBreakerManager.scheduleAdd(this.mob, newGoal, 1);
                                 this.blockBreakerGoal = newGoal;
                             }
@@ -684,6 +702,29 @@ public class FollowerEdgeRelayGoal extends Goal {
         if (this.edgeMobState != EdgeMobState.RETURNING_TO_LEADER && this.mob.isSprinting()) {
             this.mob.setSprinting(false);
         }
+    }
+
+    private void relaySoundCue(SoundTracker.SoundRecord sound) {
+        if (sound == null || sound.soundId == null || !SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) return;
+        if (SoundAttractConfig.COMMON.enableSecondBrain.get()
+                && ClueDirector.reportScoutSound(this.mob, sound) != 0L) return;
+        MobGroupManager.relaySoundToLeader(this.mob, sound.soundId,
+                sound.pos.getX() + 0.5, sound.pos.getY() + 0.5, sound.pos.getZ() + 0.5,
+                sound.range, sound.weight, this.mob.level().getGameTime());
+    }
+
+    private void startSoundSourceBreakerIfArrived() {
+        if (this.blockBreakerGoal != null || this.edgeMobState == EdgeMobState.RETURNING_TO_LEADER
+                || !SoundAttractConfig.COMMON.enableBlockBreaking.get() || this.cachedSound == null
+                || this.targetSoundPos == null || !this.mob.getNavigation().isDone()
+                || this.mob.blockPosition().distSqr(this.targetSoundPos) >= 4.0D
+                || !BlockBreakerPosGoal.isSoundSourceBlock(this.mob, this.cachedSound)) return;
+        this.blockBreakerGoal = BlockBreakerPosGoal.forSoundSource(this.mob, this.targetSoundPos,
+                this.cachedSound, SoundAttractConfig.COMMON.blockBreakingTimeMultiplier.get(),
+                SoundAttractConfig.COMMON.blockBreakingToolOnly.get(),
+                SoundAttractConfig.COMMON.blockBreakingProperToolOnly.get(),
+                SoundAttractConfig.COMMON.blockBreakingProperToolOnly.get());
+        BlockBreakerManager.scheduleAdd(this.mob, this.blockBreakerGoal, 1);
     }
 
 

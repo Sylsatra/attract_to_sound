@@ -21,7 +21,7 @@ record LivingBridgeRouteSnapshot(UUID reservationId, UUID ownerId, UUID formatio
                                  List<Point> corridor, long halfWidth, List<Point> recoveryRoute,
                                  int recoveryIndex, Point safeEndpoint, int lastChunkX, int lastChunkZ) {
     private static final int SCHEMA = 2;
-    private static final int MAX_ROUTE_POINTS = 256;
+    static final int MAX_ROUTE_POINTS = 256;
     private static final long COORDINATE_LIMIT = 30_000_000L * 4096L;
 
     record Point(long x, long y, long z) {
@@ -115,18 +115,7 @@ record LivingBridgeRouteSnapshot(UUID reservationId, UUID ownerId, UUID formatio
     }
 
     boolean exactlyEquals(LivingBridgeRouteSnapshot other) {
-        return other != null && digest().equals(other.digest())
-                && java.util.Arrays.equals(canonicalBytes(), other.canonicalBytes())
-                && reservationId.equals(other.reservationId) && ownerId.equals(other.ownerId)
-                && formationId.equals(other.formationId) && dimension.equals(other.dimension)
-                && commitGeneration == other.commitGeneration && transactionId.equals(other.transactionId)
-                && routeRevision == other.routeRevision && movementMode.equals(other.movementMode)
-                && lifecycleState.equals(other.lifecycleState)
-                && originalNoPhysics == other.originalNoPhysics && originalNoGravity == other.originalNoGravity
-                && recoveryRequired == other.recoveryRequired && corridor.equals(other.corridor)
-                && halfWidth == other.halfWidth && recoveryRoute.equals(other.recoveryRoute)
-                && recoveryIndex == other.recoveryIndex && java.util.Objects.equals(safeEndpoint, other.safeEndpoint)
-                && lastChunkX == other.lastChunkX && lastChunkZ == other.lastChunkZ;
+        return equals(other);
     }
 
     CompoundTag toTag() {

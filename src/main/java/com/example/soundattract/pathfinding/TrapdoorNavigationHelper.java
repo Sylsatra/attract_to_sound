@@ -37,13 +37,23 @@ public final class TrapdoorNavigationHelper {
         BlockPos.MutableBlockPos scratch = SCRATCH_POS.get();
         scratch.set(x, y, z);
         BlockState trapdoorState = level.getBlockState(scratch);
-        if (!isOpenTrapdoorState(trapdoorState)) return false;
         int belowY = y - 1;
+        if (!isOpenTrapdoorState(trapdoorState)) return false;
         if (belowY < level.getMinBuildHeight()) return true;
         scratch.set(x, belowY, z);
-        BlockState belowState = level.getBlockState(scratch);
+        return isTrapdoorDropHazard(level, x, y, z, trapdoorState, level.getBlockState(scratch));
+    }
+
+    static boolean isTrapdoorDropHazard(BlockGetter level, int x, int y, int z,
+                                        BlockState trapdoorState, BlockState belowState) {
+        if (level == null || !isOpenTrapdoorState(trapdoorState)) return false;
+        int belowY = y - 1;
+        if (belowY < level.getMinBuildHeight()) return true;
+        if (belowState == null) return false;
         if (belowState.isAir() || belowState.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) return true;
         if (belowState.is(BlockTags.TRAPDOORS)) return true;
+        BlockPos.MutableBlockPos scratch = SCRATCH_POS.get();
+        scratch.set(x, belowY, z);
         net.minecraft.world.phys.shapes.VoxelShape shape = belowState.getCollisionShape(level, scratch, net.minecraft.world.phys.shapes.CollisionContext.empty());
         return shape.isEmpty() || shape.max(net.minecraft.core.Direction.Axis.Y) < 1.0D;
     }

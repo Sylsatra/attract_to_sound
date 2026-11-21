@@ -35,7 +35,7 @@ public final class ClientConfig {
 
     static {
         BUILDER.push("awareness_hud");
-        AWARENESS_HUD_ENABLED = BUILDER.define("enabled", true);
+        AWARENESS_HUD_ENABLED = BUILDER.define("enabled", false);
         HUD_SCALE = BUILDER.defineInRange("scale", 1.0, 0.5, 2.0);
         HUD_OPACITY = BUILDER.defineInRange("opacity", 190, 40, 255);
         HUD_ANCHOR = BUILDER.define("anchor", "AIR_LEVEL");
@@ -50,7 +50,7 @@ public final class ClientConfig {
         SHOW_WIND_SHIELD = BUILDER.comment("Show the wind shield awareness icon.").define("showWindShield", true);
         BUILDER.pop();
         BUILDER.push("mob_alerts");
-        MOB_ALERTS_ENABLED = BUILDER.define("enabled", true);
+        MOB_ALERTS_ENABLED = BUILDER.define("enabled", false);
         MOB_ALERT_SCALE = BUILDER.defineInRange("scale", 1.0, 0.25, 4.0);
         MOB_ALERT_HEIGHT_OFFSET = BUILDER.defineInRange("heightOffset", 0.45, 0.0, 4.0);
         MOB_ALERT_MAX_DISTANCE = BUILDER.defineInRange("maxDistance", 48.0, 1.0, 48.0);

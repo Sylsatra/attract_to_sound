@@ -24,6 +24,7 @@ import net.minecraftforge.fml.common.Mod;
 final class LivingBridgeRouteData extends SavedData {
     static final String DATA_ID = "living_bridge_routes";
     static final int CURRENT_SCHEMA = 2;
+    private static final int MAX_TRANSITION_JOURNAL_ENTRIES = 512;
 
     private final Map<UUID, LivingBridgeRouteSnapshot> reservations = new HashMap<>();
     private final Map<UUID, CompoundTag> transitionJournal = new HashMap<>();
@@ -89,7 +90,7 @@ final class LivingBridgeRouteData extends SavedData {
         ListTag journal = root.getList("transitionJournal", Tag.TAG_COMPOUND);
         for (int index = 0; index < journal.size(); index++) {
             CompoundTag row = journal.getCompound(index);
-            if (!row.hasUUID("reservationId") || data.transitionJournal.size() >= 512) {
+            if (!row.hasUUID("reservationId") || data.transitionJournal.size() >= MAX_TRANSITION_JOURNAL_ENTRIES) {
                 data.quarantineLedger.add(rawQuarantine("malformed_transition_journal", row));
                 data.dimensionBarriers.add("*");
                 continue;
@@ -142,7 +143,14 @@ final class LivingBridgeRouteData extends SavedData {
 
     static LivingBridgeRouteSnapshot safeRecoverySnapshot(LivingBridgeRouteSnapshot current,
                                                            int lastChunkX, int lastChunkZ) {
-        if (current == null || current.safeEndpoint() == null) {
+        return safeRecoverySnapshot(current, current == null ? null : current.safeEndpoint(),
+                lastChunkX, lastChunkZ);
+    }
+
+    static LivingBridgeRouteSnapshot safeRecoverySnapshot(LivingBridgeRouteSnapshot current,
+                                                           LivingBridgeRouteSnapshot.Point safeEndpoint,
+                                                           int lastChunkX, int lastChunkZ) {
+        if (current == null || safeEndpoint == null) {
             throw new IllegalArgumentException("safe recovery requires a persisted endpoint");
         }
         long generation = Math.addExact(current.commitGeneration(), 1L);
@@ -152,7 +160,7 @@ final class LivingBridgeRouteData extends SavedData {
                 current.dimension(), generation, transactionId, current.routeRevision(),
                 "SAFE_RECOVERY_COMPLETE", "SAFE_RECOVERY_COMPLETE", current.originalNoPhysics(),
                 current.originalNoGravity(), false, current.corridor(), current.halfWidth(),
-                current.recoveryRoute(), current.recoveryIndex(), current.safeEndpoint(), lastChunkX, lastChunkZ);
+                current.recoveryRoute(), current.recoveryIndex(), safeEndpoint, lastChunkX, lastChunkZ);
     }
 
     static LivingBridgeRouteSnapshot deadSnapshot(LivingBridgeRouteSnapshot current,
@@ -184,18 +192,45 @@ final class LivingBridgeRouteData extends SavedData {
     static LivingBridgeRouteSnapshot recoveringSnapshot(LivingBridgeRouteSnapshot current,
                                                          List<LivingBridgeRouteSnapshot.Point> route,
                                                          int nextIndex, int lastChunkX, int lastChunkZ) {
-        if (current == null || current.safeEndpoint() == null || route == null || route.size() < 2
-                || route.size() > 65 || nextIndex < 1 || nextIndex > route.size()) {
+        return recoveringSnapshot(current, route, nextIndex,
+                current == null ? null : current.safeEndpoint(), lastChunkX, lastChunkZ,
+                current != null && "ORPHAN_RECOVERY_TO_SAFE_ENDPOINT".equals(current.movementMode())
+                        ? "ORPHAN_RECOVERY_TO_SAFE_ENDPOINT" : "RECOVERING_TO_SAFE_ENDPOINT");
+    }
+
+    static LivingBridgeRouteSnapshot recoveringSnapshot(LivingBridgeRouteSnapshot current,
+                                                         List<LivingBridgeRouteSnapshot.Point> route,
+                                                         int nextIndex, LivingBridgeRouteSnapshot.Point safeEndpoint,
+                                                         int lastChunkX, int lastChunkZ) {
+        return recoveringSnapshot(current, route, nextIndex, safeEndpoint, lastChunkX, lastChunkZ,
+                "RECOVERING_TO_SAFE_ENDPOINT");
+    }
+
+    static LivingBridgeRouteSnapshot orphanRecoveringSnapshot(LivingBridgeRouteSnapshot current,
+                                                               List<LivingBridgeRouteSnapshot.Point> route,
+                                                               int nextIndex, LivingBridgeRouteSnapshot.Point safeEndpoint,
+                                                               int lastChunkX, int lastChunkZ) {
+        return recoveringSnapshot(current, route, nextIndex, safeEndpoint, lastChunkX, lastChunkZ,
+                "ORPHAN_RECOVERY_TO_SAFE_ENDPOINT");
+    }
+
+    private static LivingBridgeRouteSnapshot recoveringSnapshot(LivingBridgeRouteSnapshot current,
+                                                                  List<LivingBridgeRouteSnapshot.Point> route,
+                                                                  int nextIndex, LivingBridgeRouteSnapshot.Point safeEndpoint,
+                                                                  int lastChunkX, int lastChunkZ, String movementMode) {
+        if (current == null || safeEndpoint == null || route == null || route.size() < 2
+                || route.size() > LivingBridgeRouteSnapshot.MAX_ROUTE_POINTS
+                || nextIndex < 1 || nextIndex > route.size()) {
             throw new IllegalArgumentException("recovery route is absent or exceeds its bounded contract");
         }
         long generation = Math.addExact(current.commitGeneration(), 1L);
         UUID transactionId = UUID.nameUUIDFromBytes((current.reservationId() + ":recovering:" + generation)
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8));
         return new LivingBridgeRouteSnapshot(current.reservationId(), current.ownerId(), current.formationId(),
-                current.dimension(), generation, transactionId, current.routeRevision(),
-                "RECOVERING_TO_SAFE_ENDPOINT", "RECOVERING_TO_SAFE_ENDPOINT", current.originalNoPhysics(),
+                current.dimension(), generation, transactionId, current.routeRevision(), movementMode,
+                "RECOVERING_TO_SAFE_ENDPOINT", current.originalNoPhysics(),
                 current.originalNoGravity(), true, route, current.halfWidth(), route, nextIndex,
-                current.safeEndpoint(), lastChunkX, lastChunkZ);
+                safeEndpoint, lastChunkX, lastChunkZ);
     }
 
     boolean hasConflictingLane(String dimension, UUID ownerId, UUID reservationId,
@@ -393,7 +428,8 @@ final class LivingBridgeRouteData extends SavedData {
 
     boolean commitRecoveryTransition(LivingBridgeRouteSnapshot from, LivingBridgeRouteSnapshot to, Mob mob) {
         if (from == null || to == null || !"RECOVERING_TO_SAFE_ENDPOINT".equals(to.lifecycleState())
-                || !"RECOVERING_TO_SAFE_ENDPOINT".equals(to.movementMode()) || !to.recoveryRequired()
+                || !("RECOVERING_TO_SAFE_ENDPOINT".equals(to.movementMode())
+                || "ORPHAN_RECOVERY_TO_SAFE_ENDPOINT".equals(to.movementMode())) || !to.recoveryRequired()
                 || to.safeEndpoint() == null || to.recoveryRoute().size() < 2
                 || mob == null || !mob.getPersistentData().contains("livingBridgeControl", Tag.TAG_COMPOUND)) {
             return false;
@@ -414,8 +450,10 @@ final class LivingBridgeRouteData extends SavedData {
         if (opaqueFutureSchema || to == null || mob == null
                 || !(mob.level() instanceof ServerLevel level) || level.getServer() == null
                 || !level.getServer().isSameThread()
-                || (!safeDockTerminal && admissionBlocked(to.dimension())) || transitionJournal.size() >= 512
+                || (!safeDockTerminal && admissionBlocked(to.dimension())) || !canWriteJournalRow(to.reservationId())
                 || !to.ownerId().equals(mob.getUUID())
+                || !to.dimension().equalsIgnoreCase(level.dimension().location().toString())
+                || from != null && !from.dimension().equalsIgnoreCase(level.dimension().location().toString())
                 || (from == null ? reservations.containsKey(to.reservationId())
                 : reservations.get(to.reservationId()) == null
                 || !reservations.get(to.reservationId()).exactlyEquals(from)
@@ -508,6 +546,11 @@ final class LivingBridgeRouteData extends SavedData {
 
     int reservationCount() {
         return reservations.size();
+    }
+
+    boolean canWriteJournalRow(UUID reservationId) {
+        return reservationId != null && (transitionJournal.containsKey(reservationId)
+                || transitionJournal.size() < MAX_TRANSITION_JOURNAL_ENTRIES);
     }
 
     int quarantineCount() {
@@ -702,7 +745,6 @@ final class LivingBridgeRouteData extends SavedData {
         mob.noPhysics = true;
         mob.getNavigation().stop();
         mob.getMoveControl().setWantedPosition(mob.getX(), mob.getY(), mob.getZ(), 0.0D);
-        net.minecraft.world.phys.Vec3 velocity = mob.getDeltaMovement();
-        mob.setDeltaMovement(0.0D, velocity.y, 0.0D);
+        mob.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
     }
 }

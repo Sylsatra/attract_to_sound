@@ -110,7 +110,7 @@ public class LivingWallCoordinatorGameTests {
                     "potential-supply admission must not create navigation paths");
             require(potential.contains(candidate),
                     "candidate blocked only by path-dependent combat policy remains potential supply");
-            require(LivingWallCoordinator.shouldYieldBridgeCombat(candidate),
+            require(LivingWallCoordinator.shouldYieldBridgeCombatForTest(candidate, true),
                     "runtime recruitment combat filter must remain authoritative");
             require(candidate.pathCreations > beforeAdmission,
                     "runtime combat filter must exercise its navigation path branch");
@@ -157,6 +157,41 @@ public class LivingWallCoordinatorGameTests {
                     new Class<?>[]{ServerLevel.class, classFor("Formation"), classFor("Phase"), long.class, String.class},
                     level, fixture.formation, phase("ROTATE"), level.getGameTime(), "gametest_broken_chain");
             require(!brokenChain, "full member/slot counts must not bypass invalid structural contact");
+            helper.succeed();
+        } finally {
+            cleanupStructuralFixture(fixture, null);
+        }
+    }
+
+    @GameTest(template = "empty")
+    public void structuralWorkerRequiresContactingSupportBeforeItCanRise(GameTestHelper helper) throws Exception {
+        StructuralFixture fixture = null;
+        try {
+            fixture = newStructuralFixture(helper, "structuralWorkerRequiresContactingSupportBeforeItCanRise");
+            Vec3 supportedTarget = fixture.foundation.position().add(0.0D, fixture.foundation.getBbHeight(), 0.0D);
+            Vec3 unsupportedTarget = fixture.foundation.position().add(0.0D, 3.0D, 0.0D);
+            Class<?> formationType = classFor("Formation");
+            boolean supported = (Boolean) invokeCoordinator("hasVerifiedSupport",
+                    new Class<?>[]{ServerLevel.class, formationType, int.class, Mob.class, Vec3.class},
+                    fixture.level, fixture.formation, 1, fixture.worker, supportedTarget);
+            boolean unsupported = (Boolean) invokeCoordinator("hasVerifiedSupport",
+                    new Class<?>[]{ServerLevel.class, formationType, int.class, Mob.class, Vec3.class},
+                    fixture.level, fixture.formation, 1, fixture.worker, unsupportedTarget);
+
+            require(supported, "a worker touching its live lower member should be supported");
+            require(!unsupported, "a live lower member several blocks away must not authorize a floating worker");
+            @SuppressWarnings("unchecked")
+            Map<Integer, Vec3> slotPositions = (Map<Integer, Vec3>) getFieldValue(fixture.formation,
+                    "structuralSlotPositions");
+            slotPositions.put(1, unsupportedTarget);
+            Vec3 beforeAssembly = fixture.worker.position();
+            invokeCoordinator("assembleFormation",
+                    new Class<?>[]{ServerLevel.class, classFor("Formation"), long.class},
+                    fixture.level, fixture.formation, fixture.level.getGameTime() + 100L);
+            require(fixture.worker.position().distanceToSqr(beforeAssembly) < 1.0E-6D,
+                    "assembly must reject a floating dock before writing a new position");
+            require(!fixture.worker.isNoGravity() && !fixture.worker.noPhysics,
+                    "rejected unsupported dock must not take over worker physics");
             helper.succeed();
         } finally {
             cleanupStructuralFixture(fixture, null);
@@ -1162,7 +1197,7 @@ public class LivingWallCoordinatorGameTests {
         StructuralFixture fixture = null;
         try {
             fixture = newStructuralFixture(helper, "structuralReleaseClearsExhaustedJitteringMember");
-            setIntField(fixture.formation, "activeStructuralRouteRetries", getStaticInt("RECRUITER_RETRY_WINDOWS"));
+            setIntField(fixture.formation, "activeStructuralRouteRetries", getStaticInt("STRUCTURAL_ROUTE_RETRY_WINDOWS"));
 
             boolean reroute = (Boolean) invokeCoordinator("rerouteOrReleaseStructuralMember",
                     new Class<?>[]{ServerLevel.class, classFor("Formation"), Mob.class, int.class, String.class},

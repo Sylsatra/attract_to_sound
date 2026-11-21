@@ -2,8 +2,12 @@ package com.example.soundattract.ai;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.function.BiPredicate;
 import java.util.function.Function;
@@ -262,24 +266,49 @@ class WallProfileScannerEvidenceTest {
     void exteriorLandingCandidatesStayOnTheRayFacingSide() {
         BlockPos structural = new BlockPos(0, 5, 0);
         BlockPos pivot = new BlockPos(0, 4, 0);
-        List<BlockPos> candidates = WallProfileScanner.exteriorLandingCandidates(
-                structural, pivot, new Vec3(1.0D, 0.0D, 0.0D), 2, 1);
+        Iterator<BlockPos> iterator = WallProfileScanner.exteriorLandingCandidates(
+                null, structural, pivot, new Vec3(1.0D, 0.0D, 0.0D), 2, 1);
 
-        assertEquals(new BlockPos(1, 5, 0), candidates.get(0));
+        assertEquals(new BlockPos(1, 5, 0), iterator.next());
+        assertThrows(UnsupportedOperationException.class, iterator::remove);
+        List<BlockPos> candidates = takeLandings(iterator, Integer.MAX_VALUE);
         assertTrue(candidates.contains(new BlockPos(2, 6, 1)));
         assertTrue(candidates.contains(new BlockPos(0, 5, 1)));
         assertTrue(candidates.stream().anyMatch(candidate -> candidate.getX() > structural.getX()));
-        org.junit.jupiter.api.Assertions.assertThrows(UnsupportedOperationException.class,
-                () -> candidates.add(new BlockPos(3, 5, 0)));
     }
 
     @Test
     void boundedLandingSearchIncludesElevatedNearbySurfaces() {
         BlockPos wall = new BlockPos(24, 64, 20);
-        List<BlockPos> candidates = WallProfileScanner.exteriorLandingCandidates(
-                wall, new BlockPos(14, 64, 16), new Vec3(1, 0, 1).normalize(), 12, 8);
-        List<BlockPos> admitted = candidates.stream().limit(127).toList();
+        Iterator<BlockPos> candidates = WallProfileScanner.exteriorLandingCandidates(
+                null, wall, new BlockPos(14, 64, 16), new Vec3(1, 0, 1).normalize(), 12, 8);
+        List<BlockPos> admitted = takeLandings(candidates, 127);
         assertTrue(admitted.contains(wall.offset(1, 8, 1)));
         assertTrue(admitted.contains(wall.offset(1, -8, 1)));
+    }
+
+    @Test
+    void canonicalLandingLeadsWithoutRepeatingOrConsumingAnotherBudgetSlot() {
+        BlockPos wall = new BlockPos(-24, 64, -20);
+        BlockPos canonical = wall.offset(0, 0, 2);
+        Iterator<BlockPos> candidates = WallProfileScanner.exteriorLandingCandidates(
+                canonical, wall, wall.offset(-10, 0, -4), new Vec3(1, 0, 1), 12, 8);
+
+        List<BlockPos> inspected = takeLandings(candidates, 128);
+
+        assertEquals(List.of(canonical, wall.offset(1, 0, 1), wall.offset(2, 0, 0), wall.offset(-1, 0, 1),
+                wall.offset(1, 0, -1), wall.offset(1, 0, 0), wall.offset(0, 0, 1), wall.offset(1, 1, 1)),
+                inspected.subList(0, 8));
+        assertEquals(128, new HashSet<>(inspected).size());
+        assertEquals(wall.offset(-2, 1, 2), inspected.get(127));
+        assertEquals(wall.offset(2, 1, -2), candidates.next());
+    }
+
+    private static List<BlockPos> takeLandings(Iterator<BlockPos> iterator, int limit) {
+        List<BlockPos> candidates = new ArrayList<>();
+        while (candidates.size() < limit && iterator.hasNext()) {
+            candidates.add(iterator.next());
+        }
+        return candidates;
     }
 }

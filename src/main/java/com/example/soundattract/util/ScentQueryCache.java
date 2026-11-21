@@ -17,7 +17,8 @@ public final class ScentQueryCache {
         public static final Result EMPTY = new Result(Long.MIN_VALUE, false, 0.0);
     }
 
-    private record Key(UUID mobId, ResourceLocation dimension) {
+    private record Key(UUID mobId, ResourceLocation dimension, long x, long y, long z,
+                       long radius, int maxAge, long revision) {
     }
 
     private static final int MAX_ENTRIES = 65536;
@@ -30,7 +31,8 @@ public final class ScentQueryCache {
 
     public static Result getCached(UUID mobId, ResourceLocation dimension, long nowTick, int ttl) {
         if (mobId == null || dimension == null) return null;
-        Result r = CACHE.getIfPresent(new Key(mobId, dimension));
+        Result r = CACHE.getIfPresent(new Key(mobId, dimension, Long.MIN_VALUE, Long.MIN_VALUE,
+                Long.MIN_VALUE, Long.MIN_VALUE, -1, Long.MIN_VALUE));
         if (r == null) return null;
         if (nowTick - r.tickStored() > ttl) return null;
         return r;
@@ -38,7 +40,28 @@ public final class ScentQueryCache {
 
     public static void put(UUID mobId, ResourceLocation dimension, Result result) {
         if (mobId == null || dimension == null || result == null) return;
-        CACHE.put(new Key(mobId, dimension), result);
+        CACHE.put(new Key(mobId, dimension, Long.MIN_VALUE, Long.MIN_VALUE,
+                Long.MIN_VALUE, Long.MIN_VALUE, -1, Long.MIN_VALUE), result);
+    }
+
+    public static Result getCached(UUID mobId, ResourceLocation dimension, long nowTick,
+                                   double x, double y, double z, double radius, int maxAge, long revision) {
+        if (mobId == null || dimension == null) return null;
+        Key key = key(mobId, dimension, x, y, z, radius, maxAge, revision);
+        Result result = CACHE.getIfPresent(key);
+        return result != null && result.tickStored() == nowTick ? result : null;
+    }
+
+    public static void put(UUID mobId, ResourceLocation dimension, double x, double y, double z,
+                           double radius, int maxAge, long revision, Result result) {
+        if (mobId == null || dimension == null || result == null) return;
+        CACHE.put(key(mobId, dimension, x, y, z, radius, maxAge, revision), result);
+    }
+
+    private static Key key(UUID mobId, ResourceLocation dimension, double x, double y, double z,
+                           double radius, int maxAge, long revision) {
+        return new Key(mobId, dimension, Double.doubleToLongBits(x), Double.doubleToLongBits(y),
+                Double.doubleToLongBits(z), Double.doubleToLongBits(radius), maxAge, revision);
     }
 
     public static void invalidate(UUID mobId) {

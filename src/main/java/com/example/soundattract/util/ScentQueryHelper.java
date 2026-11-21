@@ -24,38 +24,35 @@ public class ScentQueryHelper {
         if (SoundAttractConfig.COMMON == null) return ScentQueryCache.Result.EMPTY;
 
         long now = mob.level().getGameTime();
-        int ttl = SoundAttractConfig.COMMON.scentQueryCacheTtlTicks.get();
-        ScentQueryCache.Result cached = ScentQueryCache.getCached(
-                mob.getUUID(), mob.level().dimension().location(), now, ttl);
-        if (cached != null) return cached;
-
         ScentQueryCache.Result computed;
         try {
             computed = mob.level().getCapability(ScentManager.INSTANCE).map(manager -> {
                 if (manager == null) return ScentQueryCache.Result.EMPTY;
-                ChunkPos chunk = new ChunkPos(mob.blockPosition());
-                List<ScentNode> nodes = manager.getNodesInArea(chunk);
-                if (nodes == null || nodes.isEmpty()) {
-                    return new ScentQueryCache.Result(now, false, 0.0);
-                }
+                ScentQueryCache.Result cached = ScentQueryCache.getCached(
+                        mob.getUUID(), mob.level().dimension().location(), now,
+                        mob.getX(), mob.getY(), mob.getZ(), radius, maxAgeTicks, manager.revision());
+                if (cached != null) return cached;
                 double radiusSq = radius * radius;
                 Vec3 mobPos = mob.position();
                 if (mobPos == null) return ScentQueryCache.Result.EMPTY;
 
-                boolean anyFresh = false;
-                double strongest = 0.0;
-                for (ScentNode node : nodes) {
-                    if (node == null) continue;
+                double[] strongest = {0.0};
+                boolean[] anyFresh = {false};
+                manager.forEachNodeInArea(new ChunkPos(mob.blockPosition()), node -> {
+                    if (node == null) return;
                     Vec3 np = node.getPosition();
-                    if (np == null) continue;
+                    if (np == null) return;
                     long age = now - node.getTimestamp();
-                    if (age < 0 || age > maxAgeTicks) continue;
-                    if (mobPos.distanceToSqr(np) > radiusSq) continue;
-                    anyFresh = true;
+                    if (age < 0 || age > maxAgeTicks) return;
+                    if (mobPos.distanceToSqr(np) > radiusSq) return;
+                    anyFresh[0] = true;
                     float s = node.getStrength();
-                    if (s > strongest) strongest = s;
-                }
-                return new ScentQueryCache.Result(now, anyFresh, strongest);
+                    if (s > strongest[0]) strongest[0] = s;
+                });
+                ScentQueryCache.Result result = new ScentQueryCache.Result(now, anyFresh[0], strongest[0]);
+                ScentQueryCache.put(mob.getUUID(), mob.level().dimension().location(),
+                        mob.getX(), mob.getY(), mob.getZ(), radius, maxAgeTicks, manager.revision(), result);
+                return result;
             }).orElse(ScentQueryCache.Result.EMPTY);
         } catch (Throwable t) {
             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
@@ -64,7 +61,6 @@ public class ScentQueryHelper {
             computed = ScentQueryCache.Result.EMPTY;
         }
 
-        ScentQueryCache.put(mob.getUUID(), mob.level().dimension().location(), computed);
         return computed;
     }
 }

@@ -10,6 +10,7 @@ public class IntegrationConfig {
 
     public static final ForgeConfigSpec.BooleanValue ENABLE_QUANTIFIED_INTEGRATION;
     public static final ForgeConfigSpec.BooleanValue ENABLE_WEATHER2_WIND_INTEGRATION;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_PROJECT_ATMOSPHERE_WIND_INTEGRATION;
     public static final ForgeConfigSpec.BooleanValue ENABLE_SMART_BRAIN_LIB_INTEGRATION;
     public static final ForgeConfigSpec.BooleanValue ENABLE_CUSTOM_NPCS_INTEGRATION;
     public static final ForgeConfigSpec.BooleanValue ENABLE_QUANTIFIED_CACHE_INTEGRATION;
@@ -143,6 +144,8 @@ public class IntegrationConfig {
         ENABLE_QUANTIFIED_INTEGRATION = BUILDER.define("enableQuantifiedIntegration", true);
         ENABLE_WEATHER2_WIND_INTEGRATION = BUILDER.comment("Use Weather2's wind field for wind scent and windshield calculations when Weather2 is installed.")
                 .define("enableWeather2WindIntegration", true);
+        ENABLE_PROJECT_ATMOSPHERE_WIND_INTEGRATION = BUILDER.comment("Prefer Project Atmosphere's surface wind for wind scent and windshield calculations when it is installed.")
+                .define("enableProjectAtmosphereWindIntegration", true);
         ENABLE_SMART_BRAIN_LIB_INTEGRATION = BUILDER.define("enableSmartBrainLibIntegration", true);
         ENABLE_CUSTOM_NPCS_INTEGRATION = BUILDER.define("enableCustomNpcsIntegration", true);
         ENABLE_TACZ_NPC_INTEGRATION = BUILDER.comment("Enable optional flashbang and smoke targeting behavior for TACZ NPCs when TACZ NPC is installed.")

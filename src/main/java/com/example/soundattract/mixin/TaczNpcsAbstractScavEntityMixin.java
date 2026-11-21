@@ -23,8 +23,8 @@ public abstract class TaczNpcsAbstractScavEntityMixin {
     private void soundattract$nullSafeCoreTask15(PathfinderMob mob, CallbackInfoReturnable<Boolean> cir) {
         Mob self = (Mob) (Object) this;
         if (self.getTarget() == null) {
-            // TACZ NPC 1.2.0 dereferences getTarget() in this task after testing
-            // for null. Cancel only this predicate so its remaining brain tasks run.
+
+
             cir.setReturnValue(false);
             TaczNpcDebug.logNullTargetGuard(self);
         }

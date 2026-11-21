@@ -14,6 +14,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.pathfinder.Path;
 import net.minecraft.world.phys.Vec3;
 
 public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goal {
@@ -42,6 +43,8 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
 
     private SoundTracker.SoundRecord cachedSound = null;
     private boolean highWeightOverrideActive = false;
+    private ClueDirector.Hint clueHint;
+    private Path cluePath;
 
     public LeaderAttractionGoal(Mob mob, double moveSpeed) {
         this.mob = mob;
@@ -119,6 +122,19 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
             return true;
         }
 
+        if (SoundAttractConfig.COMMON.enableSecondBrain.get() && this.mob.getTarget() == null) {
+            ClueDirector.registerInterest(this.mob);
+            clueHint = ClueDirector.takeHint(this.mob);
+            if (clueHint != null) {
+                targetSoundPos = clueHint.position();
+                cachedSound = ClueDirector.getSoundEvidence(this.mob, clueHint);
+                currentTargetWeight = cachedSound == null ? 0.0 : cachedSound.weight;
+                hasPicked = false;
+                chosenDest = null;
+                return true;
+            }
+        }
+
         SoundTracker.SoundRecord relayed = findBestRelayedSound();
         if (relayed == null) {
             if (this.mob.getTarget() != null && this.mob.getTarget().isAlive()) {
@@ -186,10 +202,14 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
             return true;
         }
 
+        if (clueHint != null && (!ClueDirector.isHintActive(this.mob, clueHint)
+                || targetSoundPos == null)) return false;
+
         BlockPos destination = this.chosenDest != null ? BlockPos.containing(this.chosenDest) : this.targetSoundPos;
         if (this.mob.getNavigation().isDone()) {
             if (destination != null && this.mob.blockPosition().distSqr(destination) < 4.0D) {
-                return false;
+                    return SoundAttractConfig.COMMON.enableBlockBreaking.get()
+                            && BlockBreakerPosGoal.isSoundSourceBlock(this.mob, this.cachedSound);
             }
         }
 
@@ -211,6 +231,13 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
 
     @Override
     public void stop() {
+        if (clueHint != null) {
+            ClueDirector.Resolution resolution = targetSoundPos != null
+                    && mob.blockPosition().distSqr(targetSoundPos) < 4.0D
+                    ? ClueDirector.Resolution.ARRIVED : ClueDirector.Resolution.PREEMPTED;
+            ClueDirector.releaseHint(mob, clueHint, resolution);
+            clueHint = null;
+        }
         this.mob.getNavigation().stop();
         this.targetSoundPos = null;
         this.currentTargetWeight = -1.0;
@@ -218,6 +245,7 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
         this.hasPicked = false;
         this.chosenDest = null;
         this.highWeightOverrideActive = false;
+        this.cluePath = null;
         if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
             SoundAttractMod.LOGGER.info("LeaderAttractionGoal stop: {}", mob.getName().getString());
         }
@@ -250,7 +278,11 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
             }
             if (stuckTicks >= 40 && SoundAttractConfig.COMMON.enableBlockBreaking.get()) {
                 if (this.blockBreakerGoal == null) {
-                    BlockBreakerPosGoal newGoal = new BlockBreakerPosGoal(this.mob, this.targetSoundPos, SoundAttractConfig.COMMON.blockBreakingTimeMultiplier.get(), SoundAttractConfig.COMMON.blockBreakingToolOnly.get(), SoundAttractConfig.COMMON.blockBreakingProperToolOnly.get(), SoundAttractConfig.COMMON.blockBreakingProperToolOnly.get());
+                    BlockBreakerPosGoal newGoal = BlockBreakerPosGoal.forSoundSource(this.mob, this.targetSoundPos,
+                            this.cachedSound, SoundAttractConfig.COMMON.blockBreakingTimeMultiplier.get(),
+                            SoundAttractConfig.COMMON.blockBreakingToolOnly.get(),
+                            SoundAttractConfig.COMMON.blockBreakingProperToolOnly.get(),
+                            SoundAttractConfig.COMMON.blockBreakingProperToolOnly.get());
                     BlockBreakerManager.scheduleAdd(this.mob, newGoal, 1);
                     this.blockBreakerGoal = newGoal;
                 }
@@ -336,6 +368,7 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
         if (targetSoundPos == null) {
             return;
         }
+        startSoundSourceBreakerIfArrived();
 
         if (lastPos != null && mob.position().distanceToSqr(Vec3.atCenterOf(lastPos)) < 1.0) {
             stuckTicks++;
@@ -363,7 +396,8 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
                                 double timeMultiplier = SoundAttractConfig.COMMON.blockBreakingTimeMultiplier.get();
                                 boolean toolOnly = SoundAttractConfig.COMMON.blockBreakingToolOnly.get();
                                 boolean properTool = SoundAttractConfig.COMMON.blockBreakingProperToolOnly.get();
-                                BlockBreakerPosGoal newGoal = new BlockBreakerPosGoal(this.mob, destination, timeMultiplier, toolOnly, properTool, properTool);
+                                BlockBreakerPosGoal newGoal = BlockBreakerPosGoal.forSoundSource(this.mob, destination,
+                                        this.cachedSound, timeMultiplier, toolOnly, properTool, properTool);
                                 BlockBreakerManager.scheduleAdd(this.mob, newGoal, 1);
                                 this.blockBreakerGoal = newGoal;
                             }
@@ -381,6 +415,13 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
             }
         }
 
+        if (!hasPicked) {
+            if (SoundAttractConfig.COMMON.enableBlockBreaking.get()
+                    && BlockBreakerPosGoal.isSoundSourceBlock(this.mob, this.cachedSound)) {
+                chosenDest = Vec3.atCenterOf(targetSoundPos);
+                hasPicked = true;
+            }
+        }
         if (!hasPicked) {
             double arrivalDist = getArrivalDistance();
             long seed = mob.getUUID().getMostSignificantBits() ^ mob.getUUID().getLeastSignificantBits() ^ targetSoundPos.hashCode();
@@ -402,6 +443,7 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
             Vec3 cur = mob.position();
             if (cur.distanceToSqr(chosenDest) > 1.5 * 1.5) {
                 com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, chosenDest, moveSpeed);
+                if (clueHint != null) cluePath = mob.getNavigation().getPath();
             }
             if (mob.getNavigation().isDone()) {
                 hasPicked = false;
@@ -416,10 +458,25 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
         }
     }
 
+    private void startSoundSourceBreakerIfArrived() {
+        if (this.blockBreakerGoal != null || !SoundAttractConfig.COMMON.enableBlockBreaking.get()
+                || this.cachedSound == null || this.targetSoundPos == null
+                || !this.mob.getNavigation().isDone()
+                || this.mob.blockPosition().distSqr(this.targetSoundPos) >= 4.0D
+                || !BlockBreakerPosGoal.isSoundSourceBlock(this.mob, this.cachedSound)) return;
+        this.blockBreakerGoal = BlockBreakerPosGoal.forSoundSource(this.mob, this.targetSoundPos,
+                this.cachedSound, SoundAttractConfig.COMMON.blockBreakingTimeMultiplier.get(),
+                SoundAttractConfig.COMMON.blockBreakingToolOnly.get(),
+                SoundAttractConfig.COMMON.blockBreakingProperToolOnly.get(),
+                SoundAttractConfig.COMMON.blockBreakingProperToolOnly.get());
+        BlockBreakerManager.scheduleAdd(this.mob, this.blockBreakerGoal, 1);
+    }
+
     private boolean shouldOverrideTarget() {
         double threshold = SoundAttractConfig.COMMON.highSoundWeightTargetOverride.get();
         if (threshold <= 0) return false;
         if (RaidManager.isRaidAdvancing(this.mob) || RaidManager.isRaidTicking(this.mob)) return false;
+        if (!CueScanBudget.tryAcquire(this.mob)) return false;
         com.example.soundattract.tracking.SoundTracker.SoundRecord best =
                 com.example.soundattract.tracking.SoundTracker.findNearestSound(
                         this.mob, this.mob.level(),
@@ -442,6 +499,17 @@ public class LeaderAttractionGoal extends net.minecraft.world.entity.ai.goal.Goa
 
     public BlockPos getTargetSoundPos() {
         return this.targetSoundPos;
+    }
+
+    public static boolean ownsActiveHintPath(Mob mob, ClueDirector.Hint hint) {
+        if (mob == null || hint == null) return false;
+        for (net.minecraft.world.entity.ai.goal.WrappedGoal wrapped : mob.goalSelector.getAvailableGoals()) {
+            if (wrapped.getGoal() instanceof LeaderAttractionGoal goal && goal.clueHint == hint) {
+                return goal.cluePath != null && mob.getNavigation().getPath() == goal.cluePath
+                        && !mob.getNavigation().isDone();
+            }
+        }
+        return false;
     }
 
     public double getCurrentTargetWeight() {

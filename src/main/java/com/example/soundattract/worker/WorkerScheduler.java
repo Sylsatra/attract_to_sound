@@ -30,18 +30,9 @@ public final class WorkerScheduler {
         List<MobSnapshot> snapshot = mobs == null
                 ? Collections.emptyList()
                 : Collections.unmodifiableList(new ArrayList<>(mobs));
-        long computedDeadline = System.currentTimeMillis() + 10L;
-        try {
-            Integer budget = SoundAttractConfig.COMMON.workerTaskBudgetMs.get();
-            if (budget != null) {
-                long cfgBudget = budget.longValue();
-                computedDeadline = System.currentTimeMillis() + Math.max(5L, cfgBudget);
-            }
-        } catch (Throwable ignored) {}
-        final long deadlineMs = computedDeadline;
         return AsyncManager.submit("soundattract_group_compute", () -> {
             try {
-                GroupComputeResult result = computeGroups(snapshot, cfg, deadlineMs, dimension);
+                GroupComputeResult result = computeGroups(snapshot, cfg, Long.MAX_VALUE, dimension);
                 if (result != null) GROUP_RESULTS.offer(result);
             } catch (Throwable t) {
                 if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.WORKERS)) {
@@ -102,7 +93,15 @@ public final class WorkerScheduler {
         return WorkerComputations.computeSoundScores(batch, deadlineMs);
     }
 
-    public record MobSnapshot(UUID uuid, double x, double y, double z, double health, boolean alive) {}
+    public record MobSnapshot(UUID uuid, double x, double y, double z, double health, boolean alive, boolean preferredLeader, boolean flying) {
+        public MobSnapshot(UUID uuid, double x, double y, double z, double health, boolean alive, boolean preferredLeader) {
+            this(uuid, x, y, z, health, alive, preferredLeader, false);
+        }
+
+        public MobSnapshot(UUID uuid, double x, double y, double z, double health, boolean alive) {
+            this(uuid, x, y, z, health, alive, false, false);
+        }
+    }
 
     public record ConfigSnapshot(double leaderGroupRadius,
                                  int maxLeaders,

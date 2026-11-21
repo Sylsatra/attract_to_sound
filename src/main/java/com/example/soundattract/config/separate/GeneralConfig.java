@@ -11,6 +11,7 @@ public class GeneralConfig {
     public static final ForgeConfigSpec.BooleanValue ENABLE_DATA_DRIVEN;
     public static final ForgeConfigSpec.ConfigValue<String> DATAPACK_PRIORITY;
     public static final ForgeConfigSpec.BooleanValue ENABLE_FLEE_FROM_UNSEEN_ATTACKER_GOAL;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_SECOND_BRAIN;
     public static final ForgeConfigSpec.DoubleValue SOUND_SWITCH_RATIO;
     public static final ForgeConfigSpec.DoubleValue SOUND_NOVELTY_BONUS_WEIGHT;
     public static final ForgeConfigSpec.IntValue SOUND_NOVELTY_TIME_TICKS;
@@ -90,6 +91,9 @@ public class GeneralConfig {
 
         ENABLE_FLEE_FROM_UNSEEN_ATTACKER_GOAL = BUILDER.comment("Enable mobs fleeing after being hurt by unseen attacker.")
                 .define("enableFleeFromUnseenAttackerGoal", true);
+
+        ENABLE_SECOND_BRAIN = BUILDER.comment("Enable the shared, server-wide clue director for sound, scent, and confirmed sightings.")
+                .define("enableSecondBrain", true);
 
         SOUND_SWITCH_RATIO = BUILDER.comment("Switching threshold factor.")
                 .defineInRange("soundSwitchRatio", 0.5, 0.0, 1.0);
@@ -1664,7 +1668,8 @@ public class GeneralConfig {
         LEADER_SPACING_MULTIPLIER = BUILDER.defineInRange("leaderSpacingMultiplier", 1.0, 0.1, 10.0);
         NUM_EDGE_SECTORS = BUILDER.defineInRange("numEdgeSectors", 4, 1, 64);
         GROUP_UPDATE_INTERVAL = BUILDER.defineInRange("groupUpdateInterval", 200, 1, 20000);
-        MAX_LEADERS = BUILDER.defineInRange("maxLeaders", 16, 1, 64);
+        MAX_LEADERS = BUILDER.comment("Initial spaced leaders used to seed groups. More are added when needed to keep nearby mobs assigned.")
+                .defineInRange("maxLeaders", 16, 1, 64);
         SKIP_SOUND_SCAN_WHEN_HAS_TARGET = BUILDER.comment("If true, mobs skip sound scanning when they already have a live attack target. Dramatically reduces lag when mobs chase a player who fires a gun.")
                 .define("skipSoundScanWhenHasTarget", true);
         MAX_MUFFLING_RAYCASTS_PER_TICK = BUILDER.comment("Maximum number of muffling raycasts allowed per server tick. Prevents lag spikes from too many simultaneous muffling calculations. Set to 0 for unlimited.")
@@ -1705,12 +1710,12 @@ public class GeneralConfig {
         ENABLE_FLOOR_CREEK = BUILDER.comment("Enable wooden floor creak sounds when players move on wood flooring.")
                 .define("enableFloorCreek", true);
         FLOOR_CREEK_PROB_SWIMMING_CRAWLING = BUILDER.comment("Probability per step for swimming/crawling pose on wood.")
-                .defineInRange("floorCreekProbSwimmingCrawling", 0.40, 0.0, 1.0);
-        FLOOR_CREEK_PROB_SNEAKING = BUILDER.defineInRange("floorCreekProbSneaking", 0.30, 0.0, 1.0);
-        FLOOR_CREEK_PROB_WALKING = BUILDER.defineInRange("floorCreekProbWalking", 0.20, 0.0, 1.0);
-        FLOOR_CREEK_PROB_SPRINTING = BUILDER.defineInRange("floorCreekProbSprinting", 0.80, 0.0, 1.0);
-        FLOOR_CREEK_PROB_JUMP = BUILDER.comment("Probability applied on both jump takeoff and landing when on wood.")
-                .defineInRange("floorCreekProbJump", 0.80, 0.0, 1.0);
+                .defineInRange("floorCreekProbSwimmingCrawling", 0.10, 0.0, 1.0);
+        FLOOR_CREEK_PROB_SNEAKING = BUILDER.defineInRange("floorCreekProbSneaking", 0.05, 0.0, 1.0);
+        FLOOR_CREEK_PROB_WALKING = BUILDER.defineInRange("floorCreekProbWalking", 0.08, 0.0, 1.0);
+        FLOOR_CREEK_PROB_SPRINTING = BUILDER.defineInRange("floorCreekProbSprinting", 0.25, 0.0, 1.0);
+        FLOOR_CREEK_PROB_JUMP = BUILDER.comment("Probability applied when landing on wood after a jump.")
+                .defineInRange("floorCreekProbJump", 0.10, 0.0, 1.0);
         FLOOR_CREEK_DISTANCE_STEP = BUILDER.comment("Horizontal distance (blocks) between pose-probability rolls while moving on wood.")
                 .defineInRange("floorCreekDistanceStep", 2.0, 0.1, 64.0);
         BUILDER.pop();

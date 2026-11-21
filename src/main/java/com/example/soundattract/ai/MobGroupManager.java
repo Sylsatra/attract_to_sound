@@ -10,6 +10,7 @@ import com.example.soundattract.worker.WorkerScheduler.ConfigSnapshot;
 import com.example.soundattract.worker.WorkerScheduler.GroupComputeResult;
 import com.example.soundattract.worker.WorkerScheduler.MobSnapshot;
 import com.example.soundattract.worker.WorkSchedulerManager;
+import com.example.soundattract.worker.WorkerComputations;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -28,6 +29,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.entity.ai.goal.WrappedGoal;
 import net.minecraft.world.phys.AABB;
 
 @net.minecraftforge.fml.common.Mod.EventBusSubscriber(modid = com.example.soundattract.SoundAttractMod.MOD_ID, bus = net.minecraftforge.fml.common.Mod.EventBusSubscriber.Bus.FORGE)
@@ -47,6 +50,8 @@ public class MobGroupManager {
     final Map<UUID, List<UUID>> followersByLeader = Collections.synchronizedMap(
       new HashMap<>()
     );
+    final Map<UUID, GroupRoster> sharingRosters = new HashMap<>();
+    long nextRosterEpoch;
     final List<WeakReference<Mob>> leaders = Collections.synchronizedList(
       new ArrayList<>()
     );
@@ -144,13 +149,12 @@ public class MobGroupManager {
         data.inFlightGroupCompute = null;
       }
 
-      Set<net.minecraft.world.entity.EntityType<?>> attractedEntityTypes = com.example.soundattract.event.SoundAttractionEvents.getCachedAttractedEntityTypes();
-      if (attractedEntityTypes == null || attractedEntityTypes.isEmpty()) return false;
+      Set<net.minecraft.world.entity.EntityType<?>> configuredTypes = com.example.soundattract.event.SoundAttractionEvents.getCachedAttractedEntityTypes();
+      Set<net.minecraft.world.entity.EntityType<?>> attractedEntityTypes = configuredTypes == null
+        ? Collections.emptySet()
+        : configuredTypes;
       int simDistChunks = level.getServer().getPlayerList().getViewDistance();
       int simDistBlocks = Math.min(simDistChunks * 16, 96);
-      Set<UUID> indexedEligible = com.example.soundattract.config.separate.PerformanceConfig.ENABLE_SPATIAL_SCHEDULER.get()
-          ? discoverEligibleMobUuidsIndexed(level, simDistBlocks)
-          : Set.of();
       Set<Mob> mobsSet = new HashSet<>();
       for (net.minecraft.server.level.ServerPlayer player : level.players()) {
         AABB box = player.getBoundingBox().inflate(simDistBlocks);
@@ -168,7 +172,14 @@ public class MobGroupManager {
         );
         mobsSet.addAll(nearbyMobs);
       }
-      if (mobsSet.isEmpty()) return false;
+      ConfigSnapshot cfg = createGroupConfig();
+      if (mobsSet.isEmpty()) {
+        GroupComputeResult empty = WorkerComputations.computeGroups(
+          Collections.emptyList(), cfg, Long.MAX_VALUE, level.dimension().location(), serverGeneration.get()
+        );
+        applyGroupResult(level, empty);
+        return true;
+      }
       List<MobSnapshot> snapshots = new ArrayList<>(mobsSet.size());
       for (Mob m : mobsSet) {
         snapshots.add(
@@ -178,20 +189,15 @@ public class MobGroupManager {
             m.getY(),
             m.getZ(),
             m.getHealth(),
-            m.isAlive()
+            m.isAlive(),
+            isExistingLeader(m),
+            isAerialScoutCandidate(m)
           )
         );
       }
-      ConfigSnapshot cfg = new ConfigSnapshot(
-        SoundAttractConfig.COMMON.leaderGroupRadius.get(),
-        SoundAttractConfig.COMMON.maxLeaders.get(),
-        SoundAttractConfig.COMMON.maxGroupSize.get(),
-        SoundAttractConfig.COMMON.leaderSpacingMultiplier.get(),
-        SoundAttractConfig.COMMON.numEdgeSectors.get(),
-        SoundAttractConfig.COMMON.edgeMobsPerSector.get(),
-        serverGeneration.get()
-      );
-      data.inFlightGroupCompute = WorkSchedulerManager.get().submitGroupCompute(snapshots, cfg, level.dimension().location());
+      Future<?> submitted = WorkSchedulerManager.get().submitGroupCompute(snapshots, cfg, level.dimension().location());
+      if (submitted == null) return false;
+      data.inFlightGroupCompute = submitted;
       if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.MOB_GROUPS)) {
         SoundAttractMod.LOGGER.info(
           "[MobGroupManager] Submitted async group compute for {} mobs in dimension {}",
@@ -212,6 +218,24 @@ public class MobGroupManager {
     }
   }
 
+  private static ConfigSnapshot createGroupConfig() {
+    return new ConfigSnapshot(
+      SoundAttractConfig.COMMON.leaderGroupRadius.get(),
+      SoundAttractConfig.COMMON.maxLeaders.get(),
+      SoundAttractConfig.COMMON.maxGroupSize.get(),
+      SoundAttractConfig.COMMON.leaderSpacingMultiplier.get(),
+      SoundAttractConfig.COMMON.numEdgeSectors.get(),
+      SoundAttractConfig.COMMON.edgeMobsPerSector.get(),
+      serverGeneration.get()
+    );
+  }
+
+  private static boolean isExistingLeader(Mob mob) {
+    if (mob == null || mob.level() == null) return false;
+    PerWorldData data = worldData.get(mob.level().dimension().location());
+    return data != null && data.uuidToLeader.get(mob.getUUID()) == mob;
+  }
+
   public static void applyGroupResult(
     ServerLevel level,
     GroupComputeResult result
@@ -223,12 +247,13 @@ public class MobGroupManager {
       || result.generation() != serverGeneration.get()) return;
     PerWorldData data = getData(level.dimension().location());
     Map<UUID, Mob> uuidToMob = new HashMap<>();
-    int simDistBlocks = Math.min(level.getServer().getPlayerList().getViewDistance() * 16, 96);
-    for (net.minecraft.server.level.ServerPlayer player : level.players()) {
-      AABB area = player.getBoundingBox().inflate(simDistBlocks);
-      for (Mob m : level.getEntitiesOfClass(Mob.class, area)) {
-        uuidToMob.put(m.getUUID(), m);
-      }
+    for (Map.Entry<UUID, UUID> entry : result.mobUuidToLeaderUuid().entrySet()) {
+      resolveMob(level, uuidToMob, entry.getKey());
+      resolveMob(level, uuidToMob, entry.getValue());
+    }
+    for (Map.Entry<UUID, java.util.Set<UUID>> entry : result.edgeMobsByLeaderUuid().entrySet()) {
+      resolveMob(level, uuidToMob, entry.getKey());
+      for (UUID mobId : entry.getValue()) resolveMob(level, uuidToMob, mobId);
     }
     data.uuidToLeader.clear();
     data.followersByLeader.clear();
@@ -273,6 +298,14 @@ public class MobGroupManager {
         leaderUuids.size(),
         data.deserterUuids.size()
       );
+    }
+  }
+
+  private static void resolveMob(ServerLevel level, Map<UUID, Mob> resolved, UUID id) {
+    if (id == null || resolved.containsKey(id)) return;
+    net.minecraft.world.entity.Entity entity = level.getEntity(id);
+    if (entity instanceof Mob mob && mob.isAlive() && !mob.isRemoved()) {
+      resolved.put(id, mob);
     }
   }
 
@@ -343,7 +376,7 @@ public class MobGroupManager {
     PerWorldData data = getData(level.dimension().location());
     List<MobSnapshot> snapshots = new ArrayList<>(mobs.size());
     for (Mob m : mobs) {
-      snapshots.add(new MobSnapshot(m.getUUID(), m.getX(), m.getY(), m.getZ(), m.getHealth(), m.isAlive()));
+      snapshots.add(new MobSnapshot(m.getUUID(), m.getX(), m.getY(), m.getZ(), m.getHealth(), m.isAlive(), false, isAerialScoutCandidate(m)));
     }
     ConfigSnapshot cfg = new ConfigSnapshot(
         SoundAttractConfig.COMMON.leaderGroupRadius.get(),
@@ -353,7 +386,9 @@ public class MobGroupManager {
         SoundAttractConfig.COMMON.numEdgeSectors.get(),
         SoundAttractConfig.COMMON.edgeMobsPerSector.get(),
         serverGeneration.get());
-    data.inFlightGroupCompute = WorkSchedulerManager.get().submitGroupCompute(snapshots, cfg, level.dimension().location());
+    Future<?> submitted = WorkSchedulerManager.get().submitGroupCompute(snapshots, cfg, level.dimension().location());
+    if (submitted == null) return false;
+    data.inFlightGroupCompute = submitted;
     return true;
   }
 
@@ -454,121 +489,38 @@ public class MobGroupManager {
     if (submitGroupComputeSnapshot(level)) {
       return;
     }
-    Set<net.minecraft.world.entity.EntityType<?>> attractedEntityTypes = com.example.soundattract.event.SoundAttractionEvents.getCachedAttractedEntityTypes();
+    Set<net.minecraft.world.entity.EntityType<?>> configuredTypes = com.example.soundattract.event.SoundAttractionEvents.getCachedAttractedEntityTypes();
+    Set<net.minecraft.world.entity.EntityType<?>> attractedEntityTypes = configuredTypes == null
+      ? Collections.emptySet()
+      : configuredTypes;
     int simDistChunks = level.getServer().getPlayerList().getViewDistance();
     int simDistBlocks = Math.min(simDistChunks * 16, 96);
     Set<Mob> mobsSet = new HashSet<>();
     for (net.minecraft.server.level.ServerPlayer player : level.players()) {
       net.minecraft.world.phys.AABB box = player.getBoundingBox().inflate(simDistBlocks);
-      List<Mob> nearbyMobs = level.getEntitiesOfClass(Mob.class, box);
+      List<Mob> nearbyMobs = level.getEntitiesOfClass(Mob.class, box, mob ->
+        mob.isAlive() && !mob.isRemoved() && isEligibleForGrouping(mob, attractedEntityTypes)
+      );
       mobsSet.addAll(nearbyMobs);
     }
-    List<Mob> attractedMobs = new ArrayList<>();
-    Map<Mob, com.example.soundattract.config.MobProfile2> matchingProfiles = new HashMap<>();
+    List<MobSnapshot> snapshots = new ArrayList<>(mobsSet.size());
     for (Mob mob : mobsSet) {
-      boolean byType = attractedEntityTypes.contains(mob.getType());
-      com.example.soundattract.config.MobProfile2 matchingProfile = SoundAttractConfig.getMatchingProfile(mob);
-      matchingProfiles.put(mob, matchingProfile);
-      boolean hasProfile = matchingProfile != null;
-      boolean isCustomNpcs = com.example.soundattract.event.SoundAttractionEvents.isCustomNpcsMob(mob);
-      if (byType || hasProfile || isCustomNpcs) {
-        attractedMobs.add(mob);
-      }
+      snapshots.add(new MobSnapshot(mob.getUUID(), mob.getX(), mob.getY(), mob.getZ(), mob.getHealth(), mob.isAlive(), isExistingLeader(mob), isAerialScoutCandidate(mob)));
     }
-    data.uuidToLeader.clear();
-    data.followersByLeader.clear();
-    data.leaders.clear();
-    data.lastEdgeMobMap.clear();
-    data.deserterUuids.clear();
-    if (attractedMobs.isEmpty()) return;
-    for (Mob m : attractedMobs) {
-      if (matchingProfiles.get(m) != null) {
-        data.leaders.add(new WeakReference<>(m));
-        data.uuidToLeader.put(m.getUUID(), m);
-      }
-    }
-    Collections.shuffle(attractedMobs, new java.util.Random(level.getGameTime()));
-    double groupRadius = SoundAttractConfig.COMMON.leaderGroupRadius.get();
-    int maxLeaders = SoundAttractConfig.COMMON.maxLeaders.get();
-    int maxGroupSize = SoundAttractConfig.COMMON.maxGroupSize.get();
-    double leaderSpacing = groupRadius * SoundAttractConfig.COMMON.leaderSpacingMultiplier.get();
-    Set<Mob> assigned = new HashSet<>();
-    List<Mob> leaderList = new ArrayList<>();
-    synchronized (data.leaders) {
-      data.leaders.removeIf(ref -> ref.get() == null || ref.get().isRemoved());
-      attractedMobs.sort(Comparator.comparingDouble(m -> -m.getHealth()));
-      for (Mob potentialLeader : attractedMobs) {
-        if (data.leaders.size() >= maxLeaders) break;
-        if (data.leaders.stream().anyMatch(ref -> ref.get() == potentialLeader)) continue;
-        boolean tooCloseToExistingLeader = false;
-        for (WeakReference<Mob> leaderRef : data.leaders) {
-          Mob existingLeader = leaderRef.get();
-          if (
-            existingLeader != null &&
-            potentialLeader.distanceToSqr(existingLeader) < leaderSpacing * leaderSpacing
-          ) {
-            tooCloseToExistingLeader = true;
-            break;
-          }
-        }
-        if (!tooCloseToExistingLeader) {
-          data.leaders.add(new WeakReference<>(potentialLeader));
-          data.uuidToLeader.put(potentialLeader.getUUID(), potentialLeader);
-          leaderList.add(potentialLeader);
-        }
-      }
-    }
-    Map<Mob, List<Mob>> leaderToGroup = new HashMap<>();
-    for (Mob leader : leaderList) {
-      List<Mob> group = new ArrayList<>();
-      group.add(leader);
-      for (Mob mob : attractedMobs) {
-        if (mob == leader || assigned.contains(mob)) continue;
-        if (mob.distanceTo(leader) <= groupRadius && group.size() < maxGroupSize) {
-          group.add(mob);
-          assigned.add(mob);
-        }
-      }
-      for (Mob mob : group) {
-        data.uuidToLeader.put(mob.getUUID(), leader);
-      }
-      leaderToGroup.put(leader, group);
-    }
-    for (Mob mob : attractedMobs) {
-      if (!assigned.contains(mob)) {
-        data.deserterUuids.add(mob.getUUID());
-      }
-    }
-    for (Mob leader : leaderList) {
-      List<Mob> group = leaderToGroup.get(leader);
-      if (group == null) continue;
-      int sectors = SoundAttractConfig.COMMON.numEdgeSectors.get();
-      Map<Integer, List<Mob>> sectorToFarthestList = new HashMap<>();
-      double leaderX = leader.getX(), leaderZ = leader.getZ();
-      for (Mob m : group) {
-        if (m == leader) continue;
-        double dx = m.getX() - leaderX, dz = m.getZ() - leaderZ;
-        double angle = Math.atan2(dz, dx);
-        int sector = (int) Math.floor(
-          ((angle + Math.PI) / (2 * Math.PI)) * sectors
-        ) % sectors;
-        sectorToFarthestList.computeIfAbsent(sector, k -> new ArrayList<>()).add(m);
-      }
-      Set<Mob> edgeMobs = new HashSet<>();
-      for (Map.Entry<Integer, List<Mob>> entry : sectorToFarthestList.entrySet()) {
-        List<Mob> mobsInSector = entry.getValue();
-        mobsInSector.sort(
-          (a, b) -> Double.compare(b.distanceTo(leader), a.distanceTo(leader))
-        );
-        int perSector = SoundAttractConfig.COMMON.edgeMobsPerSector.get();
-        int edgeCount = Math.min(perSector, mobsInSector.size());
-        for (int i = 0; i < edgeCount; i++) {
-          edgeMobs.add(mobsInSector.get(i));
-        }
-      }
-      data.lastEdgeMobMap.put(leader, edgeMobs);
-    }
-    rebuildFollowerIndex(data);
+    GroupComputeResult result = WorkerComputations.computeGroups(
+      snapshots, createGroupConfig(), Long.MAX_VALUE, level.dimension().location(), serverGeneration.get()
+    );
+    applyGroupResult(level, result);
+  }
+
+  private static boolean isEligibleForGrouping(Mob mob, Set<net.minecraft.world.entity.EntityType<?>> attractedEntityTypes) {
+    return attractedEntityTypes.contains(mob.getType())
+      || SoundAttractConfig.getMatchingProfile(mob) != null
+      || com.example.soundattract.event.SoundAttractionEvents.isCustomNpcsMob(mob);
+  }
+
+  private static boolean isAerialScoutCandidate(Mob mob) {
+    return mob != null && mob.getNavigation() instanceof net.minecraft.world.entity.ai.navigation.FlyingPathNavigation;
   }
 
   public static Set<UUID> discoverEligibleMobUuidsLegacy(ServerLevel level, int simDistBlocks) {
@@ -627,7 +579,29 @@ public class MobGroupManager {
           data.followersByLeader.computeIfAbsent(leader.getUUID(), ignored -> new ArrayList<>())
             .add(followerId);
         }
+        data.sharingRosters.keySet().retainAll(data.followersByLeader.keySet());
+        for (Map.Entry<UUID, List<UUID>> entry : data.followersByLeader.entrySet()) {
+          UUID leaderId = entry.getKey();
+          List<UUID> followers = entry.getValue();
+          GroupRoster previous = data.sharingRosters.get(leaderId);
+          if (previous != null && previous.members().size() == followers.size()
+              && previous.members().containsAll(followers)) {
+            continue;
+          }
+          data.sharingRosters.put(leaderId, new GroupRoster(++data.nextRosterEpoch, Set.copyOf(followers), List.copyOf(followers)));
+        }
       }
+    }
+  }
+
+  public record GroupRoster(long epoch, Set<UUID> members, List<UUID> followers) {}
+
+  public static GroupRoster getGroupRoster(Mob leader) {
+    if (leader == null) return null;
+    PerWorldData data = worldData.get(leader.level().dimension().location());
+    if (data == null) return null;
+    synchronized (data.followersByLeader) {
+      return data.sharingRosters.get(leader.getUUID());
     }
   }
 
@@ -730,21 +704,20 @@ public class MobGroupManager {
   public static boolean isMobInHighWeightOverride(Mob mob) {
     if (mob == null || !mob.isAlive()) return false;
 
-    boolean ownOverride = mob.goalSelector.getAvailableGoals().stream()
-            .map(net.minecraft.world.entity.ai.goal.WrappedGoal::getGoal)
-            .anyMatch(g -> (g instanceof AttractionGoal ag && ag.isHighWeightOverrideActive()) ||
-                           (g instanceof LeaderAttractionGoal lag && lag.isHighWeightOverrideActive()) ||
-                           (g instanceof FollowerEdgeRelayGoal feg && feg.isHighWeightOverrideActive()));
-    if (ownOverride) return true;
+    if (hasHighWeightOverride(mob, true)) return true;
 
     Mob leader = getLeader(mob);
-    if (leader != null && leader != mob) {
-      return leader.goalSelector.getAvailableGoals().stream()
-              .map(net.minecraft.world.entity.ai.goal.WrappedGoal::getGoal)
-              .anyMatch(g -> (g instanceof AttractionGoal ag && ag.isHighWeightOverrideActive()) ||
-                             (g instanceof LeaderAttractionGoal lag && lag.isHighWeightOverrideActive()));
-    }
+    return leader != null && leader != mob && hasHighWeightOverride(leader, false);
+  }
 
+  private static boolean hasHighWeightOverride(Mob mob, boolean includeFollowerEdgeRelay) {
+    for (WrappedGoal wrappedGoal : mob.goalSelector.getAvailableGoals()) {
+      Goal goal = wrappedGoal.getGoal();
+      if (goal instanceof AttractionGoal attraction && attraction.isHighWeightOverrideActive()) return true;
+      if (goal instanceof LeaderAttractionGoal leaderAttraction && leaderAttraction.isHighWeightOverrideActive()) return true;
+      if (includeFollowerEdgeRelay && goal instanceof FollowerEdgeRelayGoal edgeRelay
+          && edgeRelay.isHighWeightOverrideActive()) return true;
+    }
     return false;
   }
 }

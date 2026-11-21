@@ -51,8 +51,22 @@ public class BlockBreakerPosGoal extends Goal {
     private final boolean toolOnly;
     private final boolean properToolOnly;
     private final boolean properToolRequired;
+    private final BlockPos explicitBlockTarget;
+    private final com.example.soundattract.tracking.SoundTracker.SoundRecord soundSourceRecord;
 
     public BlockBreakerPosGoal(Mob miner, BlockPos destination, double timeToBreakMultiplier, boolean toolOnly, boolean properToolOnly, boolean properToolRequired) {
+        this(miner, destination, timeToBreakMultiplier, toolOnly, properToolOnly, properToolRequired, null);
+    }
+
+    public BlockBreakerPosGoal(Mob miner, BlockPos destination, double timeToBreakMultiplier, boolean toolOnly,
+                               boolean properToolOnly, boolean properToolRequired, BlockPos explicitBlockTarget) {
+        this(miner, destination, timeToBreakMultiplier, toolOnly, properToolOnly,
+                properToolRequired, explicitBlockTarget, null);
+    }
+
+    private BlockBreakerPosGoal(Mob miner, BlockPos destination, double timeToBreakMultiplier, boolean toolOnly,
+                                boolean properToolOnly, boolean properToolRequired, BlockPos explicitBlockTarget,
+                                com.example.soundattract.tracking.SoundTracker.SoundRecord soundSourceRecord) {
         this.miner = miner;
         this.destinationPos = destination;
         this.reachDistance = 4.9;
@@ -60,7 +74,81 @@ public class BlockBreakerPosGoal extends Goal {
         this.toolOnly = toolOnly;
         this.properToolOnly = properToolOnly;
         this.properToolRequired = properToolRequired;
+        this.explicitBlockTarget = explicitBlockTarget;
+        this.soundSourceRecord = soundSourceRecord;
         this.setFlags(EnumSet.of(Flag.LOOK, Flag.MOVE));
+    }
+
+    public static BlockBreakerPosGoal forSoundSource(Mob miner, BlockPos destination,
+                                                      com.example.soundattract.tracking.SoundTracker.SoundRecord sound,
+                                                      double timeToBreakMultiplier, boolean toolOnly,
+                                                      boolean properToolOnly, boolean properToolRequired) {
+        BlockPos source = findSoundSourceBlock(miner, sound);
+        return new BlockBreakerPosGoal(miner, destination, timeToBreakMultiplier, toolOnly,
+                properToolOnly, properToolRequired, source, source == null ? null : sound);
+    }
+
+    public static boolean isSoundSourceBlock(Mob miner,
+            com.example.soundattract.tracking.SoundTracker.SoundRecord sound) {
+        return findSoundSourceBlock(miner, sound) != null;
+    }
+
+    public static BlockPos findFirstBreakableObstruction(Mob miner, Vec3 destination) {
+        if (miner == null || destination == null || miner.level().isClientSide()
+                || !miner.level().getGameRules().getBoolean(GameRules.RULE_MOBGRIEFING)) return null;
+        int mobHeight = Mth.ceil(miner.getBbHeight());
+        for (int i = 0; i < mobHeight; i++) {
+            Vec3 rayStart = miner.getEyePosition().add(0, i, 0);
+            BlockHitResult hit = miner.level().clip(new ClipContext(rayStart, destination,
+                    ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, miner));
+            if (hit.getType() != HitResult.Type.BLOCK) continue;
+            BlockPos pos = hit.getBlockPos();
+            BlockState state = miner.level().getBlockState(pos);
+            if (isValidTargetBlock(miner, pos, state)
+                    && miner.distanceToSqr(hit.getLocation()) <= 4.9 * 4.9) return pos.immutable();
+        }
+        return null;
+    }
+
+    public boolean isFinished() {
+        return this.targetBlocks.isEmpty();
+    }
+
+    private static BlockPos findSoundSourceBlock(Mob miner,
+            com.example.soundattract.tracking.SoundTracker.SoundRecord sound) {
+        if (miner == null || sound == null || sound.pos == null || sound.isPlayerProduced()
+                || sound.soundId == null || !miner.level().hasChunkAt(sound.pos)) return null;
+        BlockState state = miner.level().getBlockState(sound.pos);
+        if (state.isAir() || !state.hasBlockEntity()
+                && !matchesSoundType(state.getSoundType(miner.level(), sound.pos, miner), sound.soundId)) return null;
+        if (miner.distanceToSqr(Vec3.atCenterOf(sound.pos)) > 4.9 * 4.9) return null;
+        BlockHitResult hit = miner.level().clip(new ClipContext(miner.getEyePosition(), Vec3.atCenterOf(sound.pos),
+                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, miner));
+        if (hit.getType() == HitResult.Type.BLOCK && !hit.getBlockPos().equals(sound.pos)) return null;
+        return isValidTargetBlock(miner, sound.pos, state) ? sound.pos.immutable() : null;
+    }
+
+    private static boolean matchesSoundType(SoundType soundType, String soundId) {
+        net.minecraft.resources.ResourceLocation sourceId =
+                com.example.soundattract.tracking.SoundTracker.extractBaseSoundLocation(soundId);
+        return sourceId != null && (sourceId.equals(soundType.getBreakSound().getLocation())
+                || sourceId.equals(soundType.getHitSound().getLocation())
+                || sourceId.equals(soundType.getPlaceSound().getLocation())
+                || sourceId.equals(soundType.getStepSound().getLocation())
+                || sourceId.equals(soundType.getFallSound().getLocation()));
+    }
+
+    private static boolean isValidTargetBlock(Mob miner, BlockPos pos, BlockState state) {
+        if (miner == null || pos == null || state == null || state.isAir()
+                || pos.getY() > EnhancedAICompat.getMaxY()
+                || state.getDestroySpeed(miner.level(), pos) < 0.0F
+                || state.hasBlockEntity() && EnhancedAICompat.shouldBlacklistTileEntities()) return false;
+        return (EnhancedAICompat.isBlacklistAsWhitelist() && state.is(EnhancedAICompat.getBlockBlacklistTag()))
+                || (!EnhancedAICompat.isBlacklistAsWhitelist() && !state.is(EnhancedAICompat.getBlockBlacklistTag()));
+    }
+
+    boolean hasRequiredToolForCurrentBlock() {
+        return !this.properToolOnly || this.blockState == null || this.canBreakBlock();
     }
 
 
@@ -76,6 +164,10 @@ public class BlockBreakerPosGoal extends Goal {
             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.BLOCK_BREAKING)) {
                 SoundAttractMod.LOGGER.info("[BlockBreakerPosGoal] canUse FAILED for {}: destinationPos is null.", this.miner.getName().getString());
             }
+            return false;
+        }
+        if (this.soundSourceRecord != null
+                && !this.explicitBlockTarget.equals(findSoundSourceBlock(this.miner, this.soundSourceRecord))) {
             return false;
         }
         if (this.toolOnly && !(this.miner.getOffhandItem().getItem() instanceof DiggerItem)) {
@@ -102,7 +194,8 @@ public class BlockBreakerPosGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
-        if (this.targetBlocks.isEmpty() || this.destinationPos == null) {
+        if (this.targetBlocks.isEmpty() || this.destinationPos == null
+                || !this.miner.level().getGameRules().getBoolean(GameRules.RULE_MOBGRIEFING)) {
             return false;
         }
 
@@ -110,7 +203,7 @@ public class BlockBreakerPosGoal extends Goal {
             return false;
         }
 
-        if (this.miner.blockPosition().distSqr(this.destinationPos) < 4.0d) {
+        if (this.explicitBlockTarget == null && this.miner.blockPosition().distSqr(this.destinationPos) < 4.0d) {
             return false;
         }
 
@@ -153,6 +246,10 @@ public class BlockBreakerPosGoal extends Goal {
         if (this.targetBlocks.isEmpty()) {
             return;
         }
+        if (!this.miner.level().getGameRules().getBoolean(GameRules.RULE_MOBGRIEFING)) {
+            stop();
+            return;
+        }
         if (this.properToolOnly && this.blockState != null && !this.canBreakBlock()) {
             return;
         }
@@ -175,11 +272,17 @@ public class BlockBreakerPosGoal extends Goal {
         }
 
         if (this.breakingTick >= this.tickToBreak && this.miner.level() instanceof ServerLevel level) {
-            if (ForgeEventFactory.onEntityDestroyBlock(this.miner, this.targetBlocks.get(0), this.blockState) && this.miner.level().destroyBlock(pos, false, this.miner)) {
+            boolean destroyed = ForgeEventFactory.onEntityDestroyBlock(this.miner, pos, this.blockState)
+                    && this.miner.level().destroyBlock(pos, false, this.miner);
+            if (destroyed) {
                 BlockEntity blockentity = this.blockState.hasBlockEntity() ? this.miner.level().getBlockEntity(pos) : null;
                 LootParams.Builder lootparams$builder = (new LootParams.Builder(level)).withParameter(LootContextParams.ORIGIN, Vec3.atCenterOf(pos)).withParameter(LootContextParams.TOOL, this.miner.getOffhandItem()).withOptionalParameter(LootContextParams.BLOCK_ENTITY, blockentity).withOptionalParameter(LootContextParams.THIS_ENTITY, this.miner);
                 this.blockState.spawnAfterBreak(level, pos, this.miner.getOffhandItem(), false);
                 this.blockState.getDrops(lootparams$builder).forEach((itemStack) -> level.addFreshEntity(new ItemEntity(level, pos.getX() + 0.5f, pos.getY() + 0.5f, pos.getZ() + 0.5f, itemStack)));
+                if (this.soundSourceRecord != null && pos.equals(this.soundSourceRecord.pos)) {
+                    com.example.soundattract.tracking.SoundTracker.removeSoundAt(pos,
+                            this.soundSourceRecord.dimensionKey, this.soundSourceRecord.soundId);
+                }
             }
             this.miner.level().destroyBlockProgress(this.miner.getId(), pos, -1);
             this.targetBlocks.remove(0);
@@ -199,6 +302,14 @@ public class BlockBreakerPosGoal extends Goal {
     private void fillTargetBlocks() {
         this.targetBlocks.clear();
         if (this.destinationPos == null) {
+            return;
+        }
+        if (this.explicitBlockTarget != null) {
+            BlockState state = this.miner.level().getBlockState(this.explicitBlockTarget);
+            if (this.miner.distanceToSqr(Vec3.atCenterOf(this.explicitBlockTarget)) <= this.reachDistance * this.reachDistance
+                    && isValidTargetBlock(this.miner, this.explicitBlockTarget, state)) {
+                this.targetBlocks.add(this.explicitBlockTarget);
+            }
             return;
         }
 

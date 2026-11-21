@@ -2,6 +2,9 @@ package com.example.soundattract.pathfinding;
 
 import com.example.soundattract.ai.LivingWallCoordinator;
 import com.example.soundattract.ai.RaidManager;
+import com.github.benmanes.caffeine.cache.Ticker;
+import it.unimi.dsi.fastutil.HashCommon;
+import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
@@ -30,11 +33,42 @@ public final class HazardClassifier {
     private record PursuitStamp(ResourceLocation dimension, long untilTick) {
     }
 
-    private static final int L1_SIZE = 4096;
-    private static final int L1_MASK = 4095;
-    private static final long[] L1_KEYS = new long[L1_SIZE];
-    private static final byte[] L1_TYPES = new byte[L1_SIZE];
-    private static final ResourceLocation[] L1_DIMS = new ResourceLocation[L1_SIZE];
+    record CachedHazard(ResourceLocation dimension, long position, HazardType type, long writtenAt) {
+    }
+
+    static final class RecentHazards {
+        private final CachedHazard[] entries = new CachedHazard[4096];
+        private final Ticker ticker;
+
+        RecentHazards(Ticker ticker) {
+            this.ticker = ticker;
+        }
+
+        int index(long position) {
+            return (int) HashCommon.mix(position) & (entries.length - 1);
+        }
+
+        HazardType get(int index, ResourceLocation dimension, long position) {
+            CachedHazard entry = entries[index];
+            if (entry != null && entry.position() == position && entry.dimension().equals(dimension)
+                    && ticker.read() - entry.writtenAt() < HAZARD_TTL_NANOS) {
+                return entry.type();
+            }
+            return null;
+        }
+
+        void put(int index, CachedHazard hazard) {
+            entries[index] = hazard;
+        }
+
+        void clear() {
+            Arrays.fill(entries, null);
+        }
+    }
+
+    private static final long HAZARD_TTL_NANOS = TimeUnit.MILLISECONDS.toNanos(500);
+    private static final Ticker HAZARD_TICKER = Ticker.systemTicker();
+    private static final RecentHazards RECENT_HAZARDS = new RecentHazards(HAZARD_TICKER);
 
     private static final int SAFE_GROUND_SIZE = 2048;
     private static final int SAFE_GROUND_MASK = 2047;
@@ -42,10 +76,11 @@ public final class HazardClassifier {
     private static final boolean[] SG_VALUES = new boolean[SAFE_GROUND_SIZE];
     private static final ResourceLocation[] SG_DIMS = new ResourceLocation[SAFE_GROUND_SIZE];
 
-    private static final com.github.benmanes.caffeine.cache.Cache<Key, HazardType> CACHE =
+    private static final com.github.benmanes.caffeine.cache.Cache<Key, CachedHazard> CACHE =
             com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
                     .maximumSize(2048)
-                    .expireAfterWrite(500, TimeUnit.MILLISECONDS)
+                    .expireAfterWrite(HAZARD_TTL_NANOS, TimeUnit.NANOSECONDS)
+                    .ticker(HAZARD_TICKER)
                     .build();
     private static final com.github.benmanes.caffeine.cache.Cache<java.util.UUID, PursuitStamp> ACTIVE_PURSUITS =
             com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
@@ -65,8 +100,8 @@ public final class HazardClassifier {
     public static void clear() {
         ACTIVE_PURSUITS.invalidateAll();
         CACHE.invalidateAll();
-        java.util.Arrays.fill(L1_DIMS, null);
-        java.util.Arrays.fill(SG_DIMS, null);
+        RECENT_HAZARDS.clear();
+        Arrays.fill(SG_DIMS, null);
     }
 
     public static boolean isSafeGround(Level level, BlockPos feet) {
@@ -84,6 +119,10 @@ public final class HazardClassifier {
         SG_DIMS[idx] = dim;
         SG_VALUES[idx] = safe;
         return safe;
+    }
+
+    public static boolean isSafeGroundUncached(Level level, BlockPos feet) {
+        return level != null && feet != null && computeSafeGround(level, feet);
     }
 
     private static boolean computeSafeGround(Level level, BlockPos feet) {
@@ -227,26 +266,6 @@ public final class HazardClassifier {
         return type != HazardType.SAFE;
     }
 
-    private static byte encodeType(HazardType type) {
-        if (type == null) return (byte) 0;
-        return switch (type) {
-            case SAFE -> (byte) 1;
-            case LAVA -> (byte) 2;
-            case TRAPDOOR_DROP -> (byte) 3;
-            case DEEP_DROP -> (byte) 4;
-        };
-    }
-
-    private static HazardType decodeType(byte b) {
-        return switch (b) {
-            case 1 -> HazardType.SAFE;
-            case 2 -> HazardType.LAVA;
-            case 3 -> HazardType.TRAPDOOR_DROP;
-            case 4 -> HazardType.DEEP_DROP;
-            default -> null;
-        };
-    }
-
     public static HazardType classify(Level level, BlockPos feet) {
         if (level == null || feet == null) {
             return HazardType.DEEP_DROP;
@@ -260,52 +279,64 @@ public final class HazardClassifier {
         }
         ResourceLocation dim = level.dimension().location();
         long pos = BlockPos.asLong(x, y, z);
-        int idx = (int) ((pos ^ (pos >>> 16) ^ (pos >>> 32)) & L1_MASK);
-        if (L1_DIMS[idx] == dim && L1_KEYS[idx] == pos) {
-            HazardType decoded = decodeType(L1_TYPES[idx]);
-            if (decoded != null) {
-                return decoded;
-            }
+        int idx = RECENT_HAZARDS.index(pos);
+        HazardType recent = RECENT_HAZARDS.get(idx, dim, pos);
+        if (recent != null) {
+            return recent;
         }
         Key key = new Key(dim, pos);
-        HazardType cached = CACHE.getIfPresent(key);
-        if (cached != null) {
-            L1_KEYS[idx] = pos;
-            L1_DIMS[idx] = dim;
-            L1_TYPES[idx] = encodeType(cached);
-            return cached;
+        CachedHazard cached = CACHE.getIfPresent(key);
+        if (cached == null) {
+            HazardType result = classifyUncached(level, new BlockPos(x, y, z));
+            cached = new CachedHazard(dim, pos, result, HAZARD_TICKER.read());
+            CACHE.put(key, cached);
         }
-        BlockPos feet = new BlockPos(x, y, z);
-        HazardType result = classifyUncached(level, feet);
-        CACHE.put(key, result);
-        L1_KEYS[idx] = pos;
-        L1_DIMS[idx] = dim;
-        L1_TYPES[idx] = encodeType(result);
-        return result;
+        RECENT_HAZARDS.put(idx, cached);
+        return cached.type();
     }
 
     private static HazardType classifyUncached(BlockGetter level, BlockPos feet) {
         BlockPos support = feet.below();
-        if (containsLava(level, feet) || containsLava(level, support) || containsLava(level, feet.above())
-                || containsLava(level, support.below()) || containsLava(level, support.below(2))) {
+        BlockPos head = feet.above();
+        BlockPos lowerSupport = support.below();
+        BlockPos deepSupport = support.below(2);
+        BlockState feetState = level.getBlockState(feet);
+        if (containsLava(feetState)) {
             return HazardType.LAVA;
         }
-        if (containsTrapdoorDrop(level, feet) || containsTrapdoorDrop(level, support) || containsTrapdoorDrop(level, feet.above())) {
+        BlockState supportState = level.getBlockState(support);
+        if (containsLava(supportState)) {
+            return HazardType.LAVA;
+        }
+        BlockState headState = level.getBlockState(head);
+        if (containsLava(headState)) {
+            return HazardType.LAVA;
+        }
+        BlockState lowerSupportState = level.getBlockState(lowerSupport);
+        if (containsLava(lowerSupportState)) {
+            return HazardType.LAVA;
+        }
+        BlockState deepSupportState = level.getBlockState(deepSupport);
+        if (containsLava(deepSupportState)) {
+            return HazardType.LAVA;
+        }
+        if (TrapdoorNavigationHelper.isTrapdoorDropHazard(level, feet.getX(), feet.getY(), feet.getZ(),
+                    feetState, supportState)
+                || TrapdoorNavigationHelper.isTrapdoorDropHazard(level, support.getX(), support.getY(), support.getZ(),
+                    supportState, lowerSupportState)
+                || TrapdoorNavigationHelper.isTrapdoorDropHazard(level, head.getX(), head.getY(), head.getZ(),
+                    headState, feetState)) {
             return HazardType.TRAPDOOR_DROP;
         }
-        if (level.getBlockState(support).getCollisionShape(level, support).isEmpty()
-                && level.getBlockState(support.below()).getCollisionShape(level, support.below()).isEmpty()
-                && level.getBlockState(support.below(2)).getCollisionShape(level, support.below(2)).isEmpty()) {
+        if (supportState.getCollisionShape(level, support).isEmpty()
+                && lowerSupportState.getCollisionShape(level, lowerSupport).isEmpty()
+                && deepSupportState.getCollisionShape(level, deepSupport).isEmpty()) {
             return HazardType.DEEP_DROP;
         }
         return HazardType.SAFE;
     }
 
-    private static boolean containsLava(BlockGetter level, BlockPos pos) {
-        return level.getBlockState(pos).getFluidState().is(FluidTags.LAVA);
-    }
-
-    private static boolean containsTrapdoorDrop(BlockGetter level, BlockPos pos) {
-        return TrapdoorNavigationHelper.isTrapdoorDropHazard(level, pos);
+    private static boolean containsLava(BlockState state) {
+        return state.getFluidState().is(FluidTags.LAVA);
     }
 }

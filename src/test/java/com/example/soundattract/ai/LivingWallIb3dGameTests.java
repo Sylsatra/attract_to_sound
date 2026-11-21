@@ -63,9 +63,13 @@ public class LivingWallIb3dGameTests {
         require(LivingWallCoordinator.routeBudgetSatisfiedForTest(helper.getLevel(), cluster, null,
                         routeFixture.evidence, routeFixture.corridor).failureReason() != null,
                 "null route target should defer");
+        require("probe_budget_exhausted_defer".equals(
+                        LivingWallCoordinator.routeBudgetSatisfiedForTest(helper.getLevel(), cluster, threat,
+                                routeFixture.evidence, routeFixture.corridor, false).failureReason()),
+                "route admission should defer when the path budget gate denies work");
         require(LivingWallCoordinator.routeBudgetSatisfiedForTest(helper.getLevel(), cluster, threat,
                         routeFixture.evidence, routeFixture.corridor).failureReason() == null,
-                "loaded flat route should satisfy within the reviewed budget: "
+                "loaded flat route should satisfy when the path budget gate admits work: "
                         + LivingWallCoordinator.routeBudgetSatisfiedForTest(helper.getLevel(), cluster, threat,
                         routeFixture.evidence, routeFixture.corridor));
         helper.succeed();
@@ -210,7 +214,14 @@ public class LivingWallIb3dGameTests {
         Fixture fixture = createFixture(helper, LivingWallCoordinator.ConstructionScenario.WALL_LEDGE, true);
         Mob crosser = helper.spawnWithNoFreeWill(EntityType.ZOMBIE, 1, 1, 2);
         crosser.setOnGround(true);
+        double startingY = crosser.getY();
         LivingWallCoordinator.SitePlan plan = getField(fixture.formation, "plan");
+        Mob displacedSupport = helper.spawnWithNoFreeWill(EntityType.ZOMBIE, 6, 1, 2);
+        Vec3 baseStation = Vec3.atBottomCenterOf(plan.pivot());
+        displacedSupport.setPos(baseStation.add(2.0D, 0.0D, 0.0D));
+        displacedSupport.setNoGravity(true);
+        displacedSupport.noPhysics = true;
+        getList(fixture.formation, "members").add(displacedSupport.getUUID());
         Object transit = newCrosserTransit(crosser.getUUID(), plan.intakeWindows().get(0));
         setEnum(transit, "state", "CAPTURE_ENTRY");
         getMap(fixture.formation, "crosserTransit").put(crosser.getUUID(), transit);
@@ -221,6 +232,35 @@ public class LivingWallIb3dGameTests {
                 fixture.level, fixture.formation, fixture.level.getGameTime());
         require(crosser.isNoGravity(), "crosser should stay captured");
         require(crosser.noPhysics, "crosser should remain locked");
+        require(Math.abs(crosser.getY() - startingY) < 0.1D,
+                "terrain-supported base capture must not lift a crosser onto an imaginary mob");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public void crosserIsReleasedWhenNeitherMobNorTerrainSupportsItsWaypoint(GameTestHelper helper) throws Exception {
+        prepareFlat(helper, 0, 10, 0, 10);
+        Fixture fixture = createFixture(helper, LivingWallCoordinator.ConstructionScenario.WALL_LEDGE, true);
+        Mob crosser = helper.spawnWithNoFreeWill(EntityType.ZOMBIE, 1, 1, 2);
+        double startingY = crosser.getY();
+        LivingWallCoordinator.SitePlan plan = getField(fixture.formation, "plan");
+        BlockPos base = plan.pivot();
+        fixture.level.setBlock(base.below(), Blocks.AIR.defaultBlockState(), 3);
+        Object transit = newCrosserTransit(crosser.getUUID(), plan.intakeWindows().get(0));
+        setEnum(transit, "state", "CAPTURE_ENTRY");
+        getMap(fixture.formation, "crosserTransit").put(crosser.getUUID(), transit);
+        getMap(fixture.formation, "crosserSlots").put(crosser.getUUID(), 0);
+        getList(fixture.formation, "crosserOrder").add(crosser.getUUID());
+        setInt(fixture.formation, "activeCrossers", 1);
+
+        invoke("driveCrossers", new Class<?>[]{ServerLevel.class, fixture.formation.getClass(), long.class},
+                fixture.level, fixture.formation, fixture.level.getGameTime());
+
+        require(!crosser.isNoGravity(), "unsupported crosser must not retain no-gravity control");
+        require(!crosser.noPhysics, "unsupported crosser must not retain no-physics control");
+        require(Math.abs(crosser.getY() - startingY) < 0.1D, "unsupported waypoint must not lift the crosser");
+        require(!getMap(fixture.formation, "crosserTransit").containsKey(crosser.getUUID()),
+                "crosser without a real support must leave transit instead of hovering");
         helper.succeed();
     }
 

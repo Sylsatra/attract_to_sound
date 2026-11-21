@@ -20,7 +20,10 @@ public final class WorkerComputations {
     }
 
     public static WorkerScheduler.GroupComputeResult computeGroups(List<WorkerScheduler.MobSnapshot> mobs, WorkerScheduler.ConfigSnapshot cfg, long deadlineMs, ResourceLocation dimension, long generation) {
-        if (mobs == null || mobs.isEmpty() || cfg == null || dimension == null) return null;
+        if (cfg == null || dimension == null) return null;
+        if (mobs == null || mobs.isEmpty()) {
+            return new WorkerScheduler.GroupComputeResult(dimension, Collections.emptyMap(), Collections.emptyMap(), Collections.emptySet(), generation);
+        }
         List<WorkerScheduler.MobSnapshot> candidates = new ArrayList<>(mobs.size());
         Map<UUID, WorkerScheduler.MobSnapshot> mobLookup = new HashMap<>((int) (mobs.size() / 0.75f) + 1);
 
@@ -31,9 +34,14 @@ public final class WorkerComputations {
                 }
             }
         }
-        if (candidates.isEmpty()) return null;
+        if (candidates.isEmpty()) {
+            return new WorkerScheduler.GroupComputeResult(dimension, Collections.emptyMap(), Collections.emptyMap(), Collections.emptySet(), generation);
+        }
 
-        candidates.sort((a, b) -> Double.compare(b.health(), a.health()));
+        candidates.sort(Comparator.comparing(WorkerScheduler.MobSnapshot::preferredLeader).reversed()
+                .thenComparing(WorkerScheduler.MobSnapshot::flying)
+                .thenComparing(Comparator.comparingDouble(WorkerScheduler.MobSnapshot::health).reversed())
+                .thenComparing(WorkerScheduler.MobSnapshot::uuid));
 
         List<WorkerScheduler.MobSnapshot> leaders = new ArrayList<>();
         Map<UUID, UUID> mobToLeader = new HashMap<>();
@@ -41,41 +49,44 @@ public final class WorkerComputations {
         double groupRadius = cfg.leaderGroupRadius();
         double leaderSpacing = groupRadius * cfg.leaderSpacingMultiplier();
         double leaderSpacingSq = leaderSpacing * leaderSpacing;
-        int maxLeaders = cfg.maxLeaders();
-        int maxGroupSize = cfg.maxGroupSize();
+        int maxLeaders = Math.max(1, cfg.maxLeaders());
+        int maxGroupSize = Math.max(1, cfg.maxGroupSize());
         int sectors = Math.max(1, cfg.numEdgeSectors());
         int perSector = cfg.edgeMobsPerSector();
 
         double cellSize = leaderSpacing;
-        Map<Long, List<WorkerScheduler.MobSnapshot>> leaderGrid = new HashMap<>();
+        Map<GridCell, List<WorkerScheduler.MobSnapshot>> leaderGrid = new HashMap<>();
 
         for (WorkerScheduler.MobSnapshot p : candidates) {
-            if (leaders.size() >= maxLeaders) break;
+            if (!p.preferredLeader() && leaders.size() >= maxLeaders) break;
 
-            long cellKey = getCellKey(p.x(), p.z(), cellSize);
+            GridCell cellKey = getCellKey(p.x(), p.y(), p.z(), cellSize);
             boolean tooClose = false;
 
-            long[] adjacentCells = getAdjacentCells(cellKey, p.x(), p.z(), cellSize);
-            for (long adjKey : adjacentCells) {
-                List<WorkerScheduler.MobSnapshot> cellLeaders = leaderGrid.get(adjKey);
-                if (cellLeaders != null) {
-                    for (WorkerScheduler.MobSnapshot l : cellLeaders) {
-                        double dx = p.x() - l.x();
-                        double dz = p.z() - l.z();
-                        if (dx * dx + dz * dz < leaderSpacingSq) {
-                            tooClose = true;
-                            break;
+            if (!p.preferredLeader()) {
+                for (long x = cellKey.x() - 1; x <= cellKey.x() + 1 && !tooClose; x++) {
+                    for (long y = cellKey.y() - 1; y <= cellKey.y() + 1 && !tooClose; y++) {
+                        for (long z = cellKey.z() - 1; z <= cellKey.z() + 1 && !tooClose; z++) {
+                            List<WorkerScheduler.MobSnapshot> cellLeaders = leaderGrid.get(new GridCell(x, y, z));
+                            if (cellLeaders == null) continue;
+                            for (WorkerScheduler.MobSnapshot l : cellLeaders) {
+                                double dx = p.x() - l.x();
+                                double dy = p.y() - l.y();
+                                double dz = p.z() - l.z();
+                                if (dx * dx + dy * dy + dz * dz < leaderSpacingSq) {
+                                    tooClose = true;
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
-                if (tooClose) break;
             }
 
             if (!tooClose) {
                 leaders.add(p);
                 leaderGrid.computeIfAbsent(cellKey, k -> new ArrayList<>()).add(p);
             }
-            if (System.currentTimeMillis() > deadlineMs) break;
         }
 
         if (leaders.isEmpty()) {
@@ -87,8 +98,13 @@ public final class WorkerComputations {
         }
 
         Map<UUID, List<UUID>> leaderToGroup = new HashMap<>();
-        for (WorkerScheduler.MobSnapshot l : leaders) {
+        Map<GridCell, List<Integer>> assignmentGrid = new HashMap<>();
+        double assignmentCellSize = groupRadius > 0.0 ? groupRadius : 1.0;
+        for (int leaderIndex = 0; leaderIndex < leaders.size(); leaderIndex++) {
+            WorkerScheduler.MobSnapshot l = leaders.get(leaderIndex);
             leaderToGroup.put(l.uuid(), new ArrayList<>(Collections.singletonList(l.uuid())));
+            GridCell cellKey = getCellKey(l.x(), l.y(), l.z(), assignmentCellSize);
+            assignmentGrid.computeIfAbsent(cellKey, ignored -> new ArrayList<>()).add(leaderIndex);
         }
 
         Set<UUID> assigned = new HashSet<>();
@@ -103,27 +119,47 @@ public final class WorkerComputations {
 
             WorkerScheduler.MobSnapshot bestLeader = null;
             double bestDistSq = Double.MAX_VALUE;
+            int bestLeaderIndex = Integer.MAX_VALUE;
+            GridCell centerKey = getCellKey(m.x(), m.y(), m.z(), assignmentCellSize);
+            for (long x = centerKey.x() - 1; x <= centerKey.x() + 1; x++) {
+                for (long y = centerKey.y() - 1; y <= centerKey.y() + 1; y++) {
+                    for (long z = centerKey.z() - 1; z <= centerKey.z() + 1; z++) {
+                        List<Integer> nearbyLeaders = assignmentGrid.get(new GridCell(x, y, z));
+                        if (nearbyLeaders == null) continue;
+                        for (int leaderIndex : nearbyLeaders) {
+                            WorkerScheduler.MobSnapshot l = leaders.get(leaderIndex);
+                            List<UUID> group = leaderToGroup.get(l.uuid());
+                            if (group.size() >= maxGroupSize) continue;
 
-            for (WorkerScheduler.MobSnapshot l : leaders) {
-                List<UUID> group = leaderToGroup.get(l.uuid());
-                if (group.size() >= maxGroupSize) continue;
+                            double dx = m.x() - l.x();
+                            double dy = m.y() - l.y();
+                            double dz = m.z() - l.z();
+                            double distSq = dx * dx + dy * dy + dz * dz;
 
-                double dx = m.x() - l.x();
-                double dz = m.z() - l.z();
-                double distSq = dx * dx + dz * dz;
-
-                if (distSq <= groupRadiusSq && distSq < bestDistSq) {
-                    bestDistSq = distSq;
-                    bestLeader = l;
+                            if (distSq <= groupRadiusSq && (distSq < bestDistSq
+                                    || (distSq == bestDistSq && leaderIndex < bestLeaderIndex))) {
+                                bestDistSq = distSq;
+                                bestLeader = l;
+                                bestLeaderIndex = leaderIndex;
+                            }
+                        }
+                    }
                 }
             }
 
-            if (bestLeader != null) {
+            if (bestLeader == null) {
+                bestLeader = m;
+                leaders.add(m);
+                leaderIds.add(m.uuid());
+                leaderToGroup.put(m.uuid(), new ArrayList<>(Collections.singletonList(m.uuid())));
+                GridCell cellKey = getCellKey(m.x(), m.y(), m.z(), assignmentCellSize);
+                assignmentGrid.computeIfAbsent(cellKey, ignored -> new ArrayList<>()).add(leaders.size() - 1);
+                mobToLeader.put(m.uuid(), m.uuid());
+            } else {
                 leaderToGroup.get(bestLeader.uuid()).add(m.uuid());
                 mobToLeader.put(m.uuid(), bestLeader.uuid());
-                assigned.add(m.uuid());
             }
-            if (System.currentTimeMillis() > deadlineMs) break;
+            assigned.add(m.uuid());
         }
 
         Map<UUID, Set<UUID>> edgeByLeader = new HashMap<>();
@@ -149,6 +185,9 @@ public final class WorkerComputations {
                 ids.sort((a, b) -> {
                     WorkerScheduler.MobSnapshot ma = mobLookup.get(a);
                     WorkerScheduler.MobSnapshot mb = mobLookup.get(b);
+                    if (ma != null && mb != null && ma.flying() != mb.flying()) {
+                        return ma.flying() ? -1 : 1;
+                    }
                     double da = (ma == null) ? 0 : distanceSq(ma, leader);
                     double db = (mb == null) ? 0 : distanceSq(mb, leader);
                     return Double.compare(db, da);
@@ -166,7 +205,9 @@ public final class WorkerComputations {
                     WorkerScheduler.MobSnapshot m = mobLookup.get(id);
                     if (m == null) continue;
                     double dSq = distanceSq(m, leader);
-                    if (dSq > bestSq) {
+                    WorkerScheduler.MobSnapshot currentFar = mobLookup.get(far);
+                    if (far == null || (m.flying() && !isFlying(currentFar))
+                            || (m.flying() == isFlying(currentFar) && dSq > bestSq)) {
                         bestSq = dSq;
                         far = id;
                     }
@@ -174,7 +215,6 @@ public final class WorkerComputations {
                 if (far != null) edge.add(far);
             }
             edgeByLeader.put(leader.uuid(), edge);
-            if (System.currentTimeMillis() > deadlineMs) break;
         }
 
         Set<UUID> deserters = new HashSet<>();
@@ -275,33 +315,22 @@ public final class WorkerComputations {
 
     private static double distanceSq(WorkerScheduler.MobSnapshot a, WorkerScheduler.MobSnapshot b) {
         double dx = a.x() - b.x();
+        double dy = a.y() - b.y();
         double dz = a.z() - b.z();
-        return dx * dx + dz * dz;
+        return dx * dx + dy * dy + dz * dz;
     }
 
-    private static long getCellKey(double x, double z, double cellSize) {
+    private static boolean isFlying(WorkerScheduler.MobSnapshot snapshot) {
+        return snapshot != null && snapshot.flying();
+    }
+
+    private static GridCell getCellKey(double x, double y, double z, double cellSize) {
         if (cellSize <= 0) cellSize = 1;
-        long cx = (long) Math.floor(x / cellSize);
-        long cz = (long) Math.floor(z / cellSize);
-        return (cx & 0xFFFFFFFFL) | (cz << 32);
+        return new GridCell((long) Math.floor(x / cellSize), (long) Math.floor(y / cellSize),
+                (long) Math.floor(z / cellSize));
     }
 
-    private static long[] getAdjacentCells(long centerKey, double x, double z, double cellSize) {
-        if (cellSize <= 0) return new long[]{centerKey};
-        long cx = (long) Math.floor(x / cellSize);
-        long cz = (long) Math.floor(z / cellSize);
-        return new long[]{
-            centerKey,
-            ((cx - 1) & 0xFFFFFFFFL) | (cz << 32),
-            ((cx + 1) & 0xFFFFFFFFL) | (cz << 32),
-            (cx & 0xFFFFFFFFL) | ((cz - 1) << 32),
-            (cx & 0xFFFFFFFFL) | ((cz + 1) << 32),
-            ((cx - 1) & 0xFFFFFFFFL) | ((cz - 1) << 32),
-            ((cx + 1) & 0xFFFFFFFFL) | ((cz + 1) << 32),
-            ((cx - 1) & 0xFFFFFFFFL) | ((cz + 1) << 32),
-            ((cx + 1) & 0xFFFFFFFFL) | ((cz - 1) << 32)
-        };
-    }
+    private record GridCell(long x, long y, long z) {}
 
     private static int getFastSector(double dx, double dz, int totalSectors) {
         double angle = Math.atan2(dz, dx);

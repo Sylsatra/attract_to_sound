@@ -24,9 +24,9 @@ public final class TaczNpcsMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
-        // Mixin prepares configs before Forge finishes loading mod containers, so
-        // ModList.isLoaded("tacz_npc") can be false even when its classes are present.
-        // Both mixins are @Pseudo, which keeps this optional when TACZ NPCs is absent.
+
+
+
         return (ABSTRACT_SCAV.equals(targetClassName)
                     && "com.example.soundattract.mixin.TaczNpcsAbstractScavEntityMixin".equals(mixinClassName))
                 || (SHOOT_BEHAVIOUR.equals(targetClassName)

@@ -19,7 +19,7 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.core.particles.DustParticleOptions;
 import com.example.soundattract.scents.ScentParticleColorManager;
 import com.example.soundattract.scents.ScentSourceType;
-import com.example.soundattract.integration.weather2.Weather2WindCompat;
+import com.example.soundattract.integration.wind.AtmosphericWindCompat;
 import com.example.soundattract.registration.ModParticles;
 import org.joml.Vector3f;
 import java.util.List;
@@ -29,7 +29,6 @@ import net.minecraftforge.event.AttachCapabilitiesEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.ModList;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.util.concurrent.TimeUnit;
@@ -219,11 +218,7 @@ public class ScentEvents {
                     ServerPlayer ownerPlayer = server.getPlayerList().getPlayer(ownerUUID);
                     if (ownerPlayer == null) continue;
                     Vec3 windDirection = windDirectionCache.computeIfAbsent(ownerUUID, ignored -> {
-                        if (SoundAttractConfig.COMMON.enableWeather2WindIntegration.get()
-                                && ModList.get().isLoaded("weather2")) {
-                            return Weather2WindCompat.direction(serverLevel, ownerPlayer.blockPosition(), true);
-                        }
-                        return new Vec3(-1.0, 0.0, 0.0);
+                        return AtmosphericWindCompat.direction(serverLevel, ownerPlayer.blockPosition());
                     });
 
                     for (ServerPlayer nearbyPlayer : serverLevel.players()) {

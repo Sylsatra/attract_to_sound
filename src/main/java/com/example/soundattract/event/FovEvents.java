@@ -236,11 +236,11 @@ public class FovEvents {
             return true;
         }
 
-        if (checkObstructions && !hasSmartLineOfSight(looker, target)) {
+        if (!isWithinFieldOfView(looker, target, fov.horizontal(), fov.vertical())) {
             return false;
         }
 
-        return isWithinFieldOfView(looker, target, fov.horizontal(), fov.vertical());
+        return !checkObstructions || hasSmartLineOfSight(looker, target);
     }
 
     public static boolean hasSmartLineOfSight(Mob looker, Entity target) {

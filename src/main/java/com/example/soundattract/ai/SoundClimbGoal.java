@@ -142,6 +142,10 @@ public class SoundClimbGoal extends Goal {
         if (targetPos == null) {
             return false;
         } else {
+            if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                    this.mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) {
+                return false;
+            }
             Path path = this.mob.getNavigation().createPath(targetPos, 0);
             if (path == null) {
                 return true;
@@ -271,6 +275,10 @@ public class SoundClimbGoal extends Goal {
         long currentTick = this.mob.level().getGameTime();
         if (!this.isStandingOnHorde() && currentTick >= this.nextPathCheckTick) {
              this.nextPathCheckTick = currentTick + 20L;
+             if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                     this.mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) {
+                 return true;
+             }
              Path path = this.mob.getNavigation().createPath(this.targetSoundPos, 0);
              if (path != null && path.canReach() && path.getTarget().distSqr(this.targetSoundPos) <= 1.0D) {
                   return false;
@@ -347,7 +355,10 @@ public class SoundClimbGoal extends Goal {
             if (horizontalDistanceSq > HORIZONTAL_STOP_DISTANCE_SQ
                     && (currentTick >= this.nextNavigationTick || this.mob.getNavigation().isDone())) {
                 this.nextNavigationTick = currentTick + 10L + Math.floorMod(this.mob.getId(), 5);
-                this.mob.getNavigation().moveTo(climbTargetPos.x, climbTargetPos.y, climbTargetPos.z, SoundAttractConfig.COMMON.mobMoveSpeed.get());
+                if (com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                        this.mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) {
+                    this.mob.getNavigation().moveTo(climbTargetPos.x, climbTargetPos.y, climbTargetPos.z, SoundAttractConfig.COMMON.mobMoveSpeed.get());
+                }
            } else {
                if (this.mob.getRandom().nextFloat() < 0.2F) {
                    this.mob.getNavigation().stop();

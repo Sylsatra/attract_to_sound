@@ -5,11 +5,10 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
-import java.util.Set;
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -43,7 +42,7 @@ final class LivingBridgeRouteSearch {
     static List<BlockPos> findRoute(ServerLevel level, BlockPos start, BlockPos end,
                                     double bodyWidth, double bodyHeight, int nodeBudget) {
         if (level == null) return List.of();
-        SnapshotWorldAccess snapshot = SnapshotWorldAccess.capture(level, start, end, bodyWidth, bodyHeight);
+        SnapshotWorldAccess snapshot = SnapshotWorldAccess.captureLazy(level, start, end, bodyWidth, bodyHeight);
         if (snapshot != null) {
             return findRoute(snapshot, start, end, bodyWidth, bodyHeight, nodeBudget);
         }
@@ -95,38 +94,37 @@ final class LivingBridgeRouteSearch {
                 .thenComparingInt(SearchNode::heuristic)
                 .thenComparingInt(SearchNode::cost)
                 .thenComparingLong(SearchNode::sequence));
-        Map<BlockPos, Integer> bestCosts = new HashMap<>();
-        Map<BlockPos, BlockPos> predecessors = new HashMap<>();
-        Set<BlockPos> closed = new HashSet<>();
         long sequence = 0L;
         int sourceHeuristic = heuristic(source, target);
-        open.add(new SearchNode(source, 0, sourceHeuristic, sequence++));
-        bestCosts.put(source, 0);
+        SearchNode sourceNode = new SearchNode(source, 0, sourceHeuristic, sequence++, null);
+        open.add(sourceNode);
+        Map<BlockPos, SearchNode> bestNodes = new HashMap<>();
+        bestNodes.put(source, sourceNode);
         int expanded = 0;
 
         while (!open.isEmpty() && expanded < budget) {
             SearchNode current = open.poll();
-            Integer knownCost = bestCosts.get(current.position());
-            if (knownCost == null || knownCost != current.cost() || !closed.add(current.position())) {
+            if (bestNodes.get(current.position()) != current || current.expanded()) {
                 continue;
             }
+            current.markExpanded();
             expanded++;
             if (current.position().equals(target)) {
-                return reconstruct(predecessors, source, target);
+                return reconstruct(current, source);
             }
+            int nextCost = current.cost() + 1;
             for (int[] offset : NEIGHBOR_OFFSETS) {
                 BlockPos neighbor = offset(current.position(), offset);
-                if (neighbor == null || closed.contains(neighbor)
+                if (neighbor == null) continue;
+                SearchNode prior = bestNodes.get(neighbor);
+                if ((prior != null && (prior.expanded() || prior.cost() <= nextCost))
                         || !isClear(world, neighbor, bodyWidth, bodyHeight)
                         || !world.isTransitionClear(current.position(), neighbor, bodyWidth, bodyHeight)) {
                     continue;
                 }
-                int nextCost = current.cost() + 1;
-                Integer priorCost = bestCosts.get(neighbor);
-                if (priorCost != null && priorCost <= nextCost) continue;
-                bestCosts.put(neighbor, nextCost);
-                predecessors.put(neighbor, current.position());
-                open.add(new SearchNode(neighbor, nextCost, heuristic(neighbor, target), sequence++));
+                SearchNode next = new SearchNode(neighbor, nextCost, heuristic(neighbor, target), sequence++, current);
+                bestNodes.put(neighbor, next);
+                open.add(next);
             }
         }
         return List.of();
@@ -170,14 +168,13 @@ final class LivingBridgeRouteSearch {
         return new BlockPos(x + offset[0], y + offset[1], z + offset[2]);
     }
 
-    private static List<BlockPos> reconstruct(Map<BlockPos, BlockPos> predecessors,
-                                              BlockPos source, BlockPos target) {
+    private static List<BlockPos> reconstruct(SearchNode target, BlockPos source) {
         ArrayDeque<BlockPos> reversed = new ArrayDeque<>();
-        BlockPos current = target;
+        SearchNode current = target;
         while (current != null) {
-            reversed.addFirst(current.immutable());
-            if (current.equals(source)) return List.copyOf(reversed);
-            current = predecessors.get(current);
+            reversed.addFirst(current.position().immutable());
+            if (current.position().equals(source)) return List.copyOf(reversed);
+            current = current.parent();
         }
         return List.of();
     }
@@ -213,7 +210,29 @@ final class LivingBridgeRouteSearch {
         return true;
     }
 
-    private record SearchNode(BlockPos position, int cost, int heuristic, long sequence) {
+    private static final class SearchNode {
+        private final BlockPos position;
+        private final int cost;
+        private final int heuristic;
+        private final long sequence;
+        private final SearchNode parent;
+        private boolean expanded;
+
+        private SearchNode(BlockPos position, int cost, int heuristic, long sequence, SearchNode parent) {
+            this.position = position;
+            this.cost = cost;
+            this.heuristic = heuristic;
+            this.sequence = sequence;
+            this.parent = parent;
+        }
+
+        private BlockPos position() { return position; }
+        private int cost() { return cost; }
+        private int heuristic() { return heuristic; }
+        private long sequence() { return sequence; }
+        private SearchNode parent() { return parent; }
+        private boolean expanded() { return expanded; }
+        private void markExpanded() { expanded = true; }
     }
 
     private static final class ServerWorld implements WorldAccess {
@@ -253,15 +272,25 @@ final class LivingBridgeRouteSearch {
         private static final byte CELL_LAVA = 2;
         private static final byte CELL_UNLOADED = 3;
         private static final byte CELL_PARTIAL = 4;
+        private static final byte CELL_UNREAD = 5;
 
         private final int minX, minY, minZ;
         private final int sizeX, sizeY, sizeZ;
         private final int sizeYZ;
         private final byte[] cells;
         private final Map<BlockPos, List<AABB>> partialShapes;
+        private final ServerLevel lazySource;
+        private final BlockPos.MutableBlockPos classificationProbe = new BlockPos.MutableBlockPos();
+        private int classifiedCellCount;
 
         SnapshotWorldAccess(int minX, int minY, int minZ, int sizeX, int sizeY, int sizeZ,
                             int sizeYZ, byte[] cells, Map<BlockPos, List<AABB>> partialShapes) {
+            this(minX, minY, minZ, sizeX, sizeY, sizeZ, sizeYZ, cells, partialShapes, null);
+        }
+
+        private SnapshotWorldAccess(int minX, int minY, int minZ, int sizeX, int sizeY, int sizeZ,
+                                    int sizeYZ, byte[] cells, Map<BlockPos, List<AABB>> partialShapes,
+                                    ServerLevel lazySource) {
             this.minX = minX;
             this.minY = minY;
             this.minZ = minZ;
@@ -271,10 +300,21 @@ final class LivingBridgeRouteSearch {
             this.sizeYZ = sizeYZ;
             this.cells = cells;
             this.partialShapes = partialShapes;
+            this.lazySource = lazySource;
         }
 
         static SnapshotWorldAccess capture(ServerLevel level, BlockPos start, BlockPos end,
                                            double bodyWidth, double bodyHeight) {
+            return create(level, start, end, bodyWidth, bodyHeight, false);
+        }
+
+        static SnapshotWorldAccess captureLazy(ServerLevel level, BlockPos start, BlockPos end,
+                                               double bodyWidth, double bodyHeight) {
+            return create(level, start, end, bodyWidth, bodyHeight, true);
+        }
+
+        private static SnapshotWorldAccess create(ServerLevel level, BlockPos start, BlockPos end,
+                                                   double bodyWidth, double bodyHeight, boolean lazy) {
             if (level == null || start == null || end == null) return null;
             int marginHoriz = (int) Math.ceil(bodyWidth) + 2;
             int marginVert = (int) Math.ceil(bodyHeight) + 2;
@@ -293,48 +333,63 @@ final class LivingBridgeRouteSearch {
                 return null;
             }
             byte[] cells = new byte[total];
+            if (lazy) Arrays.fill(cells, CELL_UNREAD);
             Map<BlockPos, List<AABB>> partials = new HashMap<>();
             int sizeYZ = sizeY * sizeZ;
-
-            BlockPos.MutableBlockPos mpos = new BlockPos.MutableBlockPos();
+            SnapshotWorldAccess snapshot = new SnapshotWorldAccess(minX, minY, minZ,
+                    sizeX, sizeY, sizeZ, sizeYZ, cells, partials, lazy ? level : null);
+            if (lazy) return snapshot;
             for (int x = minX; x <= maxX; x++) {
                 for (int y = minY; y <= maxY; y++) {
                     for (int z = minZ; z <= maxZ; z++) {
-                        mpos.set(x, y, z);
-                        int idx = (x - minX) * sizeYZ + (y - minY) * sizeZ + (z - minZ);
-                        if (!level.isLoaded(mpos)) {
-                            cells[idx] = CELL_UNLOADED;
-                            continue;
-                        }
-                        if (level.getFluidState(mpos).is(FluidTags.LAVA)) {
-                            cells[idx] = CELL_LAVA;
-                            continue;
-                        }
-                        BlockState state = level.getBlockState(mpos);
-                        if (state.isAir()) {
-                            cells[idx] = CELL_EMPTY;
-                            continue;
-                        }
-                        VoxelShape shape = state.getCollisionShape(level, mpos, CollisionContext.empty());
-                        if (shape.isEmpty()) {
-                            cells[idx] = CELL_EMPTY;
-                        } else {
-                            List<AABB> aabbs = shape.toAabbs();
-                            if (aabbs.size() == 1) {
-                                AABB box = aabbs.get(0);
-                                if (box.minX <= 0.0D && box.minY <= 0.0D && box.minZ <= 0.0D
-                                        && box.maxX >= 1.0D && box.maxY >= 1.0D && box.maxZ >= 1.0D) {
-                                    cells[idx] = CELL_SOLID;
-                                    continue;
-                                }
-                            }
-                            cells[idx] = CELL_PARTIAL;
-                            partials.put(mpos.immutable(), aabbs);
-                        }
+                        snapshot.classifyCell(level, x, y, z,
+                                (x - minX) * sizeYZ + (y - minY) * sizeZ + (z - minZ));
                     }
                 }
             }
-            return new SnapshotWorldAccess(minX, minY, minZ, sizeX, sizeY, sizeZ, sizeYZ, cells, partials);
+            return snapshot;
+        }
+
+        int classifiedCellCount() {
+            return classifiedCellCount;
+        }
+
+        int volumeCellCount() {
+            return cells.length;
+        }
+
+        private void classifyCell(ServerLevel level, int x, int y, int z, int index) {
+            BlockPos.MutableBlockPos probe = classificationProbe.set(x, y, z);
+            classifiedCellCount++;
+            if (!level.isLoaded(probe)) {
+                cells[index] = CELL_UNLOADED;
+                return;
+            }
+            if (level.getFluidState(probe).is(FluidTags.LAVA)) {
+                cells[index] = CELL_LAVA;
+                return;
+            }
+            BlockState state = level.getBlockState(probe);
+            if (state.isAir()) {
+                cells[index] = CELL_EMPTY;
+                return;
+            }
+            VoxelShape shape = state.getCollisionShape(level, probe, CollisionContext.empty());
+            if (shape.isEmpty()) {
+                cells[index] = CELL_EMPTY;
+                return;
+            }
+            List<AABB> aabbs = shape.toAabbs();
+            if (aabbs.size() == 1) {
+                AABB box = aabbs.get(0);
+                if (box.minX <= 0.0D && box.minY <= 0.0D && box.minZ <= 0.0D
+                        && box.maxX >= 1.0D && box.maxY >= 1.0D && box.maxZ >= 1.0D) {
+                    cells[index] = CELL_SOLID;
+                    return;
+                }
+            }
+            cells[index] = CELL_PARTIAL;
+            partialShapes.put(probe.immutable(), aabbs);
         }
 
         private boolean contains(int x, int y, int z) {
@@ -343,7 +398,11 @@ final class LivingBridgeRouteSearch {
 
         private byte getCell(int x, int y, int z) {
             if (!contains(x, y, z)) return CELL_UNLOADED;
-            return cells[(x - minX) * sizeYZ + (y - minY) * sizeZ + (z - minZ)];
+            int index = (x - minX) * sizeYZ + (y - minY) * sizeZ + (z - minZ);
+            if (cells[index] == CELL_UNREAD && lazySource != null) {
+                classifyCell(lazySource, x, y, z, index);
+            }
+            return cells[index];
         }
 
         @Override

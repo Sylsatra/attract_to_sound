@@ -37,7 +37,7 @@ public class FlowFieldManager {
     private static final long CACHE_TTL_MS = 2000;
     private static final int MAX_FIELDS = 16;
     private static final int MAX_PENDING_SCANS = 64;
-    // Small slices bound work per fairness turn; the elapsed-time and position caps are shared across all dimensions.
+
     private static final int SCAN_SLICE_POSITIONS = 128;
     private static final int MAX_SCAN_POSITIONS_PER_TICK = 8192;
     private static final long SCAN_BUDGET_NANOS = TimeUnit.MILLISECONDS.toNanos(2);
@@ -289,7 +289,7 @@ public class FlowFieldManager {
                 Integer budget = SoundAttractConfig.COMMON.workerTaskBudgetMs.get();
                 if (budget != null) builder.timeout(Duration.ofMillis(Math.max(5L, budget.longValue())));
             } catch (Throwable ignored) {
-                // Keep the worker's default timeout if config is unavailable during startup.
+
             }
             future = builder.submit();
         } catch (RuntimeException ex) {

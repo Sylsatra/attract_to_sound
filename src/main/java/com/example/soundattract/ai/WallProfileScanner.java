@@ -1,7 +1,10 @@
 package com.example.soundattract.ai;
 
+import com.google.common.collect.AbstractIterator;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -529,49 +532,97 @@ final class WallProfileScanner {
         return threatProgressProjection(pivot, anchor, target) >= 1.0D;
     }
 
-    static List<BlockPos> exteriorLandingCandidates(BlockPos structural, BlockPos pivot,
-                                                     Vec3 rayDirection, int maxHorizontalDistance,
-                                                     int maxVerticalDistance) {
+    static Iterator<BlockPos> exteriorLandingCandidates(BlockPos canonical, BlockPos structural, BlockPos pivot,
+                                                        Vec3 rayDirection, int maxHorizontalDistance,
+                                                        int maxVerticalDistance) {
         if (structural == null || pivot == null || rayDirection == null
-                || maxHorizontalDistance <= 0 || maxVerticalDistance < 0) return List.of();
+                || maxHorizontalDistance <= 0 || maxVerticalDistance < 0) return canonicalLandingOnly(canonical);
         int normalX = directionSign(rayDirection.x);
         int normalZ = directionSign(rayDirection.z);
         if (normalX == 0 && normalZ == 0) {
             normalX = Integer.compare(structural.getX(), pivot.getX());
             normalZ = Integer.compare(structural.getZ(), pivot.getZ());
         }
-        if (normalX == 0 && normalZ == 0) return List.of();
-        int lateralX = -normalZ;
-        int lateralZ = normalX;
-        Set<BlockPos> candidates = new LinkedHashSet<>();
-        for (int distance = 1; distance <= maxHorizontalDistance; distance++) {
-            for (int vertical = 0; vertical <= maxVerticalDistance; vertical++) {
-                addExteriorCandidate(candidates, structural, normalX, normalZ, lateralX, lateralZ,
-                        distance, vertical);
-                if (vertical > 0) addExteriorCandidate(candidates, structural, normalX, normalZ, lateralX, lateralZ,
-                        distance, -vertical);
+        if (normalX == 0 && normalZ == 0) return canonicalLandingOnly(canonical);
+        return new ExteriorLandingIterator(canonical, structural, normalX, normalZ,
+                maxHorizontalDistance, maxVerticalDistance);
+    }
+
+    private static Iterator<BlockPos> canonicalLandingOnly(BlockPos canonical) {
+        return canonical == null ? Collections.emptyIterator() : List.of(canonical.immutable()).iterator();
+    }
+
+    private static final class ExteriorLandingIterator extends AbstractIterator<BlockPos> {
+        private final BlockPos canonical;
+        private final BlockPos structural;
+        private final int normalX;
+        private final int normalZ;
+        private final int lateralX;
+        private final int lateralZ;
+        private final int maxHorizontalDistance;
+        private final int maxVerticalDistance;
+        private final int offsetsPerLayer;
+        private final Set<BlockPos> seen = new HashSet<>();
+        private boolean canonicalPending;
+        private int distance = 1;
+        private int vertical;
+        private int offsetIndex;
+
+        private ExteriorLandingIterator(BlockPos canonical, BlockPos structural, int normalX, int normalZ,
+                                        int maxHorizontalDistance, int maxVerticalDistance) {
+            this.canonical = canonical == null ? null : canonical.immutable();
+            this.structural = structural.immutable();
+            this.normalX = normalX;
+            this.normalZ = normalZ;
+            this.lateralX = -normalZ;
+            this.lateralZ = normalX;
+            this.maxHorizontalDistance = maxHorizontalDistance;
+            this.maxVerticalDistance = maxVerticalDistance;
+            this.offsetsPerLayer = normalX != 0 && normalZ != 0 ? 7 : 5;
+            this.canonicalPending = canonical != null;
+        }
+
+        @Override
+        protected BlockPos computeNext() {
+            if (canonicalPending) {
+                canonicalPending = false;
+                return canonical;
+            }
+            while (distance <= maxHorizontalDistance) {
+                BlockPos candidate = currentOffset();
+                advanceOffset();
+                if (!candidate.equals(canonical) && seen.add(candidate)) return candidate;
+            }
+            return endOfData();
+        }
+
+        private BlockPos currentOffset() {
+            int forwardX = normalX * distance;
+            int forwardZ = normalZ * distance;
+            return switch (offsetIndex) {
+                case 0 -> structural.offset(forwardX, vertical, forwardZ);
+                case 1 -> structural.offset(forwardX + lateralX, vertical, forwardZ + lateralZ);
+                case 2 -> structural.offset(forwardX - lateralX, vertical, forwardZ - lateralZ);
+                case 3 -> structural.offset(lateralX * distance, vertical, lateralZ * distance);
+                case 4 -> structural.offset(-lateralX * distance, vertical, -lateralZ * distance);
+                case 5 -> structural.offset(forwardX, vertical, 0);
+                case 6 -> structural.offset(0, vertical, forwardZ);
+                default -> throw new IllegalStateException("Invalid landing offset " + offsetIndex);
+            };
+        }
+
+        private void advanceOffset() {
+            if (++offsetIndex < offsetsPerLayer) return;
+            offsetIndex = 0;
+            if (vertical > 0) {
+                vertical = -vertical;
+            } else if (vertical > -maxVerticalDistance) {
+                vertical = 1 - vertical;
+            } else {
+                vertical = 0;
+                distance++;
             }
         }
-        return List.copyOf(candidates);
-    }
-
-    private static void addExteriorCandidate(Set<BlockPos> candidates, BlockPos structural,
-                                             int normalX, int normalZ, int lateralX, int lateralZ,
-                                             int distance, int vertical) {
-        BlockPos direct = structural.offset(normalX * distance, vertical, normalZ * distance);
-        addCandidate(candidates, direct);
-        addCandidate(candidates, direct.offset(lateralX, 0, lateralZ));
-        addCandidate(candidates, direct.offset(-lateralX, 0, -lateralZ));
-        addCandidate(candidates, structural.offset(lateralX * distance, vertical, lateralZ * distance));
-        addCandidate(candidates, structural.offset(-lateralX * distance, vertical, -lateralZ * distance));
-        if (normalX != 0 && normalZ != 0) {
-            addCandidate(candidates, structural.offset(normalX * distance, vertical, 0));
-            addCandidate(candidates, structural.offset(0, vertical, normalZ * distance));
-        }
-    }
-
-    private static void addCandidate(Set<BlockPos> candidates, BlockPos candidate) {
-        candidates.add(candidate.immutable());
     }
 
     private static int directionSign(double value) {

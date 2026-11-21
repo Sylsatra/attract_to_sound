@@ -1,6 +1,7 @@
 package com.example.soundattract.event;
 
 import com.example.soundattract.config.DebugLoggingConfig;
+import com.example.soundattract.config.DebugLogLimiter;
 
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.PlayerStance;
@@ -8,12 +9,13 @@ import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.util.CamoUtil;
 import com.example.soundattract.enchantment.ModEnchantments;
 import com.example.soundattract.ai.MobGroupManager;
-import com.example.soundattract.ai.RaidManager;
+import com.example.soundattract.ai.GroupTargetSharingManager;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -59,6 +61,7 @@ import com.example.soundattract.camo.CamoMaterialRegistry;
 import com.example.soundattract.integration.spore.SporeIntegration;
 import com.example.soundattract.integration.spore.SporeGoalInjectorProxy;
 import com.example.soundattract.config.separate.StealthConfig;
+import com.example.soundattract.pathfinding.PathTaskScheduler;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Cache;
 import java.util.concurrent.TimeUnit;
@@ -76,6 +79,11 @@ public class StealthDetectionEvents {
     private static volatile Map<UUID, net.minecraft.world.phys.Vec3> lastPlayerPositions = newInitialCache();
     private static volatile Map<java.util.UUID, net.minecraft.world.phys.Vec3> lastMobPositions = newInitialCache();
     private static long lastStealthCheckTick = -1;
+    private static final int MAX_PENDING_ROUTE_PROBES = 1024;
+    private static final int MAX_ROUTE_PROBES_PER_TICK = 4;
+    private static final long ROUTE_PROBE_TTL_TICKS = 10L;
+    private static final Map<RouteProbeKey, RouteProbe> pendingRouteProbes = new LinkedHashMap<>();
+    private static final Map<RouteProbeKey, RouteEvidence> routeEvidence = new LinkedHashMap<>();
     private static volatile Map<UUID, GunshotInfo> playerGunshotInfo = newInitialCache();
 
     private static volatile Map<UUID, Double> XRAY_RANGE_CACHE = newInitialCache();
@@ -99,6 +107,7 @@ public class StealthDetectionEvents {
     }
 
     public static void reinitializeCaches() {
+        GroupTargetSharingManager.invalidatePolicy();
         int max = Math.min(MAX_RUNTIME_GLOBAL_CACHE_SIZE,
                 Math.max(100, SoundAttractConfig.COMMON.globalCacheMaxSize.get()));
         int mins = SoundAttractConfig.COMMON.globalCacheExpireMins.get();
@@ -137,6 +146,8 @@ public class StealthDetectionEvents {
         XRAY_RANGE_CACHE.clear();
         PLAYER_STEALTH_CACHE.clear();
         suppressedEdgeDetections.invalidateAll();
+        pendingRouteProbes.clear();
+        routeEvidence.clear();
         lastStealthCheckTick = -1L;
         lastEstimatedTpsGameTime = -1L;
     }
@@ -208,27 +219,25 @@ public class StealthDetectionEvents {
     }
 
     private static boolean shouldSkipExpensiveChecks(Level level) {
-        StealthPerfTier tier = getPerfTier(level);
-        return tier != StealthPerfTier.FULL;
+        return SoundAttractConfig.COMMON.legacyStealthVanillaFallback.get()
+                && getPerfTier(level) != StealthPerfTier.FULL;
     }
 
     private static boolean shouldUseVanillaTargeting(Level level) {
-        return getPerfTier(level) == StealthPerfTier.VANILLA;
+        return SoundAttractConfig.COMMON.legacyStealthVanillaFallback.get()
+                && getPerfTier(level) == StealthPerfTier.VANILLA;
     }
 
     private static boolean shouldInterceptNewTargeting(Level level) {
-        StealthPerfTier tier = getPerfTier(level);
-        return tier == StealthPerfTier.FULL || tier == StealthPerfTier.SKIP_EXPENSIVE;
+        return !shouldUseVanillaTargeting(level);
     }
 
     private static LivingEntity getAttackTargetCompat(Mob mob) {
         if (mob == null) return null;
         LivingEntity direct = mob.getTarget();
         if (direct != null) return direct;
-        if (mob.getBrain().hasMemoryValue(MemoryModuleType.ATTACK_TARGET)) {
-            return mob.getBrain().getMemory(MemoryModuleType.ATTACK_TARGET).orElse(null);
-        }
-        return null;
+        Optional<LivingEntity> memory = mob.getBrain().getMemoryInternal(MemoryModuleType.ATTACK_TARGET);
+        return memory == null ? null : memory.orElse(null);
     }
 
     private static boolean isTargetingPlayerCompat(Mob mob) {
@@ -272,15 +281,7 @@ public class StealthDetectionEvents {
     }
 
     public static double getRealisticStealthDetectionRange(Mob target, Mob looker, Level level) {
-        if (com.example.soundattract.ai.MobGroupManager.isMobInHighWeightOverride(looker)) {
-            return 0.0;
-        }
-
-        if (com.example.soundattract.integration.csgrenades.CsGrenadesCompat.isLoaded()
-                && com.example.soundattract.config.SoundAttractConfig.COMMON.enableCsgrenadesIntegration.get()
-                && com.example.soundattract.config.SoundAttractConfig.COMMON.enableFlashbangBlinding.get()
-                && com.example.soundattract.integration.csgrenades.FlashbangEffect.hasAnyBlindMobs()
-                && com.example.soundattract.integration.csgrenades.FlashbangEffect.isMobBlind(looker, level.getGameTime())) {
+        if (MobGroupManager.isMobInHighWeightOverride(looker) || isFlashbangBlind(looker, level)) {
             return 0.0;
         }
 
@@ -291,7 +292,10 @@ public class StealthDetectionEvents {
         if (shouldUseVanillaTargeting(level)) {
             return SoundAttractConfig.COMMON.maxStealthDetectionRange.get();
         }
+        return computeMobDetectionRange(target, looker, level);
+    }
 
+    private static double computeMobDetectionRange(Mob target, Mob looker, Level level) {
         boolean skipExpensive = shouldSkipExpensiveChecks(level);
 
         double baseRange = SoundAttractConfig.COMMON.standingDetectionRangePlayer.get();
@@ -363,9 +367,9 @@ public class StealthDetectionEvents {
 
         if (!skipExpensive && SoundAttractConfig.COMMON.enableEnvironmentalCamouflage.get()) {
             int finalColor = CamoUtil.getFinalPerceptionColor(target);
-            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
+            if (DebugLogLimiter.allow(DebugLogLimiter.Channel.CAMOUFLAGE_PERCEPTION)) {
                 SoundAttractMod.LOGGER.info("[EnvCamo_Mob] {} finalColor=0x{}",
-                        target.getName().getString(), String.format("%06X", finalColor));
+                        target.getName().getString(), Integer.toHexString(finalColor).toUpperCase(java.util.Locale.ROOT));
             }
             java.util.Optional<Integer> envColorOpt = com.example.soundattract.util.EnvironmentalCamoColor.getEnvironmentalColor(
                     target, looker, level, () -> getAverageEnvironmentalColor(target, level));
@@ -573,9 +577,15 @@ public class StealthDetectionEvents {
 
     @SubscribeEvent
     public static void onMobAttemptTarget(LivingChangeTargetEvent event) {
-        if (!(event.getEntity() instanceof Mob mob)) {
+        if (!(event.getEntity() instanceof Mob mob) || !(mob.level() instanceof ServerLevel)) {
             return;
         }
+
+        LivingEntity newTarget = event.getNewTarget();
+        boolean mobTarget = event.getTargetType() == LivingChangeTargetEvent.LivingTargetType.MOB_TARGET;
+        if (newTarget == null || (mobTarget && GroupTargetSharingManager.isShareAssignment(mob, newTarget))) return;
+        if (mobTarget && mob.getTarget() == newTarget
+                && !GroupTargetSharingManager.tryDirectReacquisition(mob, newTarget)) return;
 
         if (event.getNewTarget() != null && SporeIntegration.isSporeLoaded()) {
             if (SporeGoalInjectorProxy.shouldBypassStealth(mob, event.getNewTarget())) {
@@ -604,14 +614,19 @@ public class StealthDetectionEvents {
             return;
         }
 
-        LivingEntity newTarget = event.getNewTarget();
+        boolean scout = newTarget instanceof Player && SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()
+                && MobGroupManager.isEdgeMob(mob) && !MobGroupManager.isDeserter(mob)
+                && !hasActiveXrayOnTarget(mob, newTarget);
+        boolean supplemental = newTarget instanceof Player && SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()
+                && MobGroupManager.getLeader(mob) != mob && !scout && !MobGroupManager.isDeserter(mob)
+                && GroupTargetSharingManager.trySupplementalSpotter(mob);
 
         if (newTarget instanceof Player playerTarget) {
             if (playerTarget.isCreative() || playerTarget.isSpectator() || !playerTarget.isAlive()) {
                 return;
             }
 
-            if (!canMobDetectLivingEntity(mob, playerTarget)) {
+            if (!canMobDetectLivingEntity(mob, playerTarget, !scout && !supplemental)) {
                 event.setCanceled(true);
                 if (mob.getBrain().hasMemoryValue(MemoryModuleType.ATTACK_TARGET)) {
                     LivingEntity mem = mob.getBrain().getMemory(MemoryModuleType.ATTACK_TARGET).orElse(null);
@@ -641,44 +656,62 @@ public class StealthDetectionEvents {
             }
         }
 
-        if (!event.isCanceled()) {
-            LivingEntity target = event.getNewTarget();
-            boolean friendlyFireCheckEnabled = true;
-            try {
-            } catch (Throwable t) {}
-
-            if (friendlyFireCheckEnabled && newTarget != null) {
-                Vec3 start = mob.getEyePosition();
-                Vec3 targetEye = newTarget.getEyePosition();
-                Vec3 targetCenter = newTarget.position().add(0, newTarget.getBbHeight() * 0.5, 0);
-                Vec3 targetFeet = newTarget.position().add(0, Math.max(0.1, newTarget.getBbHeight() * 0.15), 0);
-
-                boolean ignoreEntityBlockers = hasActiveXrayOnTarget(mob, newTarget);
-                boolean eyeClear = isPathClear(mob, newTarget, start, targetEye, ignoreEntityBlockers);
-                boolean centerClear = isPathClear(mob, newTarget, start, targetCenter, ignoreEntityBlockers);
-                boolean feetClear = isPathClear(mob, newTarget, start, targetFeet, ignoreEntityBlockers);
-
-                if (!eyeClear && !centerClear && !feetClear) {
-                    if (canRouteTowardTarget(mob, newTarget)) {
-                        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
-                            SoundAttractMod.LOGGER.debug(
-                                "[LivingChangeTargetEvent] Mob {} targeting of {} allowed despite blocked line of sight because a navigation route exists.",
-                                mob.getName().getString(), newTarget.getName().getString()
-                            );
-                        }
-                        return;
-                    }
-                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
-                        SoundAttractMod.LOGGER.debug(
-                            "[LivingChangeTargetEvent] Mob {} targeting of {} CANCELED. All line of sights blocked by entities/walls.",
-                            mob.getName().getString(), newTarget.getName().getString()
-                        );
-                    }
-                    event.setCanceled(true);
-                    return;
-                }
-            }
+        if (event.isCanceled()) return;
+        if (!hasClearTargetSight(mob, newTarget)) {
+            if (scout || !canRouteTowardTarget(mob, newTarget)) event.setCanceled(true);
+            return;
         }
+        boolean directSight = !isFlashbangBlind(mob) && !FovEvents.isSmokeBlockingLineOfSight(mob, newTarget)
+                && FovEvents.isTargetInFov(mob, newTarget, false);
+        if (scout) {
+            if (directSight && mobTarget && event.getOriginalTarget() == newTarget) {
+                recordSuppressedEdgeDetection(mob);
+                GroupTargetSharingManager.noteScoutSighting(mob, newTarget);
+            }
+            event.setCanceled(true);
+        } else if (directSight) {
+            GroupTargetSharingManager.noteDirectTargetAttempt(mob, newTarget, event);
+        }
+    }
+
+    private static boolean hasClearTargetSight(Mob mob, LivingEntity target) {
+        Vec3 eye = mob.getEyePosition();
+        boolean ignoreEntityBlockers = hasActiveXrayOnTarget(mob, target);
+        return isPathClear(mob, target, eye, target.getEyePosition(), ignoreEntityBlockers)
+                || isPathClear(mob, target, eye, target.position().add(0, target.getBbHeight() * 0.5, 0), ignoreEntityBlockers)
+                || isPathClear(mob, target, eye, target.position().add(0, Math.max(0.1, target.getBbHeight() * 0.15), 0), ignoreEntityBlockers);
+    }
+
+    private static boolean isFlashbangBlind(Mob mob) {
+        return isFlashbangBlind(mob, mob.level());
+    }
+
+    private static boolean isFlashbangBlind(Mob mob, Level level) {
+        return com.example.soundattract.integration.csgrenades.CsGrenadesCompat.isLoaded()
+                && SoundAttractConfig.COMMON.enableCsgrenadesIntegration.get()
+                && SoundAttractConfig.COMMON.enableFlashbangBlinding.get()
+                && com.example.soundattract.integration.csgrenades.FlashbangEffect.hasAnyBlindMobs()
+                && com.example.soundattract.integration.csgrenades.FlashbangEffect.isMobBlind(mob, level.getGameTime());
+    }
+
+    public static boolean canReceiveSharedTarget(Mob mob, LivingEntity target) {
+        if (!SoundAttractConfig.COMMON.enableStealthMechanics.get() || shouldUseVanillaTargeting(mob.level())) return false;
+        double distanceSquared = mob.distanceToSqr(target);
+        double maximum = SoundAttractConfig.COMMON.maxStealthDetectionRange.get();
+        if (SoundAttractConfig.COMMON.enableXrayTargeting.get()) {
+            maximum = Math.max(maximum, SoundAttractConfig.COMMON.xrayMaxRange.get());
+        }
+        if (distanceSquared > maximum * maximum || isFlashbangBlind(mob)) return false;
+        double range = target instanceof Player player ? getRealisticStealthDetectionRange(player, mob, mob.level())
+                : target instanceof Mob targetMob ? getRealisticStealthDetectionRange(targetMob, mob, mob.level())
+                : MobGroupManager.isMobInHighWeightOverride(mob) ? 0.0 : maximum;
+        return range > 0 && (distanceSquared <= range * range || hasActiveXrayOnTarget(mob, target))
+                && !FovEvents.isSmokeBlockingLineOfSight(mob, target);
+    }
+
+    public static boolean hasDirectGroupSight(Mob mob, LivingEntity target) {
+        return canReceiveSharedTarget(mob, target) && FovEvents.isTargetInFov(mob, target, false)
+                && hasClearTargetSight(mob, target);
     }
 
     private static boolean canRouteTowardTarget(Mob mob, LivingEntity target) {
@@ -692,6 +725,32 @@ public class StealthDetectionEvents {
         if (mob.getLastHurtByMob() == target && (mob.tickCount - mob.getLastHurtByMobTimestamp() < 200)) {
             return true;
         }
+        RouteProbeKey key = new RouteProbeKey(mob.level().dimension().location(), mob.getUUID(), target.getUUID());
+        RouteEvidence evidence = routeEvidence.remove(key);
+        long now = mob.level().getGameTime();
+        if (evidence != null && now - evidence.tick() <= ROUTE_PROBE_TTL_TICKS
+                && evidence.mobPosition().distanceToSqr(mob.position()) <= 1.0
+                && evidence.targetPosition().distanceToSqr(target.position()) <= 1.0) {
+            if (!PathTaskScheduler.tryConsumePathAttempt(mob.level(), PathTaskScheduler.Priority.COMBAT)) {
+                if (pendingRouteProbes.size() < MAX_PENDING_ROUTE_PROBES || pendingRouteProbes.containsKey(key)) {
+                    pendingRouteProbes.put(key, new RouteProbe(key, mob.position(), target.position(),
+                            mob.level().getServer() == null ? now : mob.level().getServer().getTickCount()));
+                }
+                return false;
+            }
+            return hasValidRoute(mob, target);
+        }
+        if (!PathTaskScheduler.tryConsumePathAttempt(mob.level(), PathTaskScheduler.Priority.COMBAT)) {
+            if (pendingRouteProbes.size() < MAX_PENDING_ROUTE_PROBES || pendingRouteProbes.containsKey(key)) {
+                pendingRouteProbes.put(key, new RouteProbe(key, mob.position(), target.position(),
+                        mob.level().getServer() == null ? now : mob.level().getServer().getTickCount()));
+            }
+            return false;
+        }
+        return hasValidRoute(mob, target);
+    }
+
+    private static boolean hasValidRoute(Mob mob, LivingEntity target) {
         var path = mob.getNavigation().createPath(target, 0);
         if (path == null || !path.canReach()) {
             return false;
@@ -707,7 +766,58 @@ public class StealthDetectionEvents {
                 || isPathClear(mob, target, endpointEye, targetFeet, true);
     }
 
+    private static void processPendingRouteProbes(MinecraftServer server) {
+        if (server == null || pendingRouteProbes.isEmpty()) return;
+        long now = server.getTickCount();
+        int processed = 0;
+        int scanned = 0;
+        var iterator = pendingRouteProbes.entrySet().iterator();
+        while (iterator.hasNext() && processed < MAX_ROUTE_PROBES_PER_TICK
+                && scanned < MAX_ROUTE_PROBES_PER_TICK * 4) {
+            Map.Entry<RouteProbeKey, RouteProbe> entry = iterator.next();
+            scanned++;
+            RouteProbe probe = entry.getValue();
+            if (now - probe.queuedServerTick() > ROUTE_PROBE_TTL_TICKS) {
+                iterator.remove();
+                continue;
+            }
+            ServerLevel level = server.getLevel(net.minecraft.resources.ResourceKey.create(
+                    net.minecraft.core.registries.Registries.DIMENSION, probe.key().dimension()));
+            if (level == null) {
+                iterator.remove();
+                continue;
+            }
+            net.minecraft.world.entity.Entity mobEntity = level.getEntity(probe.key().mobId());
+            net.minecraft.world.entity.Entity targetEntity = level.getEntity(probe.key().targetId());
+            if (!(mobEntity instanceof Mob mob) || !(targetEntity instanceof LivingEntity target)
+                    || !mob.isAlive() || !target.isAlive()
+                    || mob.position().distanceToSqr(probe.mobPosition()) > 1.0
+                    || target.position().distanceToSqr(probe.targetPosition()) > 1.0
+                    || com.example.soundattract.ai.LivingWallCoordinator.isControlled(mob)) {
+                iterator.remove();
+                continue;
+            }
+            if (!PathTaskScheduler.tryConsumePathAttempt(level, PathTaskScheduler.Priority.COMBAT)) break;
+            iterator.remove();
+            processed++;
+            if (hasValidRoute(mob, target)) {
+                routeEvidence.put(probe.key(), new RouteEvidence(target.position(), mob.position(), level.getGameTime()));
+                while (routeEvidence.size() > MAX_PENDING_ROUTE_PROBES) {
+                    routeEvidence.remove(routeEvidence.keySet().iterator().next());
+                }
+            }
+        }
+    }
+
+    private record RouteProbeKey(ResourceLocation dimension, UUID mobId, UUID targetId) {}
+    private record RouteProbe(RouteProbeKey key, Vec3 mobPosition, Vec3 targetPosition, long queuedServerTick) {}
+    private record RouteEvidence(Vec3 targetPosition, Vec3 mobPosition, long tick) {}
+
     public static boolean canMobDetectLivingEntity(Mob mob, LivingEntity target) {
+        return canMobDetectLivingEntity(mob, target, true);
+    }
+
+    private static boolean canMobDetectLivingEntity(Mob mob, LivingEntity target, boolean respectGroupRoles) {
         if (mob == null || target == null) {
             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                 SoundAttractMod.LOGGER.warn("[CanDetect] Called with null mob or target. Defaulting to detectable.");
@@ -716,7 +826,7 @@ public class StealthDetectionEvents {
         }
 
         if (com.example.soundattract.ai.MobGroupManager.isMobInHighWeightOverride(mob)) {
-            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+            if (DebugLogLimiter.allow(DebugLogLimiter.Channel.STEALTH_QUERY)) {
                 SoundAttractMod.LOGGER.info("[CanDetect] Mob {} is blind due to high-weight sound override.", mob.getName().getString());
             }
             return false;
@@ -736,7 +846,7 @@ public class StealthDetectionEvents {
 
         if (target instanceof Player player) {
             if (player.isCreative() || player.isSpectator() || !player.isAlive()) {
-                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+                if (DebugLogLimiter.allow(DebugLogLimiter.Channel.STEALTH_QUERY)) {
                     SoundAttractMod.LOGGER.info("[CanDetect] Player {} is creative/spectator/dead. Bypassing stealth. Mob {}.", player.getName().getString(), mob.getName().getString());
                 }
                 return true;
@@ -749,7 +859,7 @@ public class StealthDetectionEvents {
             return true;
         }
 
-        if (SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) {
+        if (respectGroupRoles && SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) {
             try {
                 net.minecraft.world.entity.Mob leader = com.example.soundattract.ai.MobGroupManager.getLeader(mob);
                 if (leader != null && leader != mob) {
@@ -768,7 +878,7 @@ public class StealthDetectionEvents {
         if (xrayRange > 0) {
             double distSqXray = mob.distanceToSqr(target);
             if (distSqXray <= xrayRange * xrayRange) {
-                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+                if (DebugLogLimiter.allow(DebugLogLimiter.Channel.STEALTH_QUERY)) {
                     SoundAttractMod.LOGGER.info(
                         "[XRAY] Mob {} detects {} within XRAY range {} (distSq {}).",
                         mob.getName().getString(), target.getName().getString(), String.format("%.2f", xrayRange), String.format("%.2f", distSqXray)
@@ -780,9 +890,9 @@ public class StealthDetectionEvents {
 
         double detectionRange;
         if (target instanceof Player player) {
-            detectionRange = getRealisticStealthDetectionRange(player, mob, level);
+            detectionRange = isFlashbangBlind(mob, level) ? 0.0 : computePlayerDetectionRange(player, mob, level);
         } else if (target instanceof Mob targetMob) {
-            detectionRange = getRealisticStealthDetectionRange(targetMob, mob, level);
+            detectionRange = isFlashbangBlind(mob, level) ? 0.0 : computeMobDetectionRange(targetMob, mob, level);
         } else {
             detectionRange = SoundAttractConfig.COMMON.maxStealthDetectionRange.get();
         }
@@ -790,7 +900,7 @@ public class StealthDetectionEvents {
         double distSq = mob.distanceToSqr(target);
 
         if (distSq > detectionRange * detectionRange) {
-            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+            if (DebugLogLimiter.allow(DebugLogLimiter.Channel.STEALTH_QUERY)) {
                 SoundAttractMod.LOGGER.info(
                         "[StealthQuery] {} is OUT OF RANGE for mob {} (distSq: {}, rangeSq: {}).",
                         target.getName().getString(), mob.getName().getString(),
@@ -802,7 +912,7 @@ public class StealthDetectionEvents {
         }
 
         if (!FovEvents.isTargetInFov(mob, target, true)) {
-            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+            if (DebugLogLimiter.allow(DebugLogLimiter.Channel.STEALTH_QUERY)) {
                 SoundAttractMod.LOGGER.info(
                         "[StealthQuery] {} is IN RANGE for mob {} but OUTSIDE FOV. Denying detection.",
                         target.getName().getString(), mob.getName().getString()
@@ -811,13 +921,13 @@ public class StealthDetectionEvents {
             return false;
         }
 
-        if (SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) {
+        if (respectGroupRoles && SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) {
             try {
                 boolean isEdge = MobGroupManager.isEdgeMob(mob);
                 boolean isDeserter = MobGroupManager.isDeserter(mob);
                 if (isEdge && !isDeserter) {
                     recordSuppressedEdgeDetection(mob);
-                    if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+                    if (DebugLogLimiter.allow(DebugLogLimiter.Channel.STEALTH_QUERY)) {
                         SoundAttractMod.LOGGER.info("[CanDetect] Suppressing EDGE mob {} (non-deserter) despite detectability; signaling RAID.", mob.getName().getString());
                     }
                     return false;
@@ -828,7 +938,7 @@ public class StealthDetectionEvents {
                 }
             }
         }
-        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+        if (DebugLogLimiter.allow(DebugLogLimiter.Channel.STEALTH_QUERY)) {
             SoundAttractMod.LOGGER.info(
                     "[StealthQuery] {} IS DETECTABLE by mob {} (in range and in FOV).",
                     target.getName().getString(), mob.getName().getString()
@@ -882,71 +992,6 @@ public class StealthDetectionEvents {
             return false;
         }
         return FovEvents.isTargetInFov(mob, player, true);
-    }
-
-    private static boolean canMobDetectTargetNoEdgeSuppression(Mob mob, LivingEntity target) {
-        if (mob == null || target == null) {
-            return true;
-        }
-        if (SoundAttractConfig.isStealthBypassed(mob)) {
-            return true;
-        }
-        if (target instanceof Player player && (player.isCreative() || player.isSpectator() || !player.isAlive())) {
-            return true;
-        } else if (!target.isAlive()) {
-            return true;
-        }
-        if (!SoundAttractConfig.COMMON.enableStealthMechanics.get()) {
-            return true;
-        }
-        if (shouldUseVanillaTargeting(mob.level())) {
-            return true;
-        }
-
-        if (SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) {
-            try {
-                net.minecraft.world.entity.Mob leader = com.example.soundattract.ai.MobGroupManager.getLeader(mob);
-                if (leader != null && leader != mob) {
-                    boolean isEdge = com.example.soundattract.ai.MobGroupManager.isEdgeMob(mob);
-                    boolean isDeserter = com.example.soundattract.ai.MobGroupManager.isDeserter(mob);
-                    if (!isEdge && !isDeserter) {
-                        return false;
-                    }
-                }
-            } catch (Throwable t) {}
-        }
-
-        Level level = mob.level();
-
-        double xrayRange = getEffectiveXrayRange(mob);
-        if (xrayRange > 0) {
-            double distSqXray = mob.distanceToSqr(target);
-            if (distSqXray <= xrayRange * xrayRange) {
-                return true;
-            }
-        }
-        double maxConfigRange = SoundAttractConfig.COMMON.maxStealthDetectionRange.get();
-        double distSq = mob.distanceToSqr(target);
-        if (distSq > maxConfigRange * maxConfigRange) {
-            return false;
-        }
-
-        double detectionRange;
-        if (target instanceof Player player) {
-            detectionRange = getRealisticStealthDetectionRange(player, mob, level);
-        } else if (target instanceof Mob targetMob) {
-            detectionRange = getRealisticStealthDetectionRange(targetMob, mob, level);
-        } else {
-            detectionRange = maxConfigRange;
-        }
-
-        if (distSq > detectionRange * detectionRange) {
-            return false;
-        }
-        if (!FovEvents.isTargetInFov(mob, target, true)) {
-            return false;
-        }
-        return true;
     }
 
     public static boolean shouldSuppressTargeting(Mob mob) {
@@ -1007,9 +1052,12 @@ public class StealthDetectionEvents {
         }
 
         StealthPerfTier tier = getPerfTier(server);
-        if (tier == StealthPerfTier.VANILLA) {
+        if (tier == StealthPerfTier.VANILLA && SoundAttractConfig.COMMON.legacyStealthVanillaFallback.get()) {
+            pendingRouteProbes.clear();
+            routeEvidence.clear();
             return;
         }
+        processPendingRouteProbes(server);
         int stealthCheckInterval = getStealthCheckInterval();
 
         if (gameTime % stealthCheckInterval != 0 || gameTime == lastStealthCheckTick) {
@@ -1020,11 +1068,6 @@ public class StealthDetectionEvents {
         Set<UUID> seenPlayerIdsAcrossLevels = new HashSet<>();
         Set<UUID> seenMobIdsAcrossLevels = new HashSet<>();
         for (ServerLevel level : server.getAllLevels()) {
-            java.util.Map<Long, Boolean> sharedStealthCache = (tier == StealthPerfTier.SHARE_NEARBY
-                    && SoundAttractConfig.COMMON.stealthShareTargetToNearbyMobsRadius.get() > 0.0)
-                    ? new java.util.HashMap<>()
-                    : null;
-
             int scanningRadius = Math.max(32, (int) Math.ceil(SoundAttractConfig.COMMON.maxStealthDetectionRange.get()) + 16);
             Set<Mob> mobsToCheck = new HashSet<>();
             Set<LivingEntity> entitiesToTickCamo = new HashSet<>();
@@ -1058,79 +1101,17 @@ public class StealthDetectionEvents {
                     continue;
                 }
 
-                UUID targetId = target.getUUID();
                 if (target instanceof Player playerTarget && (playerTarget.isCreative() || playerTarget.isSpectator())) {
                     mobOutOfRangeTicks.remove(mobId);
                     continue;
                 }
 
-                boolean canCurrentlyDetect;
-
-                boolean raidFollowerSkipped = false;
-                try {
-                    if (SoundAttractConfig.COMMON.raidFollowerInheritTarget.get()) {
-                        Mob leader = MobGroupManager.getLeader(mob);
-                        if (leader != null && RaidManager.isRaidAdvancing(leader)) {
-                            boolean isEdge = MobGroupManager.isEdgeMob(mob);
-                            boolean isLeader = (mob == leader);
-                            if (!isEdge && !isLeader) {
-                                raidFollowerSkipped = true;
-                            }
-                        }
-                    }
-                } catch (Throwable ignored) {}
-
-                if (raidFollowerSkipped) {
-                    canCurrentlyDetect = false;
-                } else
-                if (sharedStealthCache != null) {
-                    double radius = SoundAttractConfig.COMMON.stealthShareTargetToNearbyMobsRadius.get();
-                    int cell = (int) Math.max(1, Math.floor(radius));
-                    int cx = (int) Math.floor(mob.getX() / (double) cell);
-                    int cz = (int) Math.floor(mob.getZ() / (double) cell);
-                    long tHash = targetId.getMostSignificantBits() ^ targetId.getLeastSignificantBits();
-                    long key = tHash;
-                    key = 31L * key + (long) cx;
-                    key = 31L * key + (long) cz;
-
-                    Boolean cached = sharedStealthCache.get(key);
-                    if (cached == null) {
-                        cached = canMobDetectTargetNoEdgeSuppression(mob, target);
-                        sharedStealthCache.put(key, cached);
-                    }
-                    canCurrentlyDetect = cached.booleanValue();
-
-                    if (SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) {
-                        try {
-                            boolean isEdge = MobGroupManager.isEdgeMob(mob);
-                            boolean isDeserter = MobGroupManager.isDeserter(mob);
-                            if (isEdge && !isDeserter) {
-                                Mob edgeLeader = MobGroupManager.getLeader(mob);
-                                if (edgeLeader != null && RaidManager.isRaidAdvancing(edgeLeader) && canCurrentlyDetect && target != null) {
-                                    try {
-                                        String action = SoundAttractConfig.COMMON.raidEdgeDetectionAction.get();
-                                        if ("redirect".equalsIgnoreCase(action)) {
-                                            RaidManager.updateRaidTarget(edgeLeader, target.blockPosition());
-                                        } else if ("share".equalsIgnoreCase(action)) {
-                                            for (Mob nearby : mob.level().getEntitiesOfClass(Mob.class, mob.getBoundingBox().inflate(16.0), m -> m.isAlive())) {
-                                                if (MobGroupManager.getLeader(nearby) == edgeLeader && nearby != mob) {
-                                                    nearby.setTarget(target);
-                                                }
-                                            }
-                                        }
-                                    } catch (Throwable ignored) {}
-                                }
-                                recordSuppressedEdgeDetection(mob);
-                                canCurrentlyDetect = false;
-                            }
-                        } catch (Throwable ignored) {
-                        }
-                    }
-                } else {
-                    canCurrentlyDetect = canMobDetectLivingEntity(mob, target);
+                if (GroupTargetSharingManager.ownsTarget(mob, target)) {
+                    mobOutOfRangeTicks.remove(mobId);
+                    continue;
                 }
 
-                if (canCurrentlyDetect) {
+                if (canMobDetectLivingEntity(mob, target, false)) {
                     if (mobOutOfRangeTicks.remove(mobId) != null) {
                         if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
                             SoundAttractMod.LOGGER.info(
@@ -1223,7 +1204,7 @@ public class StealthDetectionEvents {
         boolean isCrouching = player.isCrouching();
         float playerHeight = player.getDimensions(currentPose).height;
 
-        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+        if (DebugLogLimiter.allow(DebugLogLimiter.Channel.PLAYER_STANCE)) {
             SoundAttractMod.LOGGER.info(
                     "[DetermineStanceDetails] Player: {}, Pose: {}, isVisuallyCrawling: {}, isCrouching: {}, Height: {}",
                     player.getName().getString(),
@@ -1235,7 +1216,7 @@ public class StealthDetectionEvents {
         }
 
         if (isVisuallyCrawling || playerHeight <= 1.0F) {
-            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+            if (DebugLogLimiter.allow(DebugLogLimiter.Channel.PLAYER_STANCE)) {
                 SoundAttractMod.LOGGER.info("[DetermineStance] Player {} is CRAWLING (VisualCrawl: true, Pose: {}, Height: {})",
                         player.getName().getString(), currentPose, String.format("%.2f", playerHeight));
             }
@@ -1243,14 +1224,14 @@ public class StealthDetectionEvents {
         }
 
         if (isCrouching) {
-            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+            if (DebugLogLimiter.allow(DebugLogLimiter.Channel.PLAYER_STANCE)) {
                 SoundAttractMod.LOGGER.info("[DetermineStance] Player {} is SNEAKING (Pose: {}, Crouching: {}, Height: {})",
                         player.getName().getString(), currentPose, isCrouching, String.format("%.2f", playerHeight));
             }
             return PlayerStance.SNEAKING;
         }
 
-        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.STEALTH_DETECTION)) {
+        if (DebugLogLimiter.allow(DebugLogLimiter.Channel.PLAYER_STANCE)) {
             SoundAttractMod.LOGGER.info("[DetermineStance] Player {} is STANDING (Pose: {}, Height: {})",
                     player.getName().getString(), currentPose, String.format("%.2f", playerHeight));
         }
@@ -1258,15 +1239,7 @@ public class StealthDetectionEvents {
     }
 
     public static double getRealisticStealthDetectionRange(Player player, Mob mob, Level level) {
-        if (com.example.soundattract.ai.MobGroupManager.isMobInHighWeightOverride(mob)) {
-            return 0.0;
-        }
-
-        if (com.example.soundattract.integration.csgrenades.CsGrenadesCompat.isLoaded()
-                && com.example.soundattract.config.SoundAttractConfig.COMMON.enableCsgrenadesIntegration.get()
-                && com.example.soundattract.config.SoundAttractConfig.COMMON.enableFlashbangBlinding.get()
-                && com.example.soundattract.integration.csgrenades.FlashbangEffect.hasAnyBlindMobs()
-                && com.example.soundattract.integration.csgrenades.FlashbangEffect.isMobBlind(mob, level.getGameTime())) {
+        if (MobGroupManager.isMobInHighWeightOverride(mob) || isFlashbangBlind(mob, level)) {
             return 0.0;
         }
 
@@ -1277,7 +1250,10 @@ public class StealthDetectionEvents {
         if (shouldUseVanillaTargeting(level)) {
             return SoundAttractConfig.COMMON.maxStealthDetectionRange.get();
         }
+        return computePlayerDetectionRange(player, mob, level);
+    }
 
+    private static double computePlayerDetectionRange(Player player, Mob mob, Level level) {
         PlayerStealthBaseline baseline = getOrComputePlayerStealthBaseline(player, level);
         double baseRange;
         if (baseline.gunshotRangeOpt().isPresent()) {
@@ -1576,8 +1552,9 @@ public class StealthDetectionEvents {
     }
 
     private static Optional<Integer> soundattract$computeAverageEnvironmentalColor(LivingEntity entity, Level level) {
-        List<Integer> blockColors = new ArrayList<>();
         BlockPos entityPos = entity.blockPosition();
+        int numColors = 0;
+        int totalR = 0, totalG = 0, totalB = 0;
 
         for (int yOffset = 0; yOffset >= -1; yOffset--) {
             for (int xOffset = -1; xOffset <= 1; xOffset++) {
@@ -1592,42 +1569,33 @@ public class StealthDetectionEvents {
                             } catch (Throwable ignored) {
                                 continue;
                             }
-                            if (mapColor != 0) blockColors.add(mapColor);
+                            if (mapColor != 0) {
+                                totalR += (mapColor >> 16) & 0xFF;
+                                totalG += (mapColor >> 8) & 0xFF;
+                                totalB += mapColor & 0xFF;
+                                numColors++;
+                            }
                         }
                     }
                 }
             }
         }
 
-        if (blockColors.isEmpty()) {
-             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
+        if (numColors == 0) {
+             if (DebugLogLimiter.allow(DebugLogLimiter.Channel.CAMOUFLAGE_PERCEPTION)) {
                  SoundAttractMod.LOGGER.info("[GetEnvColor] No block map colors found in sampling area.");
             }
             return Optional.empty();
         }
 
-        long totalR = 0, totalG = 0, totalB = 0;
-        for (int color : blockColors) {
-            totalR += (color >> 16) & 0xFF;
-            totalG += (color >> 8) & 0xFF;
-            totalB += color & 0xFF;
-        }
-
-        int numColors = blockColors.size();
-        if (numColors == 0) {
-             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
-                 SoundAttractMod.LOGGER.warn("[GetEnvColor] numColors is 0 after processing, this should not happen if blockColors list was not empty.");
-            }
-            return Optional.empty();
-        }
-        int avgR = (int) (totalR / numColors);
-        int avgG = (int) (totalG / numColors);
-        int avgB = (int) (totalB / numColors);
+        int avgR = totalR / numColors;
+        int avgG = totalG / numColors;
+        int avgB = totalB / numColors;
         int finalAvgColor = (avgR << 16) | (avgG << 8) | avgB;
 
-        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE)) {
+        if (DebugLogLimiter.allow(DebugLogLimiter.Channel.CAMOUFLAGE_PERCEPTION)) {
             SoundAttractMod.LOGGER.info("[GetEnvColor] Average environment color: 0x{} from {} blocks.",
-                    String.format("%06X", finalAvgColor), numColors);
+                    Integer.toHexString(finalAvgColor).toUpperCase(java.util.Locale.ROOT), numColors);
         }
         return Optional.of(finalAvgColor);
     }

@@ -753,6 +753,22 @@ class LivingWallCoordinatorGeometryTest {
     }
 
     @Test
+    void physicalSupportAllowsContactButRejectsAirGaps() {
+        AABB lower = new AABB(0.0D, 0.0D, 0.0D, 0.6D, 1.95D, 0.6D);
+        AABB touchingAbove = new AABB(0.0D, 1.95D, 0.0D, 0.6D, 3.9D, 0.6D);
+        AABB slightContactOverlap = new AABB(0.0D, 1.90D, 0.0D, 0.6D, 3.85D, 0.6D);
+        AABB floatingAbove = new AABB(0.0D, 3.0D, 0.0D, 0.6D, 4.95D, 0.6D);
+        AABB offsetWithoutFootprint = new AABB(0.65D, 2.0D, 0.0D, 1.25D, 3.95D, 0.6D);
+
+        assertTrue(LivingWallCoordinator.physicalBodiesConnect(touchingAbove, lower));
+        assertTrue(LivingWallCoordinator.physicalBodiesConnect(slightContactOverlap, lower));
+        assertFalse(LivingWallCoordinator.physicalBodiesConnect(floatingAbove, lower));
+        assertTrue(LivingWallCoordinator.physicalBodiesConnect(offsetWithoutFootprint, lower));
+        assertFalse(LivingWallCoordinator.loadBearingBodiesTouch(offsetWithoutFootprint, lower));
+        assertTrue(LivingWallCoordinator.loadBearingBodiesTouch(touchingAbove, lower));
+    }
+
+    @Test
     void diagonalFootprintsTouchWithoutTreatingCornerOverlapAsPenetration() {
         AABB first = new AABB(-0.3D, 0.0D, -0.3D, 0.3D, 1.95D, 0.3D);
         AABB diagonalTouch = new AABB(0.2723D, 0.0D, -0.0615D, 0.8723D, 1.95D, 0.5385D);

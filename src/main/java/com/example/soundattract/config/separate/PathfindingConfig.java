@@ -12,6 +12,7 @@ public class PathfindingConfig {
     public static final ForgeConfigSpec.DoubleValue MOVE_TO_MIN_DELTA;
     public static final ForgeConfigSpec.IntValue MOVE_TO_TEAM_BUDGET_PER_TICK;
     public static final ForgeConfigSpec.IntValue MAX_PATH_ATTEMPTS_PER_TICK;
+    public static final ForgeConfigSpec.IntValue MAX_PATH_ATTEMPTS_PER_SERVER_TICK;
     public static final ForgeConfigSpec.BooleanValue ENABLE_NODE_ROUTER;
 
     static {
@@ -36,6 +37,8 @@ public class PathfindingConfig {
         BUILDER.push("scheduling");
         MAX_PATH_ATTEMPTS_PER_TICK = BUILDER.comment("Maximum pathfinding attempts per dimension per tick. Caps total path computation cost.")
                 .defineInRange("maxPathAttemptsPerTick", 10, 0, 200);
+        MAX_PATH_ATTEMPTS_PER_SERVER_TICK = BUILDER.comment("Maximum mod-owned path starts across all dimensions per server tick. Combat and committed bridge work can use reserved capacity.")
+                .defineInRange("maxPathAttemptsPerServerTick", 40, 0, 800);
         BUILDER.pop();
 
         BUILDER.push("node_router");

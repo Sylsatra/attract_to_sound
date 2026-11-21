@@ -61,28 +61,25 @@ public final class QuantifiedWorkScheduler implements SoundAttractWorkScheduler 
 
     @Override
     public Future<?> submitGroupCompute(List<WorkerScheduler.MobSnapshot> mobs, WorkerScheduler.ConfigSnapshot cfg, ResourceLocation dimension) {
-        if (!acceptingResults || mobs == null || mobs.isEmpty() || cfg == null || dimension == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        if (!reserveTask()) return CompletableFuture.completedFuture(null);
+        if (!acceptingResults || mobs == null || mobs.isEmpty() || cfg == null || dimension == null) return null;
+        if (!reserveTask()) return null;
         List<WorkerScheduler.MobSnapshot> snapshot = Collections.unmodifiableList(new ArrayList<>(mobs));
-        long deadlineMs = computeDeadlineMs();
         Duration timeout = computeTimeout();
 
         CompletableFuture<?> future;
         try {
             future = submitFuture(
                 "soundattract_group_compute",
-                () -> WorkerComputations.computeGroups(snapshot, cfg, deadlineMs, dimension),
+                () -> WorkerComputations.computeGroups(snapshot, cfg, Long.MAX_VALUE, dimension),
                 timeout
             );
         } catch (Throwable ignored) {
             releaseTask();
-            return CompletableFuture.completedFuture(null);
+            return null;
         }
         if (future == null) {
             releaseTask();
-            return CompletableFuture.completedFuture(null);
+            return null;
         }
         track(future);
         return future.handle((result, throwable) -> {

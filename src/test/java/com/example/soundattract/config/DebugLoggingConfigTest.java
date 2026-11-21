@@ -10,6 +10,7 @@ class DebugLoggingConfigTest {
     void unloadedDebugConfigDefaultsToDisabled() {
         assertDoesNotThrow(() -> DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE));
         assertFalse(DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CAMOUFLAGE));
+        assertFalse(DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SECOND_BRAIN));
     }
 
     @Test

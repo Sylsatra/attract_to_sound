@@ -20,10 +20,12 @@ public class PerformanceConfig {
     public static final ForgeConfigSpec.IntValue SPATIAL_IN_FLIGHT_FUTURES;
     public static final ForgeConfigSpec.IntValue SPATIAL_WORK_UNITS_PER_TICK;
     public static final ForgeConfigSpec.IntValue SCAN_COOLDOWN_TICKS;
+    public static final ForgeConfigSpec.IntValue CUE_SCANS_PER_TICK;
     public static final ForgeConfigSpec.DoubleValue COOLDOWN_TICKS_PER_MOB;
     public static final ForgeConfigSpec.DoubleValue MIN_TPS_FOR_SCAN_COOLDOWN;
     public static final ForgeConfigSpec.DoubleValue MAX_TPS_FOR_SCAN_COOLDOWN;
     public static final ForgeConfigSpec.BooleanValue ENABLE_TIERED_STEALTH_PERFORMANCE;
+    public static final ForgeConfigSpec.BooleanValue LEGACY_STEALTH_VANILLA_FALLBACK;
     public static final ForgeConfigSpec.DoubleValue STEALTH_TIER_SKIP_EXPENSIVE_CHECKS_TPS;
     public static final ForgeConfigSpec.DoubleValue STEALTH_TIER_CURRENT_TARGETS_ONLY_TPS;
     public static final ForgeConfigSpec.DoubleValue STEALTH_TIER_SHARED_RANGE_TPS;
@@ -81,6 +83,9 @@ public class PerformanceConfig {
         SCAN_COOLDOWN_TICKS = BUILDER.comment("Minimum time in ticks between mob scans for new sounds.")
                 .defineInRange("scanCooldownTicks", 25, 1, 1000000);
 
+        CUE_SCANS_PER_TICK = BUILDER.comment("Maximum sound and scent cue searches started across the server in one tick. Failed searches consume a slot.")
+                .defineInRange("cueScansPerTick", 64, 1, 1000000);
+
         COOLDOWN_TICKS_PER_MOB = BUILDER.comment("How many ticks to add to the base scan cooldown for each active mob.")
                 .defineInRange("cooldownTicksPerMob", 0.15, 0.0, 10.0);
 
@@ -92,6 +97,8 @@ public class PerformanceConfig {
 
         ENABLE_TIERED_STEALTH_PERFORMANCE = BUILDER.comment("Enable tiered stealth performance scaling based on TPS.")
                 .define("enableTieredStealthPerformance", true);
+        LEGACY_STEALTH_VANILLA_FALLBACK = BUILDER.comment("Allow low-TPS stealth tiers to bypass mod targeting rules as in older versions.")
+                .define("legacyStealthVanillaFallback", false);
 
         STEALTH_TIER_SKIP_EXPENSIVE_CHECKS_TPS = BUILDER.defineInRange("stealthTierSkipExpensiveChecksTps", 19.0, 0.0, 21.0);
         STEALTH_TIER_CURRENT_TARGETS_ONLY_TPS = BUILDER.defineInRange("stealthTierCurrentTargetsOnlyTps", 18.0, 0.0, 21.0);

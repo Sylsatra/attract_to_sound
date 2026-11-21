@@ -7,6 +7,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
+import com.example.soundattract.config.SoundAttractConfig;
+import com.example.soundattract.pathfinding.PathTaskScheduler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
@@ -73,6 +75,9 @@ public class LivingWallTraversalRegressionTest {
         ServerLevel level = helper.getLevel();
         BlockPos pivot = helper.absolutePos(new BlockPos(2, 1, 2));
         BlockPos anchor = helper.absolutePos(new BlockPos(18, 1, 2));
+        for (int x = 3; x < 18; x++) {
+            helper.setBlock(new BlockPos(x, 0, 2), Blocks.AIR.defaultBlockState());
+        }
         Object scenario = invoke("classifyScenario", new Class<?>[]{ServerLevel.class, BlockPos.class, BlockPos.class, Set.class},
                 level, pivot, anchor, Set.of(anchor.below()));
         require("JUMP_BRIDGE".equals(scenario.toString()),
@@ -141,6 +146,64 @@ public class LivingWallTraversalRegressionTest {
         helper.succeed();
     }
 
+    static void landingHandoffRetriesAfterCommittedPathBudgetDenial(GameTestHelper helper) throws Exception {
+        prepareFlat(helper, 0, 10, 0, 10);
+        Fixture fixture = createFixture(helper, LivingWallCoordinator.ConstructionScenario.WALL_LEDGE, true);
+        Mob crosser = helper.spawnWithNoFreeWill(EntityType.ZOMBIE, 1, 1, 2);
+
+        LivingWallCoordinator.SitePlan plan = getField(fixture.formation, "plan");
+        Object transit = newCrosserTransit(crosser.getUUID(), plan.intakeWindows().get(0));
+        setEnum(transit, "state", "LANDING_VALIDATION");
+        setFieldValue(transit, "handoffGoal", helper.absolutePos(new BlockPos(4, 1, 2)));
+        getMap(fixture.formation, "crosserTransit").put(crosser.getUUID(), transit);
+        getMap(fixture.formation, "crosserSlots").put(crosser.getUUID(), 0);
+        getList(fixture.formation, "crosserOrder").add(crosser.getUUID());
+        setInt(fixture.formation, "activeCrossers", 1);
+        setDouble(fixture.formation, "integrity", 1.0D);
+        setLong(fixture.formation, "lastCrosserRecruitTick", fixture.level.getGameTime());
+
+        int originalPathBudget = SoundAttractConfig.COMMON.maxPathAttemptsPerTick.get();
+        int originalServerPathBudget = SoundAttractConfig.COMMON.maxPathAttemptsPerServerTick.get();
+        try {
+            SoundAttractConfig.COMMON.maxPathAttemptsPerTick.set(0);
+            SoundAttractConfig.COMMON.maxPathAttemptsPerServerTick.set(0);
+            PathTaskScheduler.clear();
+            invoke("driveCrossers", new Class<?>[]{ServerLevel.class, fixture.formation.getClass(), long.class},
+                    fixture.level, fixture.formation, fixture.level.getGameTime());
+            require(getMap(fixture.formation, "crosserTransit").containsKey(crosser.getUUID()),
+                    "budget denial discarded the landing-validation transit");
+            require(getList(fixture.formation, "crosserOrder").contains(crosser.getUUID()),
+                    "budget denial removed the crosser from its retry order");
+            require((int) getField(fixture.formation, "activeCrossers") == 1,
+                    "budget denial released the active crosser slot");
+
+            SoundAttractConfig.COMMON.maxPathAttemptsPerTick.set(200);
+            SoundAttractConfig.COMMON.maxPathAttemptsPerServerTick.set(200);
+            PathTaskScheduler.clear();
+            invoke("driveCrossers", new Class<?>[]{ServerLevel.class, fixture.formation.getClass(), long.class},
+                    fixture.level, fixture.formation, fixture.level.getGameTime());
+            boolean stillScheduled = getMap(fixture.formation, "crosserTransit").containsKey(crosser.getUUID());
+            if (stillScheduled) {
+                require(getList(fixture.formation, "crosserOrder").contains(crosser.getUUID()),
+                        "rejected handoff route removed the crosser from its retry order");
+                require((int) getField(fixture.formation, "activeCrossers") == 1,
+                        "rejected handoff route released the active crosser slot");
+            } else {
+                require(!getList(fixture.formation, "crosserOrder").contains(crosser.getUUID()),
+                        "completed handoff left a stale retry-order entry");
+                require(((Set<java.util.UUID>) getField(fixture.formation, "completedCrossers")).contains(crosser.getUUID()),
+                        "completed handoff did not record the crosser");
+                require((int) getField(fixture.formation, "activeCrossers") == 0,
+                        "completed handoff did not release the active crosser slot");
+            }
+        } finally {
+            SoundAttractConfig.COMMON.maxPathAttemptsPerTick.set(originalPathBudget);
+            SoundAttractConfig.COMMON.maxPathAttemptsPerServerTick.set(originalServerPathBudget);
+            PathTaskScheduler.clear();
+        }
+        helper.succeed();
+    }
+
     @GameTest(template = "empty")
     public void tiltExitRejectsAllAirColumnsAndTrapdoorColumns(GameTestHelper helper) throws Exception {
         prepareFlat(helper, 0, 14, 0, 14);
@@ -174,7 +237,7 @@ public class LivingWallTraversalRegressionTest {
         BlockPos releaseCell = releaseCell(fixture);
         clearFallColumns(fixture.level, releaseCell);
         for (int z = releaseCell.getZ() - 2; z <= releaseCell.getZ() + 2; z++) {
-            fixture.level.setBlock(new BlockPos(releaseCell.getX(), releaseCell.getY() - 5, z),
+            fixture.level.setBlock(new BlockPos(releaseCell.getX(), releaseCell.getY() - 6, z),
                     Blocks.STONE.defaultBlockState(), 3);
         }
 
@@ -186,13 +249,13 @@ public class LivingWallTraversalRegressionTest {
                 new Class<?>[]{ServerLevel.class, fixture.formation.getClass()},
                 fixture.level, fixture.formation);
         require(first != null, "expected first tilt projection: releaseCell=" + releaseCell
-                + ", support5=" + fixture.level.getBlockState(releaseCell.below(5))
+                + ", support6=" + fixture.level.getBlockState(releaseCell.below(6))
                 + ", pivot=" + getField(fixture.formation, "pivot")
                 + ", anchor=" + getField(fixture.formation, "anchor")
                 + ", spanEnd=" + getField(fixture.formation, "spanEnd"));
         require(first == second, "expected cached identity: releaseCell=" + releaseCell
                 + ", first=" + first + ", second=" + second
-                + ", support5=" + fixture.level.getBlockState(releaseCell.below(5)));
+                + ", support6=" + fixture.level.getBlockState(releaseCell.below(6)));
 
         clearFallColumns(fixture.level, releaseCell);
         setLong(fixture.formation, "lastValidationTick", 20L);
@@ -201,6 +264,90 @@ public class LivingWallTraversalRegressionTest {
                 fixture.level, fixture.formation);
         require(invalidated == null, "changed landing support should invalidate cached tilt projection");
         helper.succeed();
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 100)
+    static void lateralDismountReachesFallAndKeepsTransitWhileAirborne(GameTestHelper helper) throws Exception {
+        prepareFlat(helper, 0, 14, 0, 14);
+        Fixture fixture = createFixture(helper, LivingWallCoordinator.ConstructionScenario.WALL_LEDGE, true);
+        Mob crosser = helper.spawnWithNoFreeWill(EntityType.ZOMBIE, 4, 5, 2);
+        installCanonicalCrosserRequest(fixture, crosser);
+        boolean reserved = (Boolean) invoke("reserveCrosser",
+                new Class<?>[]{ServerLevel.class, Mob.class, fixture.formation.getClass()},
+                fixture.level, crosser, fixture.formation);
+        require(reserved, "crosser reservation should succeed before lateral dismount");
+
+        BlockPos releaseCell = releaseCell(fixture);
+        clearFallColumns(fixture.level, releaseCell);
+        for (int z = releaseCell.getZ() - 2; z <= releaseCell.getZ() + 2; z++) {
+            fixture.level.setBlock(new BlockPos(releaseCell.getX(), releaseCell.getY() - 6, z),
+                    Blocks.STONE.defaultBlockState(), 3);
+        }
+        setLong(fixture.formation, "lastValidationTick", fixture.level.getGameTime());
+        Object resolved = invoke("resolveTiltThreatExit",
+                new Class<?>[]{ServerLevel.class, fixture.formation.getClass()},
+                fixture.level, fixture.formation);
+        require(resolved != null, "fixture did not produce a valid tilt exit");
+
+        Class<?> projectionType = resolved.getClass();
+        Vec3 bridgeWaypoint = getField(resolved, "bridgeWaypoint");
+        Vec3 dismountWaypoint = bridgeWaypoint.add(0.0D, 0.0D, 1.2D);
+        Constructor<?> projectionConstructor = projectionType.getDeclaredConstructor(int.class, Vec3.class, Vec3.class,
+                BlockPos.class, BlockPos.class, BlockPos.class,
+                projectionType.getDeclaredField("fingerprint").getType());
+        projectionConstructor.setAccessible(true);
+        Object lateralProjection = projectionConstructor.newInstance(
+                getField(resolved, "slot"), bridgeWaypoint, dismountWaypoint,
+                getField(resolved, "landing"), getField(resolved, "support"), getField(resolved, "handoffGoal"),
+                getField(resolved, "fingerprint"));
+        setFieldValue(fixture.formation, "cachedTiltExit", lateralProjection);
+        setFieldValue(fixture.formation, "cachedTiltExitFingerprint", getField(lateralProjection, "fingerprint"));
+        setLong(fixture.formation, "cachedTiltExitValidationTick", fixture.level.getGameTime());
+
+        crosser.setPos(bridgeWaypoint.x, bridgeWaypoint.y, bridgeWaypoint.z);
+        crosser.setNoGravity(true);
+        crosser.noPhysics = true;
+        Object transit = newCrosserTransit(crosser.getUUID(), getField(fixture.formation, "plan") instanceof LivingWallCoordinator.SitePlan plan
+                ? plan.intakeWindows().get(0) : null);
+        setEnum(transit, "state", "DISMOUNT");
+        setInt(transit, "slot", (int) getField(lateralProjection, "slot"));
+        setDouble(fixture.formation, "integrity", 1.0D);
+        setLong(fixture.formation, "lastCrosserRecruitTick", fixture.level.getGameTime() + 100L);
+        getMap(fixture.formation, "crosserTransit").put(crosser.getUUID(), transit);
+        getList(fixture.formation, "crosserOrder").add(crosser.getUUID());
+
+        Method advance = LivingWallCoordinator.class.getDeclaredMethod("advanceCrosser", ServerLevel.class,
+                fixture.formation.getClass(), Mob.class, transit.getClass(), long.class);
+        advance.setAccessible(true);
+        for (int tick = 0; tick < 12 && !getField(transit, "state").toString().equals("FALLING"); tick++) {
+            require((Boolean) advance.invoke(null, fixture.level, fixture.formation, crosser, transit,
+                    fixture.level.getGameTime() + tick), "lateral dismount traversal aborted");
+        }
+        require(getField(transit, "state").toString().equals("FALLING"),
+                "1.2-block lateral release failed to enter FALLING; position=" + crosser.position());
+        require(!crosser.isNoGravity() && !crosser.noPhysics,
+                "starting the fall did not restore gravity and collision");
+        double releaseY = crosser.getY();
+
+        helper.runAfterDelay(3, () -> {
+            try {
+                require(crosser.getY() < releaseY - 0.1D,
+                        "crosser did not descend after the lateral release; releaseY=" + releaseY
+                                + ", currentY=" + crosser.getY());
+                invoke("driveCrossers",
+                        new Class<?>[]{ServerLevel.class, fixture.formation.getClass(), long.class},
+                        fixture.level, fixture.formation, fixture.level.getGameTime());
+                require(getField(transit, "state").toString().equals("FALLING"),
+                        "airborne crosser left FALLING before contact");
+                require(getMap(fixture.formation, "crosserTransit").containsKey(crosser.getUUID()),
+                        "airborne crosser transit was discarded");
+                require(getMobOwners(fixture.level).containsKey(crosser.getUUID()),
+                        "airborne crosser ownership was released");
+                helper.succeed();
+            } catch (Exception | AssertionError e) {
+                helper.fail("lateral dismount regression failed: " + e.getMessage());
+            }
+        });
     }
 
     @GameTest(template = "empty")
@@ -228,7 +375,10 @@ public class LivingWallTraversalRegressionTest {
     @GameTest(template = "empty")
     public void jumpAndDropScenariosNeverResolveTiltExit(GameTestHelper helper) throws Exception {
         prepareFlat(helper, 0, 14, 0, 14);
-        Fixture jump = createFixture(helper, LivingWallCoordinator.ConstructionScenario.JUMP_BRIDGE, true);
+        Fixture jump = createFixture(helper, LivingWallCoordinator.ConstructionScenario.JUMP_BRIDGE, false);
+        for (int x = 3; x < 8; x++) {
+            helper.setBlock(new BlockPos(x, 0, 2), Blocks.AIR.defaultBlockState());
+        }
         Fixture drop = createFixture(helper, LivingWallCoordinator.ConstructionScenario.DROP_TO_LEDGE, true);
         require(invoke("resolveTiltThreatExit",
                 new Class<?>[]{ServerLevel.class, jump.formation.getClass()}, jump.level, jump.formation) == null,
@@ -246,7 +396,10 @@ public class LivingWallTraversalRegressionTest {
         helper.setBlock(new BlockPos(12, 3, 2), Blocks.STONE.defaultBlockState());
         helper.setBlock(new BlockPos(15, 2, 2), Blocks.STONE.defaultBlockState());
         helper.setBlock(new BlockPos(16, 2, 2), Blocks.STONE.defaultBlockState());
-        Fixture jump = createFixture(helper, LivingWallCoordinator.ConstructionScenario.JUMP_BRIDGE, true);
+        Fixture jump = createFixture(helper, LivingWallCoordinator.ConstructionScenario.JUMP_BRIDGE, false);
+        for (int x = 3; x <= 7; x++) {
+            helper.setBlock(new BlockPos(x, 0, 2), Blocks.AIR.defaultBlockState());
+        }
         Object scenario = invoke("classifyScenario",
                 new Class<?>[]{ServerLevel.class, BlockPos.class, BlockPos.class, Set.class},
                 jump.level, getField(jump.formation, "pivot"), getField(jump.formation, "anchor"), Set.of(new BlockPos(6, 4, 2)));
@@ -325,6 +478,12 @@ public class LivingWallTraversalRegressionTest {
         Field field = instance.getClass().getDeclaredField(name);
         field.setAccessible(true);
         field.setLong(instance, value);
+    }
+
+    private static void setDouble(Object instance, String name, double value) throws Exception {
+        Field field = instance.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.setDouble(instance, value);
     }
 
     private static double epsilon() throws Exception {
@@ -443,10 +602,13 @@ public class LivingWallTraversalRegressionTest {
                 new Class<?>[]{ServerLevel.class, fixture.formation.getClass()},
                 fixture.level, fixture.formation);
         if (projection == null) {
-            Method slotMethod = LivingWallCoordinator.class.getDeclaredMethod("formationSlotPosition",
-                    fixture.formation.getClass(), int.class, double.class);
-            slotMethod.setAccessible(true);
-            Vec3 fallback = (Vec3) slotMethod.invoke(null, fixture.formation, 1, 1.0D);
+            Method waypointMethod = LivingWallCoordinator.class.getDeclaredMethod("walkwayWaypoint",
+                    ServerLevel.class, fixture.formation.getClass(), Mob.class, int.class);
+            waypointMethod.setAccessible(true);
+            Object waypoint = waypointMethod.invoke(null, fixture.level, fixture.formation, fixture.members.get(2), 2);
+            Method positionMethod = waypoint.getClass().getDeclaredMethod("position");
+            positionMethod.setAccessible(true);
+            Vec3 fallback = (Vec3) positionMethod.invoke(waypoint);
             return BlockPos.containing(fallback.x, fallback.y, fallback.z);
         }
         Method waypoint = projection.getClass().getDeclaredMethod("dismountWaypoint");

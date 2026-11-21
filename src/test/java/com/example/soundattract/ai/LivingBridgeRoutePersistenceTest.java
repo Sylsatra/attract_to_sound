@@ -7,6 +7,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -36,6 +37,57 @@ class LivingBridgeRoutePersistenceTest {
         assertEquals(source.digest(), decoded.digest());
         assertEquals(-10241L, LivingBridgeRouteSnapshot.Point.from(-2.5002D, 0.0D, 0.0D).x());
         assertEquals(10240L, LivingBridgeRouteSnapshot.Point.from(2.5D, 0.0D, 0.0D).x());
+    }
+
+    @Test
+    void exactSnapshotEqualityDistinguishesFieldsWithIdenticalUtf8Encoding() {
+        LivingBridgeRouteSnapshot malformed = snapshot("minecraft:\uD800", 17L);
+        LivingBridgeRouteSnapshot replacement = snapshot("minecraft:?", 17L);
+
+        assertArrayEquals(malformed.canonicalBytes(), replacement.canonicalBytes());
+        assertFalse(malformed.exactlyEquals(replacement));
+        assertFalse(malformed.exactlyEquals(null));
+    }
+
+    @Test
+    void persistedSnapshotRejectsContentWithAStaleDigest() {
+        LivingBridgeRouteSnapshot source = snapshot("minecraft:overworld", 17L);
+        CompoundTag altered = source.toTag();
+        altered.putLong("routeRevision", source.routeRevision() + 1L);
+
+        assertThrows(IllegalArgumentException.class, () -> LivingBridgeRouteSnapshot.fromTag(altered));
+    }
+
+    @Test
+    void fullTransitionJournalAllowsOwnerUpdatesButRejectsNewReservations() {
+        CompoundTag root = new CompoundTag();
+        root.putInt("schema", LivingBridgeRouteData.CURRENT_SCHEMA);
+        ListTag journal = new ListTag();
+        UUID existingReservation = null;
+        for (int index = 0; index < 512; index++) {
+            UUID reservationId = new UUID(0L, index + 1L);
+            CompoundTag row = new CompoundTag();
+            row.putUUID("reservationId", reservationId);
+            journal.add(row);
+            if (index == 0) existingReservation = reservationId;
+        }
+        root.put("transitionJournal", journal);
+
+        LivingBridgeRouteData data = LivingBridgeRouteData.load(root);
+
+        assertTrue(data.canWriteJournalRow(existingReservation));
+        assertFalse(data.canWriteJournalRow(new UUID(1L, 1L)));
+
+        CompoundTag belowLimit = new CompoundTag();
+        belowLimit.putInt("schema", LivingBridgeRouteData.CURRENT_SCHEMA);
+        ListTag belowLimitJournal = new ListTag();
+        for (int index = 0; index < 511; index++) {
+            CompoundTag row = new CompoundTag();
+            row.putUUID("reservationId", new UUID(0L, index + 1L));
+            belowLimitJournal.add(row);
+        }
+        belowLimit.put("transitionJournal", belowLimitJournal);
+        assertTrue(LivingBridgeRouteData.load(belowLimit).canWriteJournalRow(new UUID(1L, 1L)));
     }
 
     @Test
@@ -92,6 +144,9 @@ class LivingBridgeRoutePersistenceTest {
                 LivingBridgeRouteData.compareCopies(from, to, journal));
         assertEquals(LivingBridgeRouteData.CopyAgreement.DIVERGENCE,
                 LivingBridgeRouteData.compareCopies(from, snapshot("minecraft:overworld", 19L), journal));
+        journal.putString("toDigest", from.digest());
+        assertEquals(LivingBridgeRouteData.CopyAgreement.DIVERGENCE,
+                LivingBridgeRouteData.compareCopies(from, to, journal));
         LivingBridgeRouteData data = LivingBridgeRouteData.load(new CompoundTag());
         data.quarantine("JOURNALED_ADJACENT_UNION_LANE", from.toTag(), to.toTag(), from.dimension());
         assertTrue(data.admissionBlocked(from.dimension()));

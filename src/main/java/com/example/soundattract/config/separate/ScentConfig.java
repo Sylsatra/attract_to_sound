@@ -69,7 +69,7 @@ public class ScentConfig {
         ENABLE_SCENT_SYSTEM = BUILDER.comment("Enable the scent tracking system for mobs.")
                 .define("enableScentSystem", true);
 
-        SCENT_ELIGIBLE_MOBS = BUILDER.comment("List of mobs that can smell and track scent trails.")
+        SCENT_ELIGIBLE_MOBS = BUILDER.comment("List of mobs that can smell and track scent trails. Flying edge scouts must be included to follow trails after a swoop.")
                 .defineList("scentEligibleMobs", Arrays.asList("minecraft:zombie", "minecraft:husk", "minecraft:drowned", "minecraft:wolf"), obj -> obj instanceof String);
 
         ENABLE_SCENT_PARTICLES = BUILDER.comment("Render debug particles for scent nodes (debug only, one-shot).")

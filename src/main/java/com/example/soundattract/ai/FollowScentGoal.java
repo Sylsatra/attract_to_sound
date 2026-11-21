@@ -12,17 +12,19 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.PathfinderMob;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.level.pathfinder.Path;
 import net.minecraft.world.phys.Vec3;
 import com.example.soundattract.ai.BlockBreakerManager;
 import com.example.soundattract.ai.BlockBreakerPosGoal;
 
-import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.WeakHashMap;
 
 public class FollowScentGoal extends Goal {
     private final PathfinderMob mob;
@@ -38,8 +40,12 @@ public class FollowScentGoal extends Goal {
     private BlockBreakerPosGoal blockBreakerGoal = null;
 
     private long pathfindingCooldownTo;
-    private static long lastScanTick = -1;
-    private static int scansThisTick = 0;
+    private static final Map<net.minecraft.world.level.Level, ScanBudget> SCAN_BUDGETS = new WeakHashMap<>();
+
+    private static final class ScanBudget {
+        long tick = Long.MIN_VALUE;
+        int used;
+    }
 
     public FollowScentGoal(PathfinderMob mob) {
         this.mob = mob;
@@ -78,20 +84,25 @@ public class FollowScentGoal extends Goal {
 
         if (mob.getTarget() != null && mob.getTarget().isAlive()) return false;
 
-        if (currentTime != lastScanTick) {
-            lastScanTick = currentTime;
-            scansThisTick = 0;
-        }
+        if (!tryConsumeScentScanBudget(mob)) return false;
 
-        if (scansThisTick >= SoundAttractConfig.COMMON.scentScanBudgetPerTick.get()) {
-            return false;
-        }
+        return findScentTrail();
+    }
 
-        boolean found = findScentTrail();
-        if (found) {
-            scansThisTick++;
+    public static boolean tryConsumeScentScanBudget(Mob mob) {
+        if (mob == null || mob.level().isClientSide()) return false;
+        net.minecraft.server.MinecraftServer server = mob.level().getServer();
+        if (server != null && !server.isSameThread()) return false;
+        long currentTime = mob.level().getGameTime();
+        ScanBudget budget = SCAN_BUDGETS.computeIfAbsent(mob.level(), ignored -> new ScanBudget());
+        if (budget.tick != currentTime) {
+            budget.tick = currentTime;
+            budget.used = 0;
         }
-        return found;
+        if (budget.used >= SoundAttractConfig.COMMON.scentScanBudgetPerTick.get()) return false;
+        if (!CueScanBudget.tryAcquire(mob)) return false;
+        budget.used++;
+        return true;
     }
 
     @Override
@@ -205,16 +216,22 @@ public class FollowScentGoal extends Goal {
         long currentTime = mob.level().getGameTime();
         long maxDuration = SoundAttractConfig.COMMON.scentNodeDurationTicks.get();
 
-        return nodes.stream()
-            .filter(n -> n.getOwnerUUID().equals(targetScentOwner))
-            .filter(n -> (currentTime - n.getTimestamp()) <= maxDuration)
-            .max(Comparator.comparingLong(ScentNode::getTimestamp))
-            .orElse(null);
+        ScentNode freshestNode = null;
+        for (ScentNode node : nodes) {
+            if (!Objects.equals(node.getOwnerUUID(), targetScentOwner)
+                    || currentTime - node.getTimestamp() > maxDuration) continue;
+            if (freshestNode == null || node.getTimestamp() > freshestNode.getTimestamp()) {
+                freshestNode = node;
+            }
+        }
+        return freshestNode;
     }
 
     @Override
     public void stop() {
         this.targetPos = null;
+        this.targetScentOwner = null;
+        this.lastScentTime = 0L;
         this.ambushTimer = 0;
         this.isAmbushing = false;
         this.stuckTicks = 0;
@@ -282,44 +299,59 @@ public class FollowScentGoal extends Goal {
 
         long currentTime = mob.level().getGameTime();
         long maxDuration = SoundAttractConfig.COMMON.scentNodeDurationTicks.get();
+        double radius = SoundAttractConfig.COMMON.scentDetectionRadius.get();
+        double radiusSq = radius * radius;
+        Vec3 mobPosition = mob.position();
 
         if (targetScentOwner == null) {
-
-            ScentNode freshestNode = nodes.stream()
-                .filter(n -> (currentTime - n.getTimestamp()) <= maxDuration)
-                .filter(n -> n.getOwnerUUID() != null)
-                .max(Comparator.comparingDouble(n -> n.getTimestamp() * getSourceTypeWeightMultiplier(n.getSourceType())))
-                .orElse(null);
+            ScentNode freshestNode = null;
+            double freshestScore = Double.NEGATIVE_INFINITY;
+            for (ScentNode node : nodes) {
+                long timestamp = node.getTimestamp();
+                if (currentTime - timestamp > maxDuration || node.getOwnerUUID() == null
+                        || !(node.getPosition().distanceToSqr(mobPosition) <= radiusSq)) continue;
+                double score = timestamp * getSourceTypeWeightMultiplier(node.getSourceType());
+                if (freshestNode == null || Double.compare(score, freshestScore) > 0) {
+                    freshestNode = node;
+                    freshestScore = score;
+                }
+            }
 
             if (freshestNode == null) return false;
 
             this.targetScentOwner = freshestNode.getOwnerUUID();
 
-
-            ScentNode startNode = nodes.stream()
-                .filter(n -> n.getOwnerUUID() != null)
-                .filter(n -> n.getOwnerUUID().equals(targetScentOwner))
-                .filter(n -> (currentTime - n.getTimestamp()) <= maxDuration)
-                .min(Comparator.comparingDouble(n -> n.getPosition().distanceToSqr(mob.position())))
-                .orElse(freshestNode);
+            ScentNode startNode = null;
+            double closestDistanceSq = Double.POSITIVE_INFINITY;
+            for (ScentNode node : nodes) {
+                if (!targetScentOwner.equals(node.getOwnerUUID())
+                        || currentTime - node.getTimestamp() > maxDuration) continue;
+                double distanceSq = node.getPosition().distanceToSqr(mobPosition);
+                if (distanceSq <= radiusSq && (startNode == null || Double.compare(distanceSq, closestDistanceSq) < 0)) {
+                    startNode = node;
+                    closestDistanceSq = distanceSq;
+                }
+            }
+            if (startNode == null) startNode = freshestNode;
 
             this.targetPos = startNode.getPosition();
             this.lastScentTime = startNode.getTimestamp();
+            reportSelectedScoutNode(startNode);
             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
                 SoundAttractMod.LOGGER.info("[FollowScentGoal] Mob {} acquired INITIAL scent trail for owner {} at {}.",
                     mob.getName().getString(), targetScentOwner, targetPos);
             }
             return true;
         } else {
-
-
-            ScentNode nextNode = nodes.stream()
-                .filter(n -> n.getOwnerUUID() != null)
-                .filter(n -> n.getOwnerUUID().equals(targetScentOwner))
-                .filter(n -> (currentTime - n.getTimestamp()) <= maxDuration)
-                .filter(n -> n.getTimestamp() > lastScentTime)
-                .min(Comparator.comparingLong(ScentNode::getTimestamp))
-                .orElse(null);
+            ScentNode nextNode = null;
+            for (ScentNode node : nodes) {
+                long timestamp = node.getTimestamp();
+                if (!targetScentOwner.equals(node.getOwnerUUID()) || currentTime - timestamp > maxDuration
+                        || timestamp <= lastScentTime || !(node.getPosition().distanceToSqr(mobPosition) <= radiusSq)) continue;
+                if (nextNode == null || timestamp < nextNode.getTimestamp()) {
+                    nextNode = node;
+                }
+            }
 
             if (nextNode != null) {
                 if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
@@ -328,11 +360,20 @@ public class FollowScentGoal extends Goal {
                 }
                 this.targetPos = nextNode.getPosition();
                 this.lastScentTime = nextNode.getTimestamp();
+                reportSelectedScoutNode(nextNode);
                 return true;
             }
         }
 
         return false;
+    }
+
+    private void reportSelectedScoutNode(ScentNode node) {
+        if (SoundAttractConfig.COMMON.enableSecondBrain.get()
+                && SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()
+                && MobGroupManager.isEdgeMob(mob)) {
+            ClueDirector.reportScoutScent(mob, node);
+        }
     }
 
     private static double getSourceTypeWeightMultiplier(ScentSourceType type) {

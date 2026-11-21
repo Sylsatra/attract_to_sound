@@ -29,6 +29,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.core.BlockPos;
@@ -103,6 +104,17 @@ public final class LivingWallCoordinator {
     private static final int CAPTURE_RETRY_COOLDOWN_TICKS = 10;
     private static final int ORPHAN_FREEZE_CLEANUP_INTERVAL_TICKS = 20;
     private static final int ORPHAN_FREEZE_CLEANUP_BUDGET = 16;
+    private static final int DURABLE_RECOVERY_BUDGET_PER_TICK = 4;
+    private static final int[][] ORPHAN_LANDING_OFFSETS = {
+            {0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1},
+            {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
+    };
+    private static final int[][] ORPHAN_REPLAN_LANDING_OFFSETS = {
+            {0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1},
+            {2, 0}, {-2, 0}, {0, 2}, {0, -2},
+            {2, 1}, {2, -1}, {-2, 1}, {-2, -1}, {1, 2}, {-1, 2}, {1, -2}, {-1, -2},
+            {2, 2}, {2, -2}, {-2, 2}, {-2, -2}
+    };
     private static final int ROSTER_REFRESH_INTERVAL_TICKS = 10;
     private static final int ROSTER_REFRESH_QUOTA = 4;
     private static final double RECRUITER_PROGRESS_EPSILON_SQR = 0.25D;
@@ -114,6 +126,8 @@ public final class LivingWallCoordinator {
     private static final int MAX_EXTERIOR_LANDING_DISTANCE = 12;
     private static final int MAX_EXTERIOR_LANDING_HEIGHT = 8;
     private static final int MAX_EXTERIOR_LANDING_CANDIDATES = 128;
+    private static final int MAX_TARGET_LANDING_CACHE_ENTRIES = 512;
+    private static final int MAX_TARGET_ROUTE_LEG_CACHE_ENTRIES = 256;
     private static final int TARGET_ROUTE_PROBE_LIMIT = 16;
     private static final int FORMATION_ROUTE_PROBE_LIMIT = 3;
     private static final int TARGET_ROUTE_NODE_LIMIT = 64;
@@ -318,6 +332,13 @@ public final class LivingWallCoordinator {
         final Map<UUID, UUID> mobOwners = new HashMap<>();
         final Map<Long, UUID> footprintOwners = new HashMap<>();
         final ArrayDeque<UUID> serviceRing = new ArrayDeque<>();
+        final ArrayDeque<UUID> pendingDurableRecoveries = new ArrayDeque<>();
+        final Set<UUID> pendingDurableRecoveryIds = new HashSet<>();
+        final Map<UUID, Long> durableRecoveryRetryAfter = new HashMap<>();
+        final Map<UUID, Long> durableRecoveryStepTick = new HashMap<>();
+        int durableRecoveryWorkRemaining;
+        boolean disabledCleanupDone;
+        final LinkedHashMap<UUID, PendingCombatHandoff> pendingCombatHandoffs = new LinkedHashMap<>();
         final Map<ExactSiteKey, Long> terrainRejections = new HashMap<>();
         final Map<Long, Long> contentionCooldowns = new HashMap<>();
         final LinkedHashMap<ConstructionRequestKey, Long> requestRevisions = new LinkedHashMap<>();
@@ -354,6 +375,10 @@ public final class LivingWallCoordinator {
         int livingWallDiagnosticBudget;
         int livingWallDiagnosticScanBudget;
         int livingWallDiagnosticSuppressed;
+        long targetScanMetricWindowStartTick = -1L;
+        long targetScanCacheValidationNanos;
+        int targetScanCacheChecks;
+        int targetScanCacheHits;
         int buildGateAttempts;
         final Map<String, Integer> buildGateRejections = new HashMap<>();
         final Map<String, Integer> decisionCounters = new HashMap<>();
@@ -862,7 +887,7 @@ public final class LivingWallCoordinator {
             Mob candidate = slot == formation.members.size() ? mob : getMob(level, formation.members.get(slot));
             Vec3 target = formationSlotPosition(formation, slot, 0.0D);
             if (candidate == null || !candidate.isAlive() || candidate.isRemoved()
-                    || !hasFoundationTerrainSupport(level, target)) {
+                    || !hasFoundationTerrainSupport(level, candidate, target)) {
                 if (assignment.state == MobTicketState.ASSEMBLED) {
                     restoreFoundationWorkerState(formation, mob, assignment);
                 }
@@ -873,11 +898,39 @@ public final class LivingWallCoordinator {
     }
 
     private static boolean hasFoundationTerrainSupport(ServerLevel level, Vec3 target) {
-        if (level == null || target == null) return false;
-        BlockPos feet = BlockPos.containing(target);
-        BlockPos support = feet.below();
-        return level.isLoaded(feet) && level.isLoaded(support)
-                && !level.getBlockState(support).getCollisionShape(level, support).isEmpty();
+        return hasFoundationTerrainSupport(level, target, 0.3D);
+    }
+
+    private static boolean hasFoundationTerrainSupport(ServerLevel level, Mob mob, Vec3 target) {
+        return hasFoundationTerrainSupport(level, target, mob == null ? 0.3D : mob.getBbWidth() * 0.5D);
+    }
+
+    private static boolean hasFoundationTerrainSupport(ServerLevel level, Vec3 target, double halfWidth) {
+        if (level == null || target == null || !Double.isFinite(halfWidth) || halfWidth < 0.0D) return false;
+        int minX = Mth.floor(target.x - halfWidth + OVERLAP_EPSILON);
+        int maxX = Mth.floor(target.x + halfWidth - OVERLAP_EPSILON);
+        int minZ = Mth.floor(target.z - halfWidth + OVERLAP_EPSILON);
+        int maxZ = Mth.floor(target.z + halfWidth - OVERLAP_EPSILON);
+        int feetY = Mth.floor(target.y);
+        for (int y = feetY; y >= feetY - 1; y--) {
+            for (int x = minX; x <= maxX; x++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    BlockPos support = new BlockPos(x, y, z);
+                    if (!level.isLoaded(support)) continue;
+                    var shape = level.getBlockState(support).getCollisionShape(level, support);
+                    for (AABB localBounds : shape.toAabbs()) {
+                        AABB worldBounds = localBounds.move(support);
+                        double overlapX = Math.min(target.x + halfWidth, worldBounds.maxX)
+                                - Math.max(target.x - halfWidth, worldBounds.minX);
+                        double overlapZ = Math.min(target.z + halfWidth, worldBounds.maxZ)
+                                - Math.max(target.z - halfWidth, worldBounds.minZ);
+                        if (Math.abs(worldBounds.maxY - target.y) <= CONTACT_EPSILON
+                                && overlapX > OVERLAP_EPSILON && overlapZ > OVERLAP_EPSILON) return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private static boolean isLiveAttachedIntent(PerLevelState state, ConstructionIntent intent) {
@@ -919,10 +972,18 @@ public final class LivingWallCoordinator {
         final long revision;
         final long rosterFingerprint;
         final long terrainFingerprint;
+        final long[] terrainCells;
 
         CachedTargetScan(List<WallProfileScanner.TargetEvidence> evidence, List<SelectedTargetEvidence> selectedEvidence,
                          long captureTick, long expiresAt, int cursor, long lastRefineTick, long revision,
                          long rosterFingerprint, long terrainFingerprint) {
+            this(evidence, selectedEvidence, captureTick, expiresAt, cursor, lastRefineTick, revision,
+                    rosterFingerprint, terrainFingerprint, targetTerrainCells(selectedEvidence));
+        }
+
+        CachedTargetScan(List<WallProfileScanner.TargetEvidence> evidence, List<SelectedTargetEvidence> selectedEvidence,
+                         long captureTick, long expiresAt, int cursor, long lastRefineTick, long revision,
+                         long rosterFingerprint, long terrainFingerprint, long[] terrainCells) {
             this.evidence = List.copyOf(evidence);
             this.selectedEvidence = List.copyOf(selectedEvidence);
             this.captureTick = captureTick;
@@ -932,6 +993,7 @@ public final class LivingWallCoordinator {
             this.revision = revision;
             this.rosterFingerprint = rosterFingerprint;
             this.terrainFingerprint = terrainFingerprint;
+            this.terrainCells = terrainCells == null ? new long[0] : terrainCells.clone();
         }
 
         CachedTargetScan(List<WallProfileScanner.TargetEvidence> evidence,
@@ -947,29 +1009,38 @@ public final class LivingWallCoordinator {
     }
 
     private record ScoredTarget(WallProfileScanner.TargetEvidence evidence, CanonicalFeetCorridor corridor,
-                                LivingWallBridgeAdapterPlanner.ScoredCandidate scoredCandidate) {
-        double score() {
-            return scoredCandidate == null ? Double.POSITIVE_INFINITY : scoredCandidate.scoreBp();
-        }
+                                LivingWallBridgeAdapterPlanner.ScoredCandidate scoredCandidate, int buildingSpotScore) {
     }
 
     private record TargetLandingSelection(BlockPos landing, CanonicalCorridorDecision decision) {
     }
 
-    private static boolean isValidCachedTargetScan(ServerLevel level, List<Mob> cluster, BlockPos threat,
-                                                   long now, long generation, TargetScanKey key,
+    private record RouteProbeWorker(Mob mob, int groundedTicks) {
+    }
+
+    private record RouteProbeContext(LivingBridgePositionPlan positionPlan, List<RouteProbeWorker> eligibleWorkers) {
+        RouteProbeContext {
+            eligibleWorkers = List.copyOf(eligibleWorkers);
+        }
+    }
+
+    private record PendingCombatHandoff(UUID targetId, BlockPos targetPosition, long expiresAt) {
+    }
+
+    private static boolean isValidCachedTargetScan(ServerLevel level, List<Mob> cluster, long rosterFingerprint,
+                                                   BlockPos threat, long now, long generation, TargetScanKey key,
                                                    CachedTargetScan cached) {
         if (level == null || cluster == null || cluster.isEmpty() || threat == null || key == null || cached == null) {
             return false;
         }
         if (cached.expiresAt <= now || cached.revision < 0L || cached.captureTick < 0L) return false;
         if (cached.evidence.isEmpty() && cached.selectedEvidence.isEmpty()) {
-            return cached.rosterFingerprint == targetRosterFingerprint(cluster);
+            return cached.rosterFingerprint == rosterFingerprint;
         }
         if (cached.evidence.isEmpty() || cached.selectedEvidence.isEmpty()) return false;
         if (cached.selectedEvidence.size() != cached.evidence.size()) return false;
-        if (cached.rosterFingerprint != targetRosterFingerprint(cluster)
-                || cached.terrainFingerprint != targetTerrainFingerprint(level, cached.selectedEvidence)) return false;
+        if (cached.rosterFingerprint != rosterFingerprint
+                || cached.terrainFingerprint != targetTerrainFingerprint(level, cached.terrainCells)) return false;
         for (int index = 0; index < cached.evidence.size(); index++) {
             WallProfileScanner.TargetEvidence evidence = cached.evidence.get(index);
             SelectedTargetEvidence selected = cached.selectedEvidence.get(index);
@@ -983,46 +1054,107 @@ public final class LivingWallCoordinator {
         return cached.targets().size() == cached.evidence.size();
     }
 
+    private static List<UUID> targetRosterIdentity(List<Mob> cluster) {
+        if (cluster == null || cluster.isEmpty()) return List.of();
+        List<UUID> roster = new ArrayList<>(cluster.size());
+        for (Mob mob : cluster) if (mob != null) roster.add(mob.getUUID());
+        roster.sort(Comparator.naturalOrder());
+        return List.copyOf(roster);
+    }
+
     private static long targetRosterFingerprint(List<Mob> cluster) {
+        return fingerprintTargetRoster(targetRosterIdentity(cluster));
+    }
+
+    private static long fingerprintTargetRoster(List<UUID> roster) {
         long hash = 0xcbf29ce484222325L;
-        if (cluster == null) return hash;
-        for (Mob mob : cluster.stream().filter(Objects::nonNull)
-                .sorted(Comparator.comparing(mob -> mob.getUUID().toString())).toList()) {
-            hash ^= mob.getUUID().getMostSignificantBits();
+        if (roster == null) return hash;
+        for (UUID id : roster) {
+            hash ^= id.getMostSignificantBits();
             hash *= 0x100000001b3L;
-            hash ^= mob.getUUID().getLeastSignificantBits();
+            hash ^= id.getLeastSignificantBits();
             hash *= 0x100000001b3L;
         }
         return hash;
     }
 
-    private static long targetTerrainFingerprint(ServerLevel level, List<SelectedTargetEvidence> selected) {
-        long hash = 0xcbf29ce484222325L;
-        if (level == null || selected == null) return hash;
+    private static RouteProbeContext createRouteProbeContext(ServerLevel level, List<Mob> cluster) {
+        PerLevelState levelState = state(level);
+        LivingBridgePositionPlan positionPlan = levelState.positionPlans.get(targetRosterFingerprint(cluster));
+        List<RouteProbeWorker> eligibleWorkers = new ArrayList<>();
+        for (Mob mob : cluster) {
+            if (mob == null || !mob.isAlive() || mob.isRemoved() || !isEligible(mob)) continue;
+            GroundingObservation grounding = levelState.groundingObservations.get(mob.getUUID());
+            eligibleWorkers.add(new RouteProbeWorker(mob, grounding == null ? -1 : grounding.groundedTicks()));
+        }
+        return new RouteProbeContext(positionPlan, eligibleWorkers);
+    }
+
+    private static List<RouteProbeWorker> nearestRouteProbeWorkers(RouteProbeContext context, BlockPos target) {
+        int limit = Math.min(TARGET_ROUTE_PROBE_LIMIT, context.eligibleWorkers().size());
+        List<RouteProbeWorker> nearest = new ArrayList<>(limit);
+        for (RouteProbeWorker candidate : context.eligibleWorkers()) {
+            int insertion = 0;
+            while (insertion < nearest.size()
+                    && compareRouteProbeWorkers(context, nearest.get(insertion), candidate, target) <= 0) {
+                insertion++;
+            }
+            if (insertion >= limit) continue;
+            nearest.add(insertion, candidate);
+            if (nearest.size() > limit) nearest.remove(nearest.size() - 1);
+        }
+        return nearest;
+    }
+
+    private static int compareRouteProbeWorkers(RouteProbeContext context, RouteProbeWorker first,
+                                                RouteProbeWorker second, BlockPos target) {
+        int firstPriority = context.positionPlan() == null || first.groundedTicks() >= 2 ? 0 : 1;
+        int secondPriority = context.positionPlan() == null || second.groundedTicks() >= 2 ? 0 : 1;
+        int priorityOrder = Integer.compare(firstPriority, secondPriority);
+        if (priorityOrder != 0) return priorityOrder;
+        return Double.compare(first.mob().distanceToSqr(Vec3.atBottomCenterOf(target)),
+                second.mob().distanceToSqr(Vec3.atBottomCenterOf(target)));
+    }
+
+    private static long[] targetTerrainCells(List<SelectedTargetEvidence> selected) {
+        if (selected == null || selected.isEmpty()) return new long[0];
+        Set<BlockPos> cells = new LinkedHashSet<>();
         for (SelectedTargetEvidence selection : selected) {
             if (selection == null || selection.evidence() == null || selection.corridor() == null) continue;
             WallProfileScanner.TargetEvidence evidence = selection.evidence();
-            Set<BlockPos> cells = new LinkedHashSet<>(evidence.structuralCells());
+            cells.addAll(evidence.structuralCells());
             cells.addAll(evidence.hazardCells());
             cells.add(evidence.anchor());
             cells.add(evidence.wallFace());
             cells.add(evidence.supportCell());
             cells.addAll(selection.corridor().centerlineCells());
+        }
+        Set<BlockPos> expanded = new LinkedHashSet<>();
+        for (BlockPos cell : cells) {
+            if (cell == null) continue;
+            for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++)
+                for (int dz = -1; dz <= 1; dz++) expanded.add(cell.offset(dx, dy, dz));
+        }
+        cells.addAll(expanded);
+        long[] positions = new long[cells.size()];
+        int index = 0;
+        for (BlockPos cell : cells) positions[index++] = cell.asLong();
+        return positions;
+    }
 
-            Set<BlockPos> expanded = new LinkedHashSet<>();
-            for (BlockPos cell : cells) {
-                if (cell == null) continue;
-                for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++)
-                    for (int dz = -1; dz <= 1; dz++) expanded.add(cell.offset(dx, dy, dz));
-            }
-            cells.addAll(expanded);
-            for (BlockPos cell : cells) {
-                if (cell == null) continue;
-                hash ^= cell.asLong();
-                hash *= 0x100000001b3L;
-                hash ^= liveStateFingerprintHash(level, cell);
-                hash *= 0x100000001b3L;
-            }
+    private static long targetTerrainFingerprint(ServerLevel level, List<SelectedTargetEvidence> selected) {
+        return targetTerrainFingerprint(level, targetTerrainCells(selected));
+    }
+
+    private static long targetTerrainFingerprint(ServerLevel level, long[] cells) {
+        long hash = 0xcbf29ce484222325L;
+        if (level == null || cells == null) return hash;
+        for (long packed : cells) {
+            BlockPos cell = BlockPos.of(packed);
+            hash ^= packed;
+            hash *= 0x100000001b3L;
+            hash ^= liveStateFingerprintHash(level, cell);
+            hash *= 0x100000001b3L;
         }
         return hash;
     }
@@ -1079,6 +1211,7 @@ public final class LivingWallCoordinator {
         int eligibleCandidates;
         int groundedCandidates;
         int deferredCandidates;
+        boolean budgetDeferred;
         String routeMode;
         String failureReason;
         String workerFailureReason;
@@ -1195,7 +1328,7 @@ public final class LivingWallCoordinator {
         }
         if (candidate == null) rejection = CanonicalCorridorRejectionCategory.NULL_ANCHOR;
         ConstructionScenario scenario = candidate == null ? ConstructionScenario.NONE
-                : classifyCanonicalScenario(level, sourcePivot, candidate, new LinkedHashSet<>(carriedRayHazards(ray, sourcePivot, candidate)));
+                : classifyCanonicalScenario(level, sourcePivot, candidate);
         WallProfileScanner.TargetEvidence evidence = candidate == null ? null
                 : buildTargetEvidence(level, Vec3.atBottomCenterOf(sourcePivot), threatDestination, ray, candidate, structuralCell, scenario, 0.0D);
         CanonicalFeetCorridor corridor = evidence == null ? null
@@ -1577,6 +1710,7 @@ public final class LivingWallCoordinator {
         final Set<UUID> recruitmentArrivalReports = new HashSet<>();
         final Map<PathSurveyKey, PathSurvey> pathSurveys = new HashMap<>();
         final Map<RecruitmentRouteKey, RecruitmentRouteSurvey> recruitmentRoutes = new HashMap<>();
+        final Set<UUID> deferredRecruitmentRouteProbes = new HashSet<>();
         final Map<UUID, Long> recruitmentBlacklist = new HashMap<>();
         final Map<RouteProbeOwner, RouteProbeReservation> routeProbeLedger = new EnumMap<>(RouteProbeOwner.class);
         final Map<UUID, Boolean> originalGravity = new HashMap<>();
@@ -1844,6 +1978,10 @@ public final class LivingWallCoordinator {
         int landingWatchdogTicks;
         int stuckTicks;
         BlockPos handoffGoal;
+        int dismountExitSlot = -1;
+        Vec3 dismountBridgeWaypoint;
+        Vec3 dismountWaypoint;
+        boolean dismountBridgeReached;
 
         CrosserTransit(UUID mobId, IntakeWindow intakeWindow) {
             this.mobId = mobId;
@@ -2156,12 +2294,20 @@ public final class LivingWallCoordinator {
     }
 
     static Vec3 getBridgeWorkTarget(Mob mob) {
-        Vec3 evacuation = getBasinEvacuationTarget(mob);
+        if (mob == null || !(mob.level() instanceof ServerLevel level)) return null;
+        PerLevelState state = LEVELS.get(level.dimension().location());
+        if (state == null) return null;
+        UUID mobId = mob.getUUID();
+        Vec3 evacuation = getBasinEvacuationTarget(level, state, mob, mobId);
         if (evacuation != null) return evacuation;
-        Vec3 crosser = getCrosserTarget(mob);
+        UUID formationId = state.mobOwners.get(mobId);
+        if (formationId == null) return null;
+        Formation formation = state.formations.get(formationId);
+        if (formation == null) return null;
+        Vec3 crosser = getCrosserTarget(level, formation, mob, mobId);
         if (crosser != null) return crosser;
-        Vec3 recruitment = getRecruitmentTarget(mob);
-        return recruitment != null ? recruitment : getCandidateHoldingTarget(mob);
+        Vec3 recruitment = getRecruitmentTarget(level, formation, mob, mobId);
+        return recruitment != null ? recruitment : getCandidateHoldingTarget(level, formation, mob, mobId);
     }
 
     static Vec3 getCrosserApproachTarget(Mob mob) {
@@ -2172,11 +2318,14 @@ public final class LivingWallCoordinator {
         if (mob == null || !(mob.level() instanceof ServerLevel level)) return null;
         PerLevelState state = LEVELS.get(level.dimension().location());
         if (state == null) return null;
-        UUID formationId = state.mobOwners.get(mob.getUUID());
-        if (formationId == null) return null;
-        Formation formation = state.formations.get(formationId);
-        if (formation == null) return null;
-        CrosserTransit transit = formation.crosserTransit.get(mob.getUUID());
+        UUID mobId = mob.getUUID();
+        Formation formation = getFormation(state, mobId);
+        return getCrosserTarget(level, formation, mob, mobId);
+    }
+
+    private static Vec3 getCrosserTarget(ServerLevel level, Formation formation, Mob mob, UUID mobId) {
+        if (level == null || formation == null || mob == null || mobId == null) return null;
+        CrosserTransit transit = formation.crosserTransit.get(mobId);
         if (transit == null) return null;
         switch (transit.state) {
             case APPROACH_ENTRY -> {
@@ -2195,15 +2344,11 @@ public final class LivingWallCoordinator {
             }
             case CAPTURE_ENTRY -> {
                 CrosserWaypoint waypoint = walkwayWaypoint(level, formation, mob, 0);
-                if (waypoint.valid() && waypoint.position() != null) return waypoint.position();
-                Vec3 station = slotPosition(formation, 0);
-                return new Vec3(station.x, station.y + 1.85D, station.z);
+                return waypoint.valid() ? waypoint.position() : null;
             }
             case TRAVERSE -> {
                 CrosserWaypoint waypoint = walkwayWaypoint(level, formation, mob, transit.slot);
-                if (waypoint.valid() && waypoint.position() != null) return waypoint.position();
-                Vec3 station = slotPosition(formation, transit.slot);
-                return new Vec3(station.x, station.y + 1.85D, station.z);
+                return waypoint.valid() ? waypoint.position() : null;
             }
             case DISMOUNT -> {
                 if (transit.handoffGoal != null) return Vec3.atCenterOf(transit.handoffGoal);
@@ -2220,12 +2365,17 @@ public final class LivingWallCoordinator {
         if (mob == null || !(mob.level() instanceof ServerLevel level)) return null;
         PerLevelState state = LEVELS.get(level.dimension().location());
         if (state == null) return null;
-        BasinEvacuation evacuation = state.basinEvacuations.get(mob.getUUID());
+        return getBasinEvacuationTarget(level, state, mob, mob.getUUID());
+    }
+
+    private static Vec3 getBasinEvacuationTarget(ServerLevel level, PerLevelState state, Mob mob, UUID mobId) {
+        if (level == null || state == null || mob == null || mobId == null) return null;
+        BasinEvacuation evacuation = state.basinEvacuations.get(mobId);
         if (evacuation == null) return null;
         long now = level.getGameTime();
 
         if (now > evacuation.expiresTick()) {
-            state.basinEvacuations.remove(mob.getUUID());
+            state.basinEvacuations.remove(mobId);
             return null;
         }
 
@@ -2246,7 +2396,7 @@ public final class LivingWallCoordinator {
                         && !com.example.soundattract.pathfinding.HazardClassifier.isDangerous(level, mob, relay)
                         && level.canSeeSky(relayPos)) {
                     Vec3 relayVec = Vec3.atBottomCenterOf(relayPos);
-                    state.basinEvacuations.put(mob.getUUID(),
+                    state.basinEvacuations.put(mobId,
                             new BasinEvacuation(relayVec, evacuation.threatPos(), evacuation.expiresTick()));
                     return relayVec;
                 }
@@ -2367,12 +2517,31 @@ public final class LivingWallCoordinator {
     }
 
     static void tickBridgeWork(Mob mob, Vec3 target) {
+        tickBridgeWork(mob, target, false);
+    }
+
+    static void tickBridgeWork(Mob mob, Vec3 target, boolean holdForBlockClear) {
         Formation activeFormation = getFormation(mob);
         if (activeFormation != null && activeFormation.crosserTransit.containsKey(mob.getUUID())) {
             return;
         }
         boolean atIntake = isAtRecruitmentIntake(mob);
         reportRecruitmentGoalTick(mob, target, atIntake);
+        if (holdForBlockClear) {
+            LivingEntity combatTarget = mob.getTarget();
+            MobTicket ticket = activeFormation == null ? null : activeFormation.mobTickets.get(mob.getUUID());
+            boolean ownsControlledSuction = ticket != null && ticket.state == MobTicketState.SUCTIONING;
+            if (hasValidCombatPreemption(mob) && !ownsControlledSuction) {
+                reportCombatPreemption(mob);
+                return;
+            }
+            if (combatTarget != null) {
+                if (mob.level() instanceof ServerLevel serverLevel) recordCombatThreat(serverLevel, combatTarget);
+                mob.setTarget(null);
+            }
+            mob.setAggressive(false);
+            return;
+        }
         if (shouldUseAssemblyStaging(mob)) {
             if (tryControlledAssemblyStaging(mob, target)) {
                 reportRecruitmentArrival(mob);
@@ -2420,7 +2589,8 @@ public final class LivingWallCoordinator {
             if (!navCooldown && (mob.getNavigation().isDone() || ((mob.tickCount + mob.getId()) % 20 == 0 && (mob.getNavigation().getTargetPos() == null
                     || mob.getNavigation().getTargetPos().distToCenterSqr(target) > 4.0D)))) {
                 reportNavigationSubmitted(mob, target);
-                boolean accepted = com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, target, 1.0D);
+                boolean accepted = com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(
+                        mob, target, 1.0D, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED);
                 reportNavigationResult(mob, target, accepted);
                 if (!accepted && mob.getNavigation().isDone()) reportBridgePathFailure(mob);
             }
@@ -2436,7 +2606,8 @@ public final class LivingWallCoordinator {
         }
         if (shouldSubmitRecruiterPath(mob)) {
             reportNavigationSubmitted(mob, target);
-            boolean accepted = com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, target, 0.75D);
+            boolean accepted = com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(
+                    mob, target, 0.75D, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED);
             reportNavigationResult(mob, target, accepted);
             if (!accepted && distSq > 4.0D) reportBridgePathFailure(mob);
         }
@@ -2448,6 +2619,16 @@ public final class LivingWallCoordinator {
 
     public static boolean isBridgeOwnedByCurrentFormation(Mob mob) {
         return isControlled(mob);
+    }
+
+    public static boolean hasCommittedNavigationWork(Mob mob) {
+        Formation formation = getFormation(mob);
+        if (formation == null || mob == null) return false;
+        MobTicket ticket = formation.mobTickets.get(mob.getUUID());
+        return formation.members.contains(mob.getUUID())
+                || formation.pendingBuilderIds.contains(mob.getUUID())
+                || formation.transitCrosserIds.contains(mob.getUUID())
+                || ticket != null && ticket.state != MobTicketState.RELEASED;
     }
 
     public static boolean hasActiveTraverseBridgeNear(Mob mob, LivingEntity target) {
@@ -2482,6 +2663,8 @@ public final class LivingWallCoordinator {
                 if (startToMobSqr <= 16.0D) {
                     return true;
                 }
+                if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                        mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) return false;
                 var pathToBridge = mob.getNavigation().createPath(formation.pivot, 0);
                 if (pathToBridge != null && pathToBridge.canReach()) {
                     return true;
@@ -2495,6 +2678,8 @@ public final class LivingWallCoordinator {
                 }
                 BlockPos endPos = formation.anchor != null ? formation.anchor : formation.spanEnd;
                 if (endPos != null) {
+                    if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                            mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) return false;
                     var pathToBridge = mob.getNavigation().createPath(endPos, 0);
                     if (pathToBridge != null && pathToBridge.canReach()) {
                         return true;
@@ -2542,6 +2727,16 @@ public final class LivingWallCoordinator {
     }
 
     public static boolean shouldYieldBridgeCombat(Mob mob) {
+        return shouldYieldBridgeCombat(mob, (level, priority) ->
+                com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(level, priority));
+    }
+
+    static boolean shouldYieldBridgeCombatForTest(Mob mob, boolean allowPathAttempt) {
+        return shouldYieldBridgeCombat(mob, (level, priority) -> allowPathAttempt);
+    }
+
+    private static boolean shouldYieldBridgeCombat(Mob mob,
+            BiPredicate<net.minecraft.world.level.Level, com.example.soundattract.pathfinding.PathTaskScheduler.Priority> pathAttemptGate) {
         if (mob == null) return false;
         LivingEntity target = mob.getTarget();
         if (target == null || !target.isAlive() || target.isRemoved() || !mob.canAttack(target)) {
@@ -2568,6 +2763,7 @@ public final class LivingWallCoordinator {
         if (mob.tickCount % 4 != 0) {
             return false;
         }
+        if (!pathAttemptGate.test(mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMBAT)) return true;
         var path = mob.getNavigation().createPath(target, 0);
         return path != null && path.canReach() && path.getTarget() != null
                 && path.getTarget().distSqr(target.blockPosition()) <= 1.0D;
@@ -2617,12 +2813,19 @@ public final class LivingWallCoordinator {
     }
 
     static Vec3 getCandidateHoldingTarget(Mob mob) {
-        Formation formation = getFormation(mob);
-        if (formation == null || formation.collapsed || !(mob.level() instanceof ServerLevel level)) return null;
-        MobTicket ticket = formation.mobTickets.get(mob.getUUID());
+        if (mob == null || !(mob.level() instanceof ServerLevel level)) return null;
+        PerLevelState state = LEVELS.get(level.dimension().location());
+        if (state == null) return null;
+        return getCandidateHoldingTarget(level, getFormation(state, mob.getUUID()), mob, mob.getUUID());
+    }
+
+    private static Vec3 getCandidateHoldingTarget(ServerLevel level, Formation formation, Mob mob, UUID mobId) {
+        if (level == null || mob == null || mobId == null) return null;
+        if (formation == null || formation.collapsed) return null;
+        MobTicket ticket = formation.mobTickets.get(mobId);
         if (ticket != null && ticket.state != MobTicketState.WAITING) return null;
-        if (formation.members.contains(mob.getUUID())) return null;
-        BlockPos cell = formation.candidateHoldingCells.get(mob.getUUID());
+        if (formation.members.contains(mobId)) return null;
+        BlockPos cell = formation.candidateHoldingCells.get(mobId);
         if (cell == null || !isSafeApproachCell(level, cell)
                 || isNearHazard(level, cell, formation.plan.hazardCells(), formation.plan.forward())) {
             if (cell != null) {
@@ -2727,11 +2930,18 @@ public final class LivingWallCoordinator {
     }
 
     static Vec3 getRecruitmentTarget(Mob mob) {
-        Formation formation = getFormation(mob);
-        if (formation == null || formation.collapsed || !formation.ticketGoals.containsKey(mob.getUUID())) return null;
+        if (mob == null || !(mob.level() instanceof ServerLevel level)) return null;
+        PerLevelState state = LEVELS.get(level.dimension().location());
+        if (state == null) return null;
+        return getRecruitmentTarget(level, getFormation(state, mob.getUUID()), mob, mob.getUUID());
+    }
+
+    private static Vec3 getRecruitmentTarget(ServerLevel level, Formation formation, Mob mob, UUID mobId) {
+        if (level == null || formation == null || mob == null || mobId == null) return null;
+        if (formation.collapsed || !formation.ticketGoals.containsKey(mobId)) return null;
         if (formation.phase != Phase.SCAN && formation.phase != Phase.ASSEMBLE) return null;
-        MobTicket assignment = formation.mobTickets.get(mob.getUUID());
-        if (assignment == null || !(mob.level() instanceof ServerLevel level)) return null;
+        MobTicket assignment = formation.mobTickets.get(mobId);
+        if (assignment == null) return null;
         if ((assignment.state == MobTicketState.MOVING_TO_ASSEMBLY
                 || assignment.state == MobTicketState.STAGING_AT_ASSEMBLY
                 || assignment.state == MobTicketState.ASSEMBLED)
@@ -2937,7 +3147,7 @@ public final class LivingWallCoordinator {
     static boolean tryControlledAssemblyStaging(Mob mob, Vec3 target) {
         Formation formation = getFormation(mob);
         if (formation == null || formation.collapsed
-                || (formation.phase != Phase.SCAN && formation.phase != Phase.ASSEMBLE)
+                || (formation.phase != Phase.SCAN && formation.phase != Phase.ASSEMBLE) || formation.plan == null
                 || !(mob.level() instanceof ServerLevel level) || target == null) return false;
         MobTicket assignment = formation.mobTickets.get(mob.getUUID());
         if (assignment == null || assignment.state != MobTicketState.STAGING_AT_ASSEMBLY) return false;
@@ -2959,7 +3169,8 @@ public final class LivingWallCoordinator {
             mob.noPhysics = false;
             mob.setTarget(null);
             mob.setAggressive(false);
-            boolean accepted = com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, exactTarget, 1.0D);
+            boolean accepted = com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(
+                    mob, exactTarget, 1.0D, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED);
             return false;
         }
         if (distanceSqr <= CONTROLLED_INTAKE_SETTLE_DISTANCE * CONTROLLED_INTAKE_SETTLE_DISTANCE) {
@@ -2975,7 +3186,12 @@ public final class LivingWallCoordinator {
         }
         Vec3 step = delta.scale(Math.min(CONTROLLED_INTAKE_PULL_STEP, distance) / distance);
         Vec3 next = mob.position().add(step);
-        if (assignment.assemblyStageTicks < 8 || assignment.assemblyStageTicks % 20 == 0) {
+        int assemblySlot = assemblySlotIndex(formation, assignment.assemblySlot);
+        if (assemblySlot < 0 || !hasSupportedAssemblyMove(level, formation, assemblySlot, mob, mob.position(), next)) {
+            return recoverOrReleaseAssemblyStage(level, formation, mob, assignment, "unsupported_step");
+        }
+        if ((assignment.assemblyStageTicks < 8 || assignment.assemblyStageTicks % 20 == 0)
+                && DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_CONSTRUCTION)) {
             SoundAttractMod.LOGGER.info("[LivingWallCoordinator] assembly_command_diagnostic bridge={} worker={} tick={} pos={} slot={} center={} distance={} step={} noGravity={} noPhysics={} navDone={} navTarget={}",
                     formation.id, mob.getUUID(), level.getGameTime(), mob.position(), assignment.assemblySlot,
                     exactTarget, distance, step, mob.isNoGravity(), mob.noPhysics,
@@ -2988,10 +3204,14 @@ public final class LivingWallCoordinator {
             boolean xzClear = !yMoves && isAssemblyStagePoseValid(level, formation, mob, assignment, nextXZOnly);
             if (yMoves) {
                 next = nextYOnly;
-                SoundAttractMod.LOGGER.info("[LivingWallCoordinator] assembly_y_fallback bridge={} worker={} tick={} pos={} next={}", formation.id, mob.getUUID(), level.getGameTime(), mob.position(), next);
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_CONSTRUCTION)) {
+                    SoundAttractMod.LOGGER.info("[LivingWallCoordinator] assembly_y_fallback bridge={} worker={} tick={} pos={} next={}", formation.id, mob.getUUID(), level.getGameTime(), mob.position(), next);
+                }
             } else if (xzClear) {
                 next = nextXZOnly;
-                SoundAttractMod.LOGGER.info("[LivingWallCoordinator] assembly_xz_fallback bridge={} worker={} tick={} pos={} next={}", formation.id, mob.getUUID(), level.getGameTime(), mob.position(), next);
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_CONSTRUCTION)) {
+                    SoundAttractMod.LOGGER.info("[LivingWallCoordinator] assembly_xz_fallback bridge={} worker={} tick={} pos={} next={}", formation.id, mob.getUUID(), level.getGameTime(), mob.position(), next);
+                }
             } else {
                 return recoverOrReleaseAssemblyStage(level, formation, mob, assignment, "blocked");
             }
@@ -3012,19 +3232,16 @@ public final class LivingWallCoordinator {
     static boolean tryControlledRecruitmentPull(Mob mob, Vec3 target) {
         Formation formation = getFormation(mob);
         if (formation == null || formation.collapsed
-                || (formation.phase != Phase.SCAN && formation.phase != Phase.ASSEMBLE)
+                || (formation.phase != Phase.SCAN && formation.phase != Phase.ASSEMBLE) || formation.plan == null
                 || !(mob.level() instanceof ServerLevel level) || target == null) return false;
         MobTicket assignment = formation.mobTickets.get(mob.getUUID());
         if (assignment == null || (assignment.state != MobTicketState.MOVING_TO_FEEDER
                 && assignment.state != MobTicketState.SUCTIONING)) return false;
-        if (assignment.state == MobTicketState.SUCTIONING) {
-            captureIntakeHold(mob, formation);
-            BlockPos feeder = assignment.intakeWindow == null ? null : assignment.intakeWindow.feederCell();
-            if (feeder != null && mob.getY() < feeder.getY()) {
-                mob.setPos(mob.getX(), feeder.getY(), mob.getZ());
-                mob.setDeltaMovement(Vec3.ZERO);
-                mob.fallDistance = 0.0F;
-            }
+        int assignmentSlot = assemblySlotIndex(formation, assignment.assemblySlot);
+        if (assignment.state == MobTicketState.SUCTIONING
+                && (assignmentSlot < 0 || !hasLoadBearingSupportAt(level, formation, assignmentSlot, mob, mob.position()))) {
+            abortIntakeCapture(level, formation, mob, assignment, "support");
+            return false;
         }
         if (!isControlledIntakeWindow(level, mob, formation, assignment)) {
             if (assignment.state == MobTicketState.SUCTIONING) {
@@ -3032,6 +3249,7 @@ public final class LivingWallCoordinator {
             }
             return false;
         }
+        if (assignment.state == MobTicketState.SUCTIONING) captureIntakeHold(mob, formation);
         assignment.intakeWindowFailures = 0;
         assignment.intakeHazardFailures = 0;
         if (assignment.state == MobTicketState.MOVING_TO_FEEDER) {
@@ -3048,10 +3266,17 @@ public final class LivingWallCoordinator {
             mob.noPhysics = false;
             mob.setTarget(null);
             mob.setAggressive(false);
-            boolean accepted = com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, target, 1.0D);
+            boolean accepted = com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(
+                    mob, target, 1.0D, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED);
             return false;
         }
         if (distance <= CONTROLLED_INTAKE_SETTLE_DISTANCE) {
+            int assemblySlot = assemblySlotIndex(formation, assignment.assemblySlot);
+            if (assemblySlot < 0 || !hasVerifiedSupport(level, formation, assemblySlot, mob, target)
+                    || !isSlotClear(level, mob, target)) {
+                abortIntakeCapture(level, formation, mob, assignment, "support");
+                return false;
+            }
             mob.setTarget(null);
             mob.setAggressive(false);
             mob.setNoGravity(true);
@@ -3071,13 +3296,20 @@ public final class LivingWallCoordinator {
         double pullSpeed = Math.min(climbSpeed, CONTROLLED_INTAKE_PULL_STEP);
         Vec3 step = delta.scale(Math.min(pullSpeed, distance) / distance);
         Vec3 next = mob.position().add(step);
+        int assemblySlot = assemblySlotIndex(formation, assignment.assemblySlot);
         boolean slotClear = isSlotClear(level, mob, next);
         boolean hazardous = isNearHazard(level, BlockPos.containing(next), formation.plan.hazardCells(), formation.plan.forward());
         boolean validPose = isValidAssignedSuctionPose(next, assignment.intakeWindow, formation, assignment);
-        if (!slotClear || hazardous || !validPose) {
+        boolean supported = assemblySlot >= 0
+                && hasSupportedAssemblyMove(level, formation, assemblySlot, mob, mob.position(), next);
+        if (!supported && assignment.state == MobTicketState.SUCTIONING) {
+            abortIntakeCapture(level, formation, mob, assignment, "support");
+            return false;
+        }
+        if (!slotClear || hazardous || !validPose || !supported) {
             if (assignment.state == MobTicketState.SUCTIONING) {
                 noteIntakePoseFailure(level, formation, mob, assignment,
-                        hazardous ? "hazard" : "window_lost", hazardous);
+                        hazardous ? "hazard" : !supported ? "support" : "window_lost", hazardous);
             }
             return false;
         }
@@ -3144,7 +3376,8 @@ public final class LivingWallCoordinator {
 
     private static void logAssemblyRejectionDiagnostic(ServerLevel level, Formation formation, Mob mob,
                                                        MobTicket assignment, String event) {
-        if (formation.assemblyRejectionDiagnostics++ >= 32) return;
+        if (!DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_CONSTRUCTION)
+                || formation.assemblyRejectionDiagnostics++ >= 32) return;
         boolean isBridge = isCanonicalLivingBridge(formation);
         boolean isFoundationSlot = formation.plan != null && formation.plan.assemblySlots() != null
                 && !formation.plan.assemblySlots().isEmpty()
@@ -3154,7 +3387,7 @@ public final class LivingWallCoordinator {
         if (!isCurrentAssemblyOwner(level, formation, mob, assignment)) safeguard = "ownership";
         else if (!isSafeAssemblySlot(level, mob, assignment.assemblySlot, formation)) safeguard = "anchor_or_slot";
         else if (!isAtAssemblySlot(mob.position(), assignment.assemblySlot)) safeguard = "exact_lock";
-        else if ((!isBridge || isFoundationSlot) && !hasFoundationTerrainSupport(level, slotCenter)) safeguard = "support";
+        else if ((!isBridge || isFoundationSlot) && !hasFoundationTerrainSupport(level, mob, slotCenter)) safeguard = "support";
         else if (!resolveClearance(level, mob, slotCenter, 0.0D).clear()) safeguard = "clearance";
         else if (findAssemblyOccupant(level, formation, mob, mob.position(), slotCenter, assignment.assemblySlot) != null) safeguard = "occupant";
         else safeguard = "route_or_progress";
@@ -3497,10 +3730,15 @@ public final class LivingWallCoordinator {
             return;
         }
         if (!LivingWallConfig.ENABLE_LIVING_WALL.get()) {
-            clearLevel(level, "config_disabled");
+            processDisabledLevel(level);
             return;
         }
         PerLevelState state = state(level);
+        if (state.disabledCleanupDone) {
+            state.admissionBackoffUntil = level.getGameTime();
+            state.lastNonRaidScanTick = -1L;
+            state.disabledCleanupDone = false;
+        }
         long now = level.getGameTime();
         double tickMs = level.getServer().getAverageTickTime();
         int pressureTier = pressureTier(tickMs);
@@ -3509,7 +3747,12 @@ public final class LivingWallCoordinator {
         state.recruiterObservationsRemaining = pressured ? Math.max(1, RECRUITER_OBSERVATION_QUOTA / 2) : RECRUITER_OBSERVATION_QUOTA;
         state.rosterRefreshesRemaining = pressured ? Math.max(1, ROSTER_REFRESH_QUOTA / 2) : ROSTER_REFRESH_QUOTA;
         state.pathSurveysRemaining = pressured ? Math.max(1, PATH_SURVEY_QUOTA / 2) : PATH_SURVEY_QUOTA;
-        observeWindowWorkers(level, state, now);
+        state.durableRecoveryWorkRemaining = DURABLE_RECOVERY_BUDGET_PER_TICK;
+        processPendingDurableRecoveries(level, state);
+        processPendingCombatHandoffs(level, state, now);
+        if (!state.positionPlans.isEmpty()) {
+            observeWindowWorkers(level, state, now);
+        }
         if (state.lastCleanupTick < 0 || now - state.lastCleanupTick > 40L) {
             cleanup(state, level);
             recoverLoadedMarkers(level, now);
@@ -3517,14 +3760,18 @@ public final class LivingWallCoordinator {
             state.contentionCooldowns.entrySet().removeIf(entry -> entry.getValue() <= now);
             state.targetScans.entrySet().removeIf(entry -> entry.getValue().expiresAt <= now);
             state.positionPlans.entrySet().removeIf(entry -> !entry.getValue().isLive(now));
-            Set<UUID> activeWorkers = state.positionPlans.values().stream()
-                    .flatMap(plan -> plan.rosterIdentity().stream()).collect(java.util.stream.Collectors.toSet());
+            Set<UUID> activeWorkers = new HashSet<>();
+            for (LivingBridgePositionPlan plan : state.positionPlans.values()) {
+                activeWorkers.addAll(plan.rosterIdentity());
+            }
             state.groundingObservations.keySet().removeIf(worker -> !activeWorkers.contains(worker));
             state.wallProfiles.entrySet().removeIf(entry -> entry.getValue().expiresAt() <= now);
             state.corridorCache.entrySet().removeIf(entry -> entry.getValue().expiresAt() <= now);
             state.rememberedThreats.entrySet().removeIf(entry -> entry.getValue() == null || !entry.getValue().isValid(now, REMEMBERED_THREAT_TTL_TICKS));
             state.basinEvacuations.entrySet().removeIf(entry -> entry.getValue().expiresTick() <= now);
             state.basinFailures.entrySet().removeIf(entry -> entry.getValue().cooldownUntil() <= now && now - entry.getValue().lastFailureTick() > 600L);
+            state.durableRecoveryRetryAfter.entrySet().removeIf(entry -> entry.getValue() <= now);
+            state.durableRecoveryStepTick.entrySet().removeIf(entry -> entry.getValue() < now - 40L);
             state.lastCleanupTick = now;
         }
         drainAdmissionCompletions(level, state, now);
@@ -3532,14 +3779,20 @@ public final class LivingWallCoordinator {
         boolean admissionDue = state.lastNonRaidScanTick < 0
                 || now - state.lastNonRaidScanTick >= scanInterval
                 || now - state.lastNonRaidScanTick >= 80L;
-        if (admissionDue && now >= state.admissionBackoffUntil && !state.admissionInFlight) {
+        if (admissionDue && !level.players().isEmpty()
+                && now >= state.admissionBackoffUntil && !state.admissionInFlight) {
             state.admissionAttempts++;
             scanNonRaidGroups(level, state, now);
             state.lastNonRaidScanTick = now;
         }
         flushBuildGateDiagnostics(level, state, now);
-        serviceConstructionIntents(level, state, now, pressured ? Math.max(1, FORMATION_SERVICE_QUOTA / 2) : FORMATION_SERVICE_QUOTA);
-        synchronized (state.formations) {
+        if (!state.constructionIntents.isEmpty()) {
+            serviceConstructionIntents(level, state, now,
+                    pressured ? Math.max(1, FORMATION_SERVICE_QUOTA / 2) : FORMATION_SERVICE_QUOTA);
+        }
+        if (state.formations.isEmpty()) {
+            state.serviceRing.clear();
+        } else synchronized (state.formations) {
             arbitrateContention(level, state, now);
             List<Map.Entry<UUID, Formation>> scheduled = new ArrayList<>();
             int quota = pressured ? Math.max(1, FORMATION_SERVICE_QUOTA / 2) : FORMATION_SERVICE_QUOTA;
@@ -3621,6 +3874,11 @@ public final class LivingWallCoordinator {
                                 Math.max(0, nextLayerLimit - formation.members.size()));
                     }
                     repinAssemblyWorkers(level, formation);
+                    if (formation.assemblyFatal) {
+                        collapse(level, formation, "assembly_support_lost_during_repin");
+                        iterator.remove();
+                        continue;
+                    }
                     if (assembleFormation(level, formation, now)) {
                         ClearanceBlockage blockage = findFormationBlockage(level, formation, witnessGeometry(formation));
                         if (blockage != null) {
@@ -4064,6 +4322,8 @@ public final class LivingWallCoordinator {
         SafeBaseNavigationReservation reservation = formation.safeBaseNavigation.get(mob.getUUID());
         if (reservation == null) {
             mob.getPersistentData().remove("livingBridgeSafeBaseRouteActive");
+            formation.pendingSafeBaseReplans.remove(mob.getUUID());
+            formation.terminalSafeBaseFailures.add(mob.getUUID());
             holdSafeBaseNavigation(mob);
             return false;
         }
@@ -4212,7 +4472,8 @@ public final class LivingWallCoordinator {
     private static void logSafeBaseRouteOutcome(ServerLevel level, Formation formation, Mob mob,
                                                  SafeBaseNavigationReservation reservation, String phase,
                                                  LivingBridgeSafeBaseRoute.Result result) {
-        if (level == null || formation == null || mob == null || reservation == null || result == null) return;
+        if (level == null || formation == null || mob == null || reservation == null || result == null
+                || !DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ROUTING)) return;
         SoundAttractMod.LOGGER.info("[LivingBridgeSafeBaseRoute] outcome dimension={} formation={} owner={} phase={} revision={} rejection={} firstUnsafeCell={} staging={}",
                 level.dimension().location(), formation.id, mob.getUUID(), phase, reservation.routeRevision(),
                 result.rejection(), result.firstUnsafeCell(), reservation.staging());
@@ -5137,9 +5398,19 @@ public final class LivingWallCoordinator {
     private static boolean isSafeSite(ServerLevel level, BlockPos pos) {
         return level.isLoaded(pos) && level.isLoaded(pos.below()) && level.isLoaded(pos.above())
                 && !isUnsafeColumn(level, pos)
-                && hasStableSupport(level, pos.below(), level.getBlockState(pos.below()))
+                && hasStructuralSupport(level, pos.below(), level.getBlockState(pos.below()))
                 && level.getBlockState(pos).getCollisionShape(level, pos).isEmpty()
                 && level.getBlockState(pos.above()).getCollisionShape(level, pos.above()).isEmpty();
+    }
+
+    private static boolean hasStructuralSupport(ServerLevel level, BlockPos pos, BlockState state) {
+        if (level == null || pos == null || state == null || !state.getFluidState().isEmpty()
+                || state.is(BlockTags.TRAPDOORS) || state.getBlock() instanceof TrapDoorBlock) return false;
+        VoxelShape shape = state.getCollisionShape(level, pos);
+        if (shape.isEmpty()) return false;
+        AABB bounds = shape.bounds();
+        return bounds.getXsize() >= 0.95D && bounds.getZsize() >= 0.95D
+                && bounds.minY <= 0.05D && bounds.maxY >= 0.95D;
     }
 
     private static boolean hasStableSupport(ServerLevel level, BlockPos pos, BlockState state) {
@@ -5458,6 +5729,12 @@ public final class LivingWallCoordinator {
 
     private static CanonicalFeetCorridor executableCorridor(ServerLevel level, CanonicalFeetCorridor canonical,
                                                             BodyGeometry geometry) {
+        return executableCorridor(level, canonical, geometry, null);
+    }
+
+    private static CanonicalFeetCorridor executableCorridor(ServerLevel level, CanonicalFeetCorridor canonical,
+                                                            BodyGeometry geometry,
+                                                            TargetLandingValidationCache scanCache) {
         if (canonical == null || geometry == null) return null;
         CorridorCacheKey cacheKey = new CorridorCacheKey(
                 level.dimension().location(), canonical.corridorId(),
@@ -5470,18 +5747,26 @@ public final class LivingWallCoordinator {
                 return cached.corridor();
             }
         }
-        List<BlockPos> first = LivingBridgeRouteSearch.findRoute(level, canonical.takeoffFeet(),
+        List<BlockPos> first = scanCache == null
+                ? LivingBridgeRouteSearch.findRoute(level, canonical.takeoffFeet(),
                 canonical.bridgeLandingFeet(), geometry.width(), geometry.height(),
-                LivingBridgeRouteSearch.MAX_NODE_BUDGET);
-        List<BlockPos> second = canonical.bridgeLandingFeet().equals(canonical.egressFeet())
+                LivingBridgeRouteSearch.MAX_NODE_BUDGET)
+                : scanCache.findRoute(level, canonical.takeoffFeet(), canonical.bridgeLandingFeet(),
+                geometry.width(), geometry.height());
+        List<BlockPos> second = first.isEmpty() ? List.of()
+                : canonical.bridgeLandingFeet().equals(canonical.egressFeet())
                 ? List.of(canonical.bridgeLandingFeet())
-                : LivingBridgeRouteSearch.findRoute(level, canonical.bridgeLandingFeet(), canonical.egressFeet(),
-                geometry.width(), geometry.height(), LivingBridgeRouteSearch.MAX_NODE_BUDGET);
+                : scanCache == null
+                ? LivingBridgeRouteSearch.findRoute(level, canonical.bridgeLandingFeet(), canonical.egressFeet(),
+                geometry.width(), geometry.height(), LivingBridgeRouteSearch.MAX_NODE_BUDGET)
+                : scanCache.findRoute(level, canonical.bridgeLandingFeet(), canonical.egressFeet(),
+                geometry.width(), geometry.height());
         if (first.isEmpty() || second.isEmpty()) {
             if (state != null) {
                 state.corridorCache.put(cacheKey, new CachedCorridor(null, level.getGameTime() + 20L));
             }
-            if (SoundAttractMod.LOGGER.isDebugEnabled()) {
+            if (SoundAttractMod.LOGGER.isDebugEnabled()
+                    && DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ROUTING)) {
                 List<BlockPos> localSolids = new ArrayList<>();
                 BlockPos start = canonical.takeoffFeet();
                 for (int x = start.getX() - 1; x <= start.getX() + 1; x++) {
@@ -5492,14 +5777,10 @@ public final class LivingWallCoordinator {
                         }
                     }
                 }
-                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ROUTING)) {
                 SoundAttractMod.LOGGER.debug("[LivingWallCoordinator] executable_corridor_unavailable start={} landing={} egress={} firstNodes={} secondNodes={} width={} height={}",
                         canonical.takeoffFeet(), canonical.bridgeLandingFeet(), canonical.egressFeet(), first.size(), second.size(),
                         geometry.width(), geometry.height());
-                }
-                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ROUTING)) {
-                    SoundAttractMod.LOGGER.debug("[LivingWallCoordinator] executable_corridor_local_solids cells={}", localSolids);
-                }
+                SoundAttractMod.LOGGER.debug("[LivingWallCoordinator] executable_corridor_local_solids cells={}", localSolids);
                 List<BlockPos> endpointSolids = new ArrayList<>();
                 BlockPos landing = canonical.bridgeLandingFeet();
                 for (int x = landing.getX() - 1; x <= landing.getX() + 1; x++) {
@@ -5510,9 +5791,7 @@ public final class LivingWallCoordinator {
                         }
                     }
                 }
-                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ROUTING)) {
-                    SoundAttractMod.LOGGER.debug("[LivingWallCoordinator] executable_corridor_endpoint_solids cells={}", endpointSolids);
-                }
+                SoundAttractMod.LOGGER.debug("[LivingWallCoordinator] executable_corridor_endpoint_solids cells={}", endpointSolids);
             }
             return null;
         }
@@ -6217,7 +6496,7 @@ public final class LivingWallCoordinator {
 
     private static ConstructionScenario classifyScenario(ServerLevel level, BlockPos pivot, BlockPos anchor,
                                                          Set<BlockPos> hazards) {
-        return classifyCanonicalScenario(level, pivot, anchor, hazards);
+        return classifyCanonicalScenario(level, pivot, anchor);
     }
 
     private static boolean isSheerWallFace(ServerLevel level, BlockPos anchor, int dx, int dz) {
@@ -6244,12 +6523,10 @@ public final class LivingWallCoordinator {
         return wallBlocked;
     }
 
-    private static ConstructionScenario classifyCanonicalScenario(ServerLevel level, BlockPos pivot, BlockPos anchor,
-                                                         Set<BlockPos> hazards) {
+    private static ConstructionScenario classifyCanonicalScenario(ServerLevel level, BlockPos pivot, BlockPos anchor) {
         if (level == null || pivot == null || anchor == null) {
             return ConstructionScenario.NONE;
         }
-        boolean wallLedge = hasWallLedge(level, pivot, anchor);
         int verticalDelta = anchor.getY() - pivot.getY();
         double horizontalDist = horizontalDistance(pivot, anchor);
         double maxPillarTiltDist = configOrDefault(LivingWallConfig.MAX_PILLAR_TILT_DISTANCE, 6.25D);
@@ -6257,7 +6534,7 @@ public final class LivingWallCoordinator {
         int dx = Integer.compare(anchor.getX(), pivot.getX());
         int dz = Integer.compare(anchor.getZ(), pivot.getZ());
         boolean sheerWall = isSheerWallFace(level, anchor, dx, dz);
-        if (verticalDelta >= 2 && horizontalDist <= maxPillarTiltDist && (wallLedge || anchor.getY() - pivot.getY() >= 2)
+        if (verticalDelta >= 2 && horizontalDist <= maxPillarTiltDist
                 && !sheerWall && hasLandingAndEgress(level, anchor, pivot, anchor)) {
             if (hasBridgeNeed(level, pivot, anchor)) {
                 scenario = ConstructionScenario.WALL_LEDGE;
@@ -6380,23 +6657,6 @@ public final class LivingWallCoordinator {
     }
 
     private static boolean isInvasionEndpoint(ServerLevel level, BlockPos pivot, BlockPos endpoint) {
-        if (level == null || pivot == null || endpoint == null) return false;
-        if (isSafeLanding(level, endpoint) && hasLandingAndEgress(level, endpoint, pivot, endpoint)) return true;
-        if (!level.isLoaded(endpoint) || !level.isLoaded(endpoint.above()) || !level.isLoaded(endpoint.below())) return false;
-        BlockState feet = level.getBlockState(endpoint);
-        BlockState head = level.getBlockState(endpoint.above());
-        BlockState below = level.getBlockState(endpoint.below());
-        boolean hasSupport = hasStableSupport(level, endpoint.below(), below)
-                || below.is(BlockTags.TRAPDOORS) || below.getBlock() instanceof TrapDoorBlock;
-        if (!hasSupport || !feet.getFluidState().isEmpty() || !head.getFluidState().isEmpty()
-                || !below.getFluidState().isEmpty()
-                || !feet.getCollisionShape(level, endpoint).isEmpty()
-                || !head.getCollisionShape(level, endpoint.above()).isEmpty()) return false;
-        int dx = Integer.compare(endpoint.getX(), pivot.getX());
-        int dz = Integer.compare(endpoint.getZ(), pivot.getZ());
-        if (dx == 0 && dz == 0) return false;
-        if (below.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)
-                || isOpenTrapdoor(below)) return false;
         return hasLandingAndEgress(level, endpoint, pivot, endpoint);
     }
 
@@ -6599,35 +6859,6 @@ public final class LivingWallCoordinator {
                         ? Math.max(0.50D, verticalStep)
                         : Math.max(0.25D, horizontalStep);
         return Math.max(2, Mth.ceil(distance / stride) + 1);
-    }
-
-    private static boolean hasWallLedge(ServerLevel level, BlockPos pivot, BlockPos anchor) {
-        if (!isSafeLanding(level, anchor) || !hasLandingAndEgress(level, anchor, pivot, anchor)) return false;
-        int dx = Integer.compare(anchor.getX(), pivot.getX());
-        int dz = Integer.compare(anchor.getZ(), pivot.getZ());
-        if (dx == 0 && dz == 0) return false;
-        if (isSheerWallFace(level, anchor, dx, dz)) return false;
-        int maxHeight = LivingWallConfig.MAX_HEIGHT != null ? LivingWallConfig.MAX_HEIGHT.get() : 16;
-        for (int[] offset : new int[][] {{0, 0}, {-dx, -dz}, {dx, dz}}) {
-            int faceX = anchor.getX() + offset[0];
-            int faceZ = anchor.getZ() + offset[1];
-            int consecutive = 0;
-            for (int y = anchor.getY() - 1; y >= anchor.getY() - maxHeight; y--) {
-                BlockPos face = new BlockPos(faceX, y, faceZ);
-                if (!level.isLoaded(face)) break;
-                BlockState state = level.getBlockState(face);
-                boolean isWallBlock = state.is(BlockTags.TRAPDOORS)
-                        || state.getBlock() instanceof TrapDoorBlock
-                        || !state.getCollisionShape(level, face).isEmpty();
-                if (isWallBlock) {
-                    consecutive++;
-                    if (consecutive >= 2) return true;
-                } else {
-                    consecutive = 0;
-                }
-            }
-        }
-        return false;
     }
 
     private static List<BlockPos> canonicalHazardCells(List<BlockPos> hazards, BlockPos pivot, BlockPos wallFace) {
@@ -7564,11 +7795,13 @@ public final class LivingWallCoordinator {
             BlockPos threat = resolveEffectiveThreat(level, cluster, null);
             List<BlockPos> wallTargets = findClusterTargets(level, cluster, threat);
             if (wallTargets.isEmpty()) {
-                BlockPos dangerTarget = findDangerTarget(level, BlockPos.containing(center), center);
-                if (dangerTarget != null) {
-                    admissionLog(level, state, now, "hazard detected but no valid wall anchor");
-                } else if (threat != null && threat.getY() < Mth.floor(center.y)) {
-                    admissionLog(level, state, now, "downward target rejected: no lower landing");
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ADMISSION)) {
+                    BlockPos dangerTarget = findDangerTarget(level, BlockPos.containing(center), center);
+                    if (dangerTarget != null) {
+                        admissionLog(level, state, now, "hazard detected but no valid wall anchor");
+                    } else if (threat != null && threat.getY() < Mth.floor(center.y)) {
+                        admissionLog(level, state, now, "downward target rejected: no lower landing");
+                    }
                 }
                 handleBasinAdmissionFailure(level, state, cluster, center, threat, bucketKey, now);
                 continue;
@@ -7829,8 +8062,10 @@ public final class LivingWallCoordinator {
         RouteProbeOutcome recomputed = routeBudgetSatisfied(level, cluster, selectedAnchor,
                     evidence, requestCorridor, routeStats, selected.observation());
             if (!recomputed.successful()) {
-                state.terminalAdmissionFailures.put(leader.getUUID(),
-                        new TerminalAdmissionFailure(semanticKey, semanticFingerprint));
+                if (!routeStats.budgetDeferred) {
+                    state.terminalAdmissionFailures.put(leader.getUUID(),
+                            new TerminalAdmissionFailure(semanticKey, semanticFingerprint));
+                }
                 SoundAttractMod.LOGGER.warn("[LivingWallCoordinator] post_admission_observation_rejected reason={} target={} anchor={} corridor={} observation={} workers={}",
                         recomputed.failureReason(), selectedAnchor, evidence.anchor(), requestCorridor == null ? null : requestCorridor.corridorId(),
                         selected.observation() == null ? "null" : selected.observation().observationIndex(),
@@ -7898,13 +8133,16 @@ public final class LivingWallCoordinator {
         Vec3 center = cluster.stream().map(Mob::position).reduce(Vec3.ZERO, Vec3::add).scale(1.0D / cluster.size());
         BlockPos threat = threatDestination != null ? threatDestination : resolveEffectiveThreat(level, cluster, null);
         PerLevelState state = state(level);
-        LivingBridgePositionPlan plan = state.positionPlans.get(targetRosterFingerprint(cluster));
+        List<UUID> roster = targetRosterIdentity(cluster);
+        long rosterFingerprint = fingerprintTargetRoster(roster);
+        LivingBridgePositionPlan plan = state.positionPlans.get(rosterFingerprint);
         if (plan == null || !plan.isLive(level.getGameTime()) || threat == null
                 || !plan.destinationBucketContains(threat)) return null;
         TargetScanKey key = targetScanKey(new ColdStartSeedProvider(plan.sourceOrigin(), plan.lockedDestination()),
                 plan.windowGeneration());
         CachedTargetScan cached = state(level).targetScans.get(key);
-        if (!isValidCachedTargetScan(level, cluster, plan.lockedDestination(), level.getGameTime(),
+        if (!isValidCachedTargetScan(level, cluster, rosterFingerprint,
+                plan.lockedDestination(), level.getGameTime(),
                 plan.windowGeneration(), key, cached)) return null;
         for (SelectedTargetEvidence candidate : cached.selectedEvidence) {
             if (candidate != null && candidate.evidence() != null
@@ -8028,17 +8266,17 @@ public final class LivingWallCoordinator {
 
     private static List<BlockPos> findClusterTargets(ServerLevel level, List<Mob> cluster, BlockPos threatDestination) {
         if (cluster == null || cluster.isEmpty()) return List.of();
-        Vec3 center = cluster.stream().map(Mob::position).reduce(Vec3.ZERO, Vec3::add).scale(1.0D / cluster.size());
         Vec3 stableCenter = stableClusterCenter(cluster);
         int radius = LivingWallConfig.MAX_GAP.get();
         int height = LivingWallConfig.MAX_HEIGHT.get();
         BlockPos threat = threatDestination != null ? threatDestination : resolveEffectiveThreat(level, cluster, null);
         PerLevelState state = state(level);
         long now = level.getGameTime();
-        long rosterIdentity = targetRosterFingerprint(cluster);
+        List<UUID> roster = targetRosterIdentity(cluster);
+        long rosterIdentity = fingerprintTargetRoster(roster);
         LivingBridgePositionPlan positionPlan = state.positionPlans.get(rosterIdentity);
         if (positionPlan == null || !positionPlan.isLive(now)
-                || !positionPlan.acceptsRoster(cluster.stream().map(Mob::getUUID).toList())
+                || !positionPlan.rosterIdentity().equals(roster)
                 || threat != null && !positionPlan.destinationBucketContains(threat)) {
             if (threat == null) return List.of();
             BlockPos fixedSource = resolveStableSourceOrigin(level, cluster, stableCenter, threat);
@@ -8049,7 +8287,7 @@ public final class LivingWallCoordinator {
             positionPlan = new LivingBridgePositionPlan(level.dimension().location().toString(),
                     ++state.nextWindowGeneration, now, now + LivingBridgePositionPlan.WINDOW_TICKS,
                     fixedSource, threat, direction.normalize(), "NONE", height, radius, now, 0L,
-                    cluster.stream().map(Mob::getUUID).toList(), state.nextRequestRevision);
+                    roster, state.nextRequestRevision);
             state.positionPlans.put(rosterIdentity, positionPlan);
         }
         BlockPos fixedSource = positionPlan.sourceOrigin();
@@ -8064,17 +8302,38 @@ public final class LivingWallCoordinator {
         long generation = positionPlan.windowGeneration();
         TargetScanKey key = targetScanKey(new ColdStartSeedProvider(fixedSource, lockedDestination), generation);
         CachedTargetScan cached = state.targetScans.get(key);
-        if (isValidCachedTargetScan(level, cluster, lockedDestination, now, generation, key, cached)) return cached.targets();
-        double probeRadius = formationProbeRadius(cluster);
-        List<WallProfileScanner.RayEvidence> candidateRays = new ArrayList<>();
-        List<WallProfileScanner.RayEvidence> primary = WallProfileScanner.scanEvidence(level, fixedSource, lockedDestination,
-                height, radius, probeRadius, targetRayBudget);
-        candidateRays.addAll(primary);
-        if (primary.isEmpty()) {
-            List<WallProfileScanner.RayEvidence> fallback = WallProfileScanner.scanEvidenceFallback(level, fixedSource, lockedDestination,
-                    height, radius, probeRadius, targetRayBudget);
-            candidateRays.addAll(fallback);
+        boolean measureScan = DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_FORMATION);
+        long cacheValidationStartedAt = measureScan ? System.nanoTime() : 0L;
+        boolean cacheValid = isValidCachedTargetScan(level, cluster, rosterIdentity,
+                lockedDestination, now, generation, key, cached);
+        if (measureScan) {
+            state.targetScanCacheChecks++;
+            if (cacheValid) state.targetScanCacheHits++;
+            state.targetScanCacheValidationNanos += System.nanoTime() - cacheValidationStartedAt;
+            if (state.targetScanMetricWindowStartTick < 0L) state.targetScanMetricWindowStartTick = now;
+            if (now - state.targetScanMetricWindowStartTick >= 200L) {
+                long averageValidationMicros = state.targetScanCacheChecks == 0 ? 0L
+                        : state.targetScanCacheValidationNanos / state.targetScanCacheChecks / 1_000L;
+                SoundAttractMod.LOGGER.info("[LivingWallCoordinator] Target cache checks={} hits={} validationUs={} averageValidationUs={}",
+                        state.targetScanCacheChecks, state.targetScanCacheHits,
+                        state.targetScanCacheValidationNanos / 1_000L, averageValidationMicros);
+                state.targetScanMetricWindowStartTick = now;
+                state.targetScanCacheValidationNanos = 0L;
+                state.targetScanCacheChecks = 0;
+                state.targetScanCacheHits = 0;
+            }
         }
+        if (cacheValid) return cached.targets();
+        long scanStartedAt = measureScan ? System.nanoTime() : 0L;
+        double probeRadius = formationProbeRadius(cluster);
+        long phaseStartedAt = measureScan ? System.nanoTime() : 0L;
+        List<WallProfileScanner.RayEvidence> candidateRays = WallProfileScanner.scanEvidence(
+                level, fixedSource, lockedDestination, height, radius, probeRadius, targetRayBudget);
+        if (candidateRays.isEmpty()) {
+            candidateRays = WallProfileScanner.scanEvidenceFallback(level, fixedSource, lockedDestination,
+                    height, radius, probeRadius, targetRayBudget);
+        }
+        long rayScanNanos = measureScan ? System.nanoTime() - phaseStartedAt : 0L;
         List<ScoredTarget> candidates = new ArrayList<>();
         int rays = 0;
         int hits = 0;
@@ -8086,8 +8345,17 @@ public final class LivingWallCoordinator {
         int rejectedSurface = 0;
         int rejectedTrigger = 0;
         int rejectedVertical = 0;
-        LandingRejectionCounts landingRejections = new LandingRejectionCounts();
         BlockPos sourcePivot = fixedSource;
+        LandingRejectionCounts landingRejections = new LandingRejectionCounts();
+        TargetLandingValidationCache landingValidationCache = new TargetLandingValidationCache(
+                candidateRays.size() > 1, Math.max(1, radius + 1) + 2);
+        Vec3 sourcePivotCenter = Vec3.atBottomCenterOf(sourcePivot);
+        BodyGeometry geometry = null;
+        boolean geometryComputed = false;
+        int clusterSize = cluster.size();
+        long landingValidationNanos = 0L;
+        long candidateScoreNanos = 0L;
+        int landingValidationCalls = 0;
         int[] scanCounts = {rays, hits, safeSurfaces, lowerCandidates, upperCandidates, hazardHits,
                 rejectedScenario, rejectedSurface, rejectedTrigger, rejectedVertical};
         int rayOrdinal = 0;
@@ -8101,9 +8369,18 @@ public final class LivingWallCoordinator {
             int rayLandings = 0;
             BlockPos lastRayLanding = null;
             for (BlockPos structuralCell : ray.structuralCells()) {
+                phaseStartedAt = measureScan ? System.nanoTime() : 0L;
+                if (!geometryComputed) {
+                    geometry = rosterGeometry(cluster);
+                    geometryComputed = true;
+                }
                 TargetLandingSelection landingSelection = selectTargetLanding(level, sourcePivot, lockedDestination, ray,
-                        rayOrdinal, structuralCell, structuralIndex, rosterGeometry(cluster), Vec3.atBottomCenterOf(sourcePivot),
-                        landingRejections);
+                        rayOrdinal, structuralCell, structuralIndex, geometry, sourcePivotCenter,
+                        landingRejections, landingValidationCache, radius, height);
+                if (measureScan) {
+                    landingValidationNanos += System.nanoTime() - phaseStartedAt;
+                    landingValidationCalls++;
+                }
                 structuralIndex++;
                 if (landingSelection == null) { scanCounts[7]++; continue; }
                 BlockPos candidate = landingSelection.landing();
@@ -8113,15 +8390,18 @@ public final class LivingWallCoordinator {
                 scanCounts[2]++;
                 if (candidate.getY() < sourcePivot.getY()) scanCounts[3]++;
                 if (candidate.getY() > sourcePivot.getY()) scanCounts[4]++;
-                List<BlockPos> hazards = carriedRayHazards(ray, sourcePivot, candidate);
                 ConstructionScenario scenario = parseConstructionScenario(decision.evidence().scenario());
                 WallProfileScanner.TargetEvidence targetEvidence = decision.evidence();
                 LivingWallBridgeAdapterPlanner.Candidate plannerCandidate = plannerCandidateFor(level, decision.corridor(), sourcePivot,
-                        targetEvidence, scenario, rosterGeometry(cluster));
+                        targetEvidence, scenario, geometry);
                 LivingWallBridgeAdapterPlanner.AdapterSpec plannerSpec = adapterSpecForScenario(scenario).orElse(null);
                 LivingWallBridgeAdapterPlanner.ScoredCandidate scoredCandidate = plannerCandidate == null || plannerSpec == null
                         ? null : LivingWallBridgeAdapterPlanner.score(plannerCandidate, plannerSpec, LivingWallConfig.MAX_BODIES.get()).orElse(null);
-                candidates.add(new ScoredTarget(targetEvidence, decision.corridor(), scoredCandidate));
+                phaseStartedAt = measureScan ? System.nanoTime() : 0L;
+                int buildingSpotScore = evaluateBuildingSpotScore(clusterSize, sourcePivot, lockedDestination,
+                        targetEvidence, decision.corridor(), scoredCandidate, scenario);
+                if (measureScan) candidateScoreNanos += System.nanoTime() - phaseStartedAt;
+                candidates.add(new ScoredTarget(targetEvidence, decision.corridor(), scoredCandidate, buildingSpotScore));
                 rayLandings++;
                 if (rayLandings >= 2) break;
             }
@@ -8130,11 +8410,11 @@ public final class LivingWallCoordinator {
         rays = scanCounts[0]; hits = scanCounts[1]; safeSurfaces = scanCounts[2]; lowerCandidates = scanCounts[3];
         upperCandidates = scanCounts[4]; hazardHits = scanCounts[5]; rejectedScenario = scanCounts[6];
         rejectedSurface = scanCounts[7]; rejectedTrigger = scanCounts[8]; rejectedVertical = scanCounts[9];
+        phaseStartedAt = measureScan ? System.nanoTime() : 0L;
         candidates.sort((left, right) -> {
-            int scoreLeft = evaluateBuildingSpotScore(level, cluster, sourcePivot, lockedDestination, left);
-            int scoreRight = evaluateBuildingSpotScore(level, cluster, sourcePivot, lockedDestination, right);
-            if (scoreLeft != scoreRight) {
-                return Integer.compare(scoreLeft, scoreRight);
+            int byBuildingSpotScore = Integer.compare(left.buildingSpotScore(), right.buildingSpotScore());
+            if (byBuildingSpotScore != 0) {
+                return byBuildingSpotScore;
             }
             LivingWallBridgeAdapterPlanner.ScoredCandidate first = left.scoredCandidate();
             LivingWallBridgeAdapterPlanner.ScoredCandidate second = right.scoredCandidate();
@@ -8147,23 +8427,41 @@ public final class LivingWallCoordinator {
             if (result != 0) return result;
             return Long.compareUnsigned(left.evidence().anchor().asLong(), right.evidence().anchor().asLong());
         });
+        long candidateRankingNanos = measureScan ? candidateScoreNanos + System.nanoTime() - phaseStartedAt : 0L;
         TargetRouteProbeStats routeStats = new TargetRouteProbeStats();
-        List<SelectedTargetEvidence> finalSelected = selectDistinctCandidates(level, cluster, Vec3.atBottomCenterOf(sourcePivot), lockedDestination,
+        phaseStartedAt = measureScan ? System.nanoTime() : 0L;
+        List<SelectedTargetEvidence> finalSelected = selectDistinctCandidates(level, cluster, sourcePivotCenter, lockedDestination,
                 candidates, routeStats);
+        long routeValidationNanos = measureScan ? System.nanoTime() - phaseStartedAt : 0L;
         if (state.targetScans.size() >= MAX_TARGET_SCAN_CACHE_ENTRIES) state.targetScans.clear();
+        long scanExpiry = routeStats.budgetDeferred ? now + 1L
+                : now + (finalSelected.isEmpty() ? 60L : TARGET_SCAN_CACHE_TICKS);
+        phaseStartedAt = measureScan ? System.nanoTime() : 0L;
+        long[] terrainCells = targetTerrainCells(finalSelected);
+        long terrainFingerprint = targetTerrainFingerprint(level, terrainCells);
+        long terrainFingerprintNanos = measureScan ? System.nanoTime() - phaseStartedAt : 0L;
         state.targetScans.put(key, new CachedTargetScan(
                 finalSelected.stream().map(SelectedTargetEvidence::evidence).toList(),
-                finalSelected, now, now + (finalSelected.isEmpty() ? 60L : TARGET_SCAN_CACHE_TICKS), 0, now, generation,
-                targetRosterFingerprint(cluster), targetTerrainFingerprint(level, finalSelected)));
-        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_FORMATION)) {
-            SoundAttractMod.LOGGER.info("[LivingWallCoordinator] Target scan center={} threat={} rays={} hits={} hazardHits={} safeSurfaces={} lowerCandidates={} upperCandidates={} rejectedSurface={} rejectedTrigger={} rejectedScenario={} rejectedVertical={} routeProbes={} routeSuccesses={} routeMode={} routeReuses={} routeRecomputations={} routeFailure={} candidates={} selected={} selectedTargets={} selectedDeltaY={}",
+                finalSelected, now, scanExpiry, 0, now, generation,
+                rosterIdentity, terrainFingerprint, terrainCells));
+        if (measureScan) {
+            long totalScanNanos = System.nanoTime() - scanStartedAt;
+            SoundAttractMod.LOGGER.info("[LivingWallCoordinator] Target scan center={} threat={} rays={} hits={} hazardHits={} safeSurfaces={} lowerCandidates={} upperCandidates={} rejectedSurface={} rejectedTrigger={} rejectedScenario={} rejectedVertical={} routeWorkers={} routeGrounded={} routeProbes={} routeSuccesses={} routeMode={} routeReuses={} routeRecomputations={} routeFailure={} candidates={} selected={} selectedTargets={} selectedDeltaY={} scanUs={} rayScanUs={} landingCalls={} landingValidationUs={} rankingUs={} routeValidationUs={} terrainFingerprintUs={} landingCacheEntries={} landingCacheLookups={} landingCacheHits={} canonicalLookups={} canonicalHits={} routeLegLookups={} routeLegHits={} routeSearches={}",
                     stableCenter, threat, rays, hits, hazardHits, safeSurfaces, lowerCandidates, upperCandidates,
                     rejectedSurface, rejectedTrigger, rejectedScenario, rejectedVertical,
+                    routeStats.eligibleCandidates, routeStats.groundedCandidates,
                     routeStats.reservations, routeStats.successes, routeStats.routeMode, routeStats.routeReuses,
                     routeStats.routeRecomputations, routeStats.failureReason,
                     candidates.size(), finalSelected.isEmpty() ? null : finalSelected.get(0).evidence().anchor(),
                     finalSelected.stream().map(selection -> selection.evidence().anchor()).toList(),
-                    finalSelected.isEmpty() ? "none" : finalSelected.get(0).evidence().anchor().getY() - sourcePivot.getY());
+                    finalSelected.isEmpty() ? "none" : finalSelected.get(0).evidence().anchor().getY() - sourcePivot.getY(),
+                    totalScanNanos / 1_000L, rayScanNanos / 1_000L, landingValidationCalls,
+                    landingValidationNanos / 1_000L, candidateRankingNanos / 1_000L,
+                    routeValidationNanos / 1_000L, terrainFingerprintNanos / 1_000L,
+                    landingValidationCache.size(), landingValidationCache.lookups(), landingValidationCache.hits(),
+                    landingValidationCache.canonicalLookups(), landingValidationCache.canonicalHits(),
+                    landingValidationCache.routeLegLookups(), landingValidationCache.routeLegCacheHits(),
+                    landingValidationCache.routeSearches());
             SoundAttractMod.LOGGER.info("[LivingWallCoordinator] landing_rejection_breakdown {}", landingRejections);
             SoundAttractMod.LOGGER.info("[LivingWallCoordinator] route_candidate_failures counts={} last={}",
                     routeStats.candidateFailureCounts, routeStats.lastCandidateFailure);
@@ -8171,14 +8469,13 @@ public final class LivingWallCoordinator {
         return finalSelected.stream().map(selection -> selection.evidence().anchor()).toList();
     }
 
-    private static int evaluateBuildingSpotScore(ServerLevel level, List<Mob> cluster, BlockPos sourcePivot,
-                                                 BlockPos threatDestination, ScoredTarget target) {
-        if (target == null || target.evidence() == null) return Integer.MAX_VALUE;
-        int clusterSize = cluster == null ? 0 : cluster.size();
-        int requiredBodies = target.scoredCandidate() != null
-                ? target.scoredCandidate().candidate().bodyCount()
+    private static int evaluateBuildingSpotScore(int clusterSize, BlockPos sourcePivot, BlockPos threatDestination,
+                                                 WallProfileScanner.TargetEvidence evidence, CanonicalFeetCorridor corridor,
+                                                 LivingWallBridgeAdapterPlanner.ScoredCandidate scoredCandidate,
+                                                 ConstructionScenario scenario) {
+        int requiredBodies = scoredCandidate != null
+                ? scoredCandidate.candidate().bodyCount()
                 : Integer.MAX_VALUE;
-        ConstructionScenario scenario = parseConstructionScenario(target.evidence().scenario());
         int feasibilityCost;
         if (requiredBodies <= clusterSize) {
             feasibilityCost = requiredBodies * 20;
@@ -8192,8 +8489,8 @@ public final class LivingWallCoordinator {
         } else if (scenario == ConstructionScenario.JUMP_BRIDGE) {
             scenarioCost = -400;
         } else if (scenario == ConstructionScenario.DROP_TO_LEDGE) {
-            int dropHeight = sourcePivot != null && target.evidence().anchor() != null
-                    ? Math.abs(sourcePivot.getY() - target.evidence().anchor().getY())
+            int dropHeight = sourcePivot != null && evidence.anchor() != null
+                    ? Math.abs(sourcePivot.getY() - evidence.anchor().getY())
                     : 0;
             if (dropHeight <= 3) {
                 scenarioCost = 100;
@@ -8203,13 +8500,13 @@ public final class LivingWallCoordinator {
         } else {
             scenarioCost = 1000;
         }
-        BlockPos pivotPos = target.corridor() != null ? target.corridor().pivot() : sourcePivot;
+        BlockPos pivotPos = corridor != null ? corridor.pivot() : sourcePivot;
         int approachDist = sourcePivot != null && pivotPos != null ? sourcePivot.distManhattan(pivotPos) : 0;
         int approachCost = approachDist * 15;
         int threatCost = 0;
-        if (threatDestination != null && sourcePivot != null && target.evidence().anchor() != null) {
+        if (threatDestination != null && sourcePivot != null && evidence.anchor() != null) {
             int pivotThreatDist = sourcePivot.distManhattan(threatDestination);
-            int landingThreatDist = target.evidence().anchor().distManhattan(threatDestination);
+            int landingThreatDist = evidence.anchor().distManhattan(threatDestination);
             int progress = pivotThreatDist - landingThreatDist;
             if (progress > 0) {
                 threatCost = -progress * 40;
@@ -8217,10 +8514,10 @@ public final class LivingWallCoordinator {
                 threatCost = (-progress) * 60;
             }
         }
-        int hazards = target.evidence().hazardCells() != null ? target.evidence().hazardCells().size() : 0;
+        int hazards = evidence.hazardCells() != null ? evidence.hazardCells().size() : 0;
         int hazardCost = hazards * 150;
         int egressCost = 0;
-        if (target.scoredCandidate() != null && target.scoredCandidate().candidate().supportedEgress()) {
+        if (scoredCandidate != null && scoredCandidate.candidate().supportedEgress()) {
             egressCost = -200;
         } else {
             egressCost = 300;
@@ -8237,6 +8534,7 @@ public final class LivingWallCoordinator {
                                                                          List<ScoredTarget> candidates,
                                                                          TargetRouteProbeStats routeStats) {
         List<SelectedTargetEvidence> selected = new ArrayList<>();
+        RouteProbeContext routeProbeContext = null;
         for (ScoredTarget candidate : candidates) {
             BlockPos routeTarget = candidate == null || candidate.evidence() == null ? null : candidate.evidence().anchor();
             CanonicalFeetCorridor corridor = candidate == null ? null : candidate.corridor();
@@ -8247,9 +8545,16 @@ public final class LivingWallCoordinator {
                 routeStats.recordCandidateFailure(routeStats.failureReason);
                 continue;
             }
-            RouteProbeOutcome probeOutcome = routeBudgetSatisfied(level, cluster, routeTarget, candidate.evidence(), corridor, routeStats);
+            if (routeProbeContext == null) routeProbeContext = createRouteProbeContext(level, cluster);
+            RouteProbeOutcome probeOutcome = routeBudgetSatisfied(level, cluster, routeTarget, candidate.evidence(), corridor,
+                    routeStats, routeProbeContext);
             if (!probeOutcome.successful()) {
                 routeStats.recordCandidateFailure(probeOutcome.failureReason());
+                if ("probe_budget_exhausted_defer".equals(probeOutcome.failureReason())) {
+                    routeStats.budgetDeferred = true;
+                    routeStats.failureReason = probeOutcome.failureReason();
+                    break;
+                }
                 continue;
             }
             boolean distinct = selected.stream().noneMatch(existing -> {
@@ -8269,9 +8574,16 @@ public final class LivingWallCoordinator {
 
     static RouteProbeProof routeBudgetSatisfiedForTest(ServerLevel level, List<Mob> cluster, BlockPos target,
                                                       WallProfileScanner.TargetEvidence evidence, CanonicalFeetCorridor corridor) {
+        return routeBudgetSatisfiedForTest(level, cluster, target, evidence, corridor, true);
+    }
+
+    static RouteProbeProof routeBudgetSatisfiedForTest(ServerLevel level, List<Mob> cluster, BlockPos target,
+                                                      WallProfileScanner.TargetEvidence evidence, CanonicalFeetCorridor corridor,
+                                                      boolean allowPathAttempt) {
         BlockPos routeTarget = target;
         TargetRouteProbeStats stats = new TargetRouteProbeStats();
-        RouteProbeOutcome outcome = routeBudgetSatisfied(level, cluster, routeTarget, evidence, corridor, stats);
+        RouteProbeOutcome outcome = routeBudgetSatisfied(level, cluster, routeTarget, evidence, corridor, stats,
+                (RouteProbeContext) null, (routeLevel, priority) -> allowPathAttempt);
         return new RouteProbeProof(corridor != null, stats.intakeResolutionAttempts, stats.routeProbeAttempts,
                 stats.reservations, stats.pathCreationAttempts, outcome.failureReason());
     }
@@ -8294,6 +8606,25 @@ public final class LivingWallCoordinator {
                                                           WallProfileScanner.TargetEvidence evidence,
                                                           CanonicalFeetCorridor corridor,
                                                           TargetRouteProbeStats routeStats) {
+        return routeBudgetSatisfied(level, cluster, routeTarget, evidence, corridor, routeStats, (RouteProbeContext) null);
+    }
+
+    private static RouteProbeOutcome routeBudgetSatisfied(ServerLevel level, List<Mob> cluster, BlockPos routeTarget,
+                                                          WallProfileScanner.TargetEvidence evidence,
+                                                          CanonicalFeetCorridor corridor,
+                                                          TargetRouteProbeStats routeStats,
+                                                          RouteProbeContext routeProbeContext) {
+        return routeBudgetSatisfied(level, cluster, routeTarget, evidence, corridor, routeStats, routeProbeContext,
+                (routeLevel, priority) -> com.example.soundattract.pathfinding.PathTaskScheduler
+                        .tryConsumePathAttempt(routeLevel, priority));
+    }
+
+    private static RouteProbeOutcome routeBudgetSatisfied(ServerLevel level, List<Mob> cluster, BlockPos routeTarget,
+                                                          WallProfileScanner.TargetEvidence evidence,
+                                                          CanonicalFeetCorridor corridor,
+                                                          TargetRouteProbeStats routeStats,
+                                                          RouteProbeContext routeProbeContext,
+                                                          BiPredicate<ServerLevel, com.example.soundattract.pathfinding.PathTaskScheduler.Priority> pathAttemptGate) {
         if (routeStats == null) routeStats = new TargetRouteProbeStats();
         if (level == null || cluster == null || cluster.isEmpty() || routeTarget == null) {
             routeStats.failureReason = "invalid_route_target";
@@ -8309,36 +8640,27 @@ public final class LivingWallCoordinator {
             routeStats.failureReason = routeValidation.reason().name().toLowerCase();
             return new RouteProbeOutcome(null, routeStats.failureReason);
         }
-        LivingBridgePositionPlan positionPlan = state(level).positionPlans.get(targetRosterFingerprint(cluster));
-        List<Mob> orderedWorkers = cluster.stream()
-                .filter(mob -> mob != null && mob.isAlive() && !mob.isRemoved() && isEligible(mob))
-                .sorted(Comparator.comparing((Mob mob) -> {
-                            GroundingObservation grounding = state(level).groundingObservations.get(mob.getUUID());
-                            return positionPlan == null || grounding != null && grounding.groundedTicks() >= 2 ? 0 : 1;
-                        })
-                        .thenComparingDouble(mob -> mob.distanceToSqr(Vec3.atBottomCenterOf(routeTarget))))
-                .limit(TARGET_ROUTE_PROBE_LIMIT)
-                .toList();
-        routeStats.eligibleCandidates = (int) cluster.stream()
-                .filter(mob -> mob != null && mob.isAlive() && !mob.isRemoved() && isEligible(mob)).count();
-        routeStats.groundedCandidates = (int) orderedWorkers.stream().filter(mob -> {
-            GroundingObservation grounding = state(level).groundingObservations.get(mob.getUUID());
-            return positionPlan == null || grounding != null && grounding.groundedTicks() >= 2;
-        }).count();
+        if (routeProbeContext == null) routeProbeContext = createRouteProbeContext(level, cluster);
+        RouteProbeContext probeContext = routeProbeContext;
+        List<RouteProbeWorker> orderedWorkers = nearestRouteProbeWorkers(probeContext, routeTarget);
+        routeStats.eligibleCandidates = probeContext.eligibleWorkers().size();
+        routeStats.groundedCandidates = (int) orderedWorkers.stream().filter(worker -> probeContext.positionPlan() == null
+                || worker.groundedTicks() >= 2).count();
         if (orderedWorkers.isEmpty()) {
             routeStats.failureReason = "no_eligible_worker";
             return new RouteProbeOutcome(null, routeStats.failureReason);
         }
         List<SourceStagingAttempt> attempts = new ArrayList<>();
         String deferredFailure = null;
-        for (Mob probe : orderedWorkers) {
+        for (RouteProbeWorker orderedWorker : orderedWorkers) {
+            Mob probe = orderedWorker.mob();
             WorkerRouteStartState start = resolveWorkerRouteStartState(level, probe);
             routeStats.intakeResolutionAttempts++;
-            GroundingObservation grounding = state(level).groundingObservations.get(probe.getUUID());
             boolean closeToAnchor = probe.distanceToSqr(Vec3.atBottomCenterOf(routeTarget)) <= 16.0D;
             boolean hasSupport = hasMobCompatibleStartSupport(level, probe, probe.getBoundingBox());
+            LivingBridgePositionPlan positionPlan = probeContext.positionPlan();
             if (positionPlan != null && positionPlan.startTick() < level.getGameTime()
-                    && (grounding == null || grounding.groundedTicks() < (closeToAnchor || hasSupport ? 1 : 2))) {
+                    && orderedWorker.groundedTicks() < (closeToAnchor || hasSupport ? 1 : 2)) {
                 deferredFailure = preferDeferredReason(deferredFailure, "worker_airborne_defer");
                 routeStats.deferredCandidates++;
                 routeStats.workerFailureReason = "worker_airborne_defer";
@@ -8383,6 +8705,12 @@ public final class LivingWallCoordinator {
                         routeStats.successes, attempts.size());
                 routeStats.workerFailureReason = routeStats.failureReason;
                 break;
+            }
+            if (!pathAttemptGate.test(level, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) {
+                routeStats.budgetDeferred = true;
+                routeStats.failureReason = "probe_budget_exhausted_defer";
+                routeStats.workerFailureReason = routeStats.failureReason;
+                return new RouteProbeOutcome(null, routeStats.failureReason);
             }
             routeStats.reservations++;
             routeStats.routeProbeAttempts++;
@@ -8741,6 +9069,17 @@ public final class LivingWallCoordinator {
         return false;
     }
 
+    private static boolean hasVerifiedPhysicalSupport(ServerLevel level, Mob worker, AABB body) {
+        if (level == null || worker == null || body == null || !level.noCollision(worker, body)) return false;
+        AABB contact = body.move(0.0D, -CONTACT_EPSILON, 0.0D);
+        return level.getBlockCollisions(worker, contact).iterator().hasNext();
+    }
+
+    private static boolean hasStrictRecoveryContact(ServerLevel level, Mob worker, AABB body) {
+        if (level == null || worker == null || body == null || !level.noCollision(worker, body)) return false;
+        return level.getBlockCollisions(worker, body.move(0.0D, -0.001D, 0.0D)).iterator().hasNext();
+    }
+
     static boolean isMobCompatibleWorkerSupportShape(VoxelShape shape, AABB body, BlockPos supportPos) {
         if (shape == null || shape.isEmpty() || body == null || supportPos == null) return false;
         AABB footprint = new AABB(body.minX, body.minY - CONTACT_EPSILON, body.minZ, body.maxX, body.minY + CONTACT_EPSILON, body.maxZ);
@@ -8961,10 +9300,8 @@ public final class LivingWallCoordinator {
         String routeFailure = validateSourceApproachRoute(intakeOrigin, towardWorker, corridor, route);
         if (routeFailure != null) {
             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ROUTING)) {
-                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ADMISSION)) {
                 SoundAttractMod.LOGGER.debug("[LivingWallCoordinator] SOURCE_APPROACH route_rejected worker={} target={} intake={} reason={} routeNodes={}",
                         worker.getUUID(), routeTarget, intakeWindow.feederApproach(), routeFailure, route);
-                }
             }
             return List.of();
         }
@@ -9291,6 +9628,10 @@ public final class LivingWallCoordinator {
                 .min(Comparator.comparingDouble(mob -> mob.distanceToSqr(Vec3.atBottomCenterOf(target))))
                 .orElse(null);
         if (probe == null) return false;
+        var pathPriority = formation == null
+                ? com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL
+                : com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED;
+        if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(level, pathPriority)) return false;
         var path = probe.getNavigation().createPath(target, 0);
         boolean reachable = path != null && path.canReach() && path.getTarget() != null
                 && path.getTarget().distSqr(target) <= 1.0D;
@@ -9476,21 +9817,24 @@ public final class LivingWallCoordinator {
                                                               BlockPos threat, WallProfileScanner.RayEvidence ray,
                                                               int rayOrdinal, BlockPos structuralCell,
                                                               int structuralIndex, BodyGeometry geometry,
-                                                              Vec3 center, LandingRejectionCounts counts) {
+                                                              Vec3 center, LandingRejectionCounts counts,
+                                                              TargetLandingValidationCache validationCache,
+                                                              int maximumConfiguredGap, int maximumConfiguredHeight) {
         if (level == null || pivot == null || threat == null || ray == null || structuralCell == null
                 || geometry == null || center == null) return null;
-        LinkedHashSet<BlockPos> candidates = new LinkedHashSet<>();
-        BlockPos canonical = resolveStructuralLanding(level, structuralCell, pivot, ray.direction());
-        if (canonical != null) candidates.add(canonical.immutable());
+        BlockPos canonical = validationCache.resolveCanonicalLanding(level, structuralCell, pivot, ray.direction());
+        int configuredMaximumGap = maximumConfiguredGap + 1;
         int horizontalDistance = Math.min(MAX_EXTERIOR_LANDING_DISTANCE,
-                Math.max(1, LivingWallConfig.MAX_GAP.get() + 1));
-        int verticalDistance = Math.min(MAX_EXTERIOR_LANDING_HEIGHT,
-                Math.max(0, LivingWallConfig.MAX_HEIGHT.get()));
-        candidates.addAll(WallProfileScanner.exteriorLandingCandidates(structuralCell, pivot, ray.direction(),
-                horizontalDistance, verticalDistance));
+                Math.max(1, configuredMaximumGap));
+        double maximumGap = configuredMaximumGap;
+        double maximumGapSqr = maximumGap * maximumGap;
+        int verticalDistance = Math.min(MAX_EXTERIOR_LANDING_HEIGHT, Math.max(0, maximumConfiguredHeight));
+        Iterator<BlockPos> candidates = WallProfileScanner.exteriorLandingCandidates(
+                canonical, structuralCell, pivot, ray.direction(), horizontalDistance, verticalDistance);
         TargetLandingSelection fallbackDrop = null;
         int inspected = 0;
-        for (BlockPos candidate : candidates) {
+        while (candidates.hasNext()) {
+            BlockPos candidate = candidates.next();
             if (candidate == null) { counts.nullCandidate++; continue; }
             inspected++;
             if (inspected > MAX_EXTERIOR_LANDING_CANDIDATES) {
@@ -9498,27 +9842,32 @@ public final class LivingWallCoordinator {
                 break;
             }
             counts.inspectedCandidates++;
-            boolean landingSurface = isSafeLanding(level, candidate) || isInvasionEndpoint(level, pivot, candidate);
-            if (!landingSurface) { counts.unsafeSurface++; continue; }
-            if (!hasBridgeNeed(level, pivot, candidate)) { counts.tooShort++; continue; }
-            if (bridgeLength(pivot, candidate) < 1.5D) { counts.tooShort++; continue; }
-            if (horizontalDistance(pivot, candidate) > LivingWallConfig.MAX_GAP.get() + 1.0D) { counts.tooFar++; continue; }
+            double dx = candidate.getX() - pivot.getX();
+            double dy = candidate.getY() - pivot.getY();
+            double dz = candidate.getZ() - pivot.getZ();
+            if (dx * dx + dy * dy + dz * dz < 2.25D) { counts.tooShort++; continue; }
+            if (dx * dx + dz * dz > maximumGapSqr) { counts.tooFar++; continue; }
             if (!isTargetVerticalCompatible(center, threat, candidate)) {
                 if (canonical == null || candidate.getY() < canonical.getY()) {
                     counts.verticalMismatch++;
                     continue;
                 }
             }
+            if (!hasThreatProgress(pivot, candidate, threat)) { counts.threatRejected++; continue; }
+            boolean landingSurface = validationCache.isLandingSurface(level, pivot, candidate);
+            if (!landingSurface) { counts.unsafeSurface++; continue; }
+            if (!validationCache.hasBridgeNeed(level, pivot, candidate)) { counts.tooShort++; continue; }
             CanonicalCorridorDecision decision = evaluateCanonicalCorridorAtCandidate(level, pivot, threat, ray,
                     rayOrdinal, structuralCell, structuralIndex, candidate);
             if (!decision.accepted()) { counts.corridorRejected++; continue; }
             ConstructionScenario scenario = parseConstructionScenario(decision.evidence().scenario());
             if (scenario == null || scenario == ConstructionScenario.NONE) { counts.scenarioRejected++; continue; }
-            List<BlockPos> hazards = carriedRayHazards(ray, pivot, candidate);
-            if (scenario == ConstructionScenario.HAZARD_AND_WALL && hazards.isEmpty()) { counts.hazardRejected++; continue; }
+            if (scenario == ConstructionScenario.HAZARD_AND_WALL && decision.evidence().hazardCells().isEmpty()) {
+                counts.hazardRejected++;
+                continue;
+            }
             if (!hasWallProgress(pivot, candidate, decision.evidence().wallFace())) { counts.spanRejected++; continue; }
-            if (!hasThreatProgress(pivot, candidate, threat)) { counts.threatRejected++; continue; }
-            CanonicalFeetCorridor executable = executableCorridor(level, decision.corridor(), geometry);
+            CanonicalFeetCorridor executable = executableCorridor(level, decision.corridor(), geometry, validationCache);
             if (executable == null) { counts.executableRejected++; continue; }
             if (!orderedCorridorTransitionValid(executable, decision.evidence(), threat, scenario)) { counts.transitionRejected++; continue; }
             if (!hasWallProgress(pivot, executable.egressFeet(), decision.evidence().wallFace())) { counts.egressSpanRejected++; continue; }
@@ -9562,26 +9911,280 @@ public final class LivingWallCoordinator {
         }
     }
 
+    private static final class TargetLandingValidationCache {
+        private static final byte SAFE_CHECKED = 1;
+        private static final byte SAFE_RESULT = 1 << 1;
+        private static final byte BRIDGE_NEED_CHECKED = 1 << 2;
+        private static final byte BRIDGE_NEED_RESULT = 1 << 3;
+
+        private boolean enabled;
+        private int lookups;
+        private int hits;
+
+        TargetLandingValidationCache(boolean enabled) {
+            this(enabled, Math.max(1, LivingWallConfig.MAX_GAP.get() + 1) + 2);
+        }
+
+        TargetLandingValidationCache(boolean canReuse, int validationRadius) {
+            this.enabled = canReuse;
+            this.validationRadius = validationRadius;
+        }
+
+        private final int validationRadius;
+        private boolean initialized;
+        private it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap candidateFlags;
+        private Map<CanonicalLandingKey, BlockPos> canonicalLandingResults;
+        private Map<RouteLegKey, List<BlockPos>> routeLegResults;
+        private int canonicalLookups;
+        private int canonicalHits;
+        private int routeLegLookups;
+        private int routeLegCacheHits;
+        private int routeSearches;
+
+        private record CanonicalLandingKey(long structural, long pivot, int rayX, int rayZ,
+                                           int maximumGap, int maximumHeight) {}
+        private record RouteLegKey(long start, long end, long widthBits, long heightBits) {}
+
+        List<BlockPos> findRoute(ServerLevel level, BlockPos start, BlockPos end, double width, double height) {
+            if (level == null || start == null || end == null || !prepare(level, start)) {
+                return LivingBridgeRouteSearch.findRoute(level, start, end, width, height,
+                        LivingBridgeRouteSearch.MAX_NODE_BUDGET);
+            }
+            routeLegLookups++;
+            RouteLegKey key = new RouteLegKey(start.asLong(), end.asLong(),
+                    Double.doubleToLongBits(width), Double.doubleToLongBits(height));
+            if (routeLegResults != null && routeLegResults.containsKey(key)) {
+                routeLegCacheHits++;
+                return routeLegResults.get(key);
+            }
+            routeSearches++;
+            List<BlockPos> route = LivingBridgeRouteSearch.findRoute(level, start, end, width, height,
+                    LivingBridgeRouteSearch.MAX_NODE_BUDGET);
+            if (routeLegResults == null) routeLegResults = new HashMap<>(32);
+            if (routeLegResults.size() < MAX_TARGET_ROUTE_LEG_CACHE_ENTRIES) {
+                routeLegResults.put(key, route);
+            }
+            return route;
+        }
+
+        BlockPos resolveCanonicalLanding(ServerLevel level, BlockPos structural, BlockPos pivot, Vec3 rayDirection) {
+            if (!enabled || level == null || structural == null || pivot == null) {
+                return resolveStructuralLanding(level, structural, pivot, rayDirection);
+            }
+
+            int maximumGap = LivingWallConfig.MAX_GAP.get();
+            int maximumHeight = LivingWallConfig.MAX_HEIGHT.get();
+            int rayX = rayDirection == null ? 0 : rayComponentSign(rayDirection.x);
+            int rayZ = rayDirection == null ? 0 : rayComponentSign(rayDirection.z);
+            canonicalLookups++;
+            if (canonicalLandingResults != null) {
+                CanonicalLandingKey key = new CanonicalLandingKey(structural.asLong(), pivot.asLong(),
+                        rayX, rayZ, maximumGap, maximumHeight);
+                if (canonicalLandingResults.containsKey(key)) {
+                    canonicalHits++;
+                    return canonicalLandingResults.get(key);
+                }
+            }
+
+            int searchRadius = Math.max(2, Math.min(4, Math.max(1, maximumGap))) + 2;
+            if (!targetLandingChunksLoaded(level, structural, searchRadius)) {
+                return resolveStructuralLanding(level, structural, pivot, rayDirection);
+            }
+
+            CanonicalLandingKey key = new CanonicalLandingKey(structural.asLong(), pivot.asLong(),
+                    rayX, rayZ, maximumGap, maximumHeight);
+            BlockPos resolved = LivingWallCoordinator.resolveCanonicalLanding(
+                    level, structural, pivot, rayDirection, maximumGap, maximumHeight);
+            if (canonicalLandingResults == null) canonicalLandingResults = new HashMap<>(32);
+            if (canonicalLandingResults.size() < MAX_TARGET_LANDING_CACHE_ENTRIES) {
+                canonicalLandingResults.put(key, resolved == null ? null : resolved.immutable());
+            }
+            return resolved;
+        }
+
+        int canonicalLookups() {
+            return canonicalLookups;
+        }
+
+        int canonicalHits() {
+            return canonicalHits;
+        }
+
+        int routeLegLookups() {
+            return routeLegLookups;
+        }
+
+        int routeLegCacheHits() {
+            return routeLegCacheHits;
+        }
+
+        int routeSearches() {
+            return routeSearches;
+        }
+
+        int canonicalSize() {
+            return canonicalLandingResults == null ? 0 : canonicalLandingResults.size();
+        }
+
+        boolean isLandingSurface(ServerLevel level, BlockPos pivot, BlockPos candidate) {
+            if (!prepare(level, pivot)) return isSafeLanding(level, candidate);
+            long key = candidate.asLong();
+            byte flags = candidateFlags.get(key);
+            lookups++;
+            if ((flags & SAFE_CHECKED) != 0) {
+                hits++;
+            } else {
+                boolean safe = isSafeLanding(level, candidate);
+                flags |= SAFE_CHECKED;
+                if (safe) flags |= SAFE_RESULT;
+                flags = store(key, flags);
+                if (safe) return true;
+            }
+            return (flags & SAFE_RESULT) != 0;
+        }
+
+        boolean hasBridgeNeed(ServerLevel level, BlockPos pivot, BlockPos candidate) {
+            if (!prepare(level, pivot)) return LivingWallCoordinator.hasBridgeNeed(level, pivot, candidate);
+            long key = candidate.asLong();
+            byte flags = candidateFlags.get(key);
+            lookups++;
+            if ((flags & BRIDGE_NEED_CHECKED) != 0) {
+                hits++;
+                return (flags & BRIDGE_NEED_RESULT) != 0;
+            }
+            boolean needed = LivingWallCoordinator.hasBridgeNeed(level, pivot, candidate);
+            flags |= BRIDGE_NEED_CHECKED;
+            if (needed) flags |= BRIDGE_NEED_RESULT;
+            store(key, flags);
+            return needed;
+        }
+
+        private byte store(long key, byte flags) {
+            if (candidateFlags.containsKey(key) || candidateFlags.size() < MAX_TARGET_LANDING_CACHE_ENTRIES) {
+                candidateFlags.put(key, flags);
+            }
+            return flags;
+        }
+
+        private boolean prepare(ServerLevel level, BlockPos pivot) {
+            if (!initialized) {
+                initialized = true;
+                if (enabled && targetLandingChunksLoaded(level, pivot, validationRadius)) {
+                    candidateFlags = new it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap(128);
+                    candidateFlags.defaultReturnValue((byte) 0);
+                } else {
+                    enabled = false;
+                }
+            }
+            return enabled;
+        }
+
+        int size() {
+            return candidateFlags == null ? 0 : candidateFlags.size();
+        }
+
+        int lookups() {
+            return lookups;
+        }
+
+        int hits() {
+            return hits;
+        }
+    }
+
+    private static boolean targetLandingChunksLoaded(ServerLevel level, BlockPos pivot, int radius) {
+        if (level == null || pivot == null || radius < 0) return false;
+        int minChunkX = Math.floorDiv(pivot.getX() - radius, 16);
+        int maxChunkX = Math.floorDiv(pivot.getX() + radius, 16);
+        int minChunkZ = Math.floorDiv(pivot.getZ() - radius, 16);
+        int maxChunkZ = Math.floorDiv(pivot.getZ() + radius, 16);
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                if (level.getChunkSource().getChunkNow(chunkX, chunkZ) == null) return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean recoveryTerrainChunksLoaded(ServerLevel level, Mob mob, AABB sweptBody,
+                                                        BlockPos endpoint) {
+        if (level == null || mob == null) return false;
+        if (endpoint != null && !targetLandingChunksLoaded(level, endpoint, 1)) return false;
+        AABB body = sweptBody == null ? mob.getBoundingBox() : sweptBody;
+        int minChunkX = Mth.floor(body.minX - 1.0E-7D) - 1 >> 4;
+        int maxChunkX = Mth.floor(body.maxX + 1.0E-7D) + 1 >> 4;
+        int minChunkZ = Mth.floor(body.minZ - 1.0E-7D) - 1 >> 4;
+        int maxChunkZ = Mth.floor(body.maxZ + 1.0E-7D) + 1 >> 4;
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                if (level.getChunkSource().getChunkNow(chunkX, chunkZ) == null) return false;
+            }
+        }
+        return true;
+    }
+
     static int rayComponentSign(double component) {
         return component > 1.0E-6D ? 1 : component < -1.0E-6D ? -1 : 0;
+    }
+
+    private static final class CanonicalLandingChoice {
+        private final ServerLevel level;
+        private final BlockPos structural;
+        private final BlockPos pivot;
+        private final int dx;
+        private final int dz;
+        private BlockPos bestCandidate;
+        private double bestScore = Double.POSITIVE_INFINITY;
+
+        private CanonicalLandingChoice(ServerLevel level, BlockPos structural, BlockPos pivot, int dx, int dz) {
+            this.level = level;
+            this.structural = structural;
+            this.pivot = pivot;
+            this.dx = dx;
+            this.dz = dz;
+        }
+
+        private boolean consider(BlockPos candidate) {
+            double score = candidate.distSqr(structural);
+            if (candidate.getY() > structural.getY()) score *= 0.5D;
+            if (score >= bestScore || isSheerWallFace(level, candidate, dx, dz)
+                    || !hasLandingAndEgress(level, candidate, pivot, candidate)) return bestScore == 1.0D;
+            bestCandidate = candidate;
+            bestScore = score;
+            return score == 1.0D;
+        }
+
+        private boolean canImprove(int x, int y, int z) {
+            double score = (double) x * x + (double) y * y + (double) z * z;
+            if (y > 0) score *= 0.5D;
+            return score < bestScore;
+        }
     }
 
     private static BlockPos resolveCanonicalLanding(ServerLevel level, BlockPos structural,
                                                      BlockPos pivot, Vec3 rayDirection) {
         if (level == null || structural == null || pivot == null) return null;
+        return resolveCanonicalLanding(level, structural, pivot, rayDirection,
+                LivingWallConfig.MAX_GAP.get(), LivingWallConfig.MAX_HEIGHT.get());
+    }
+
+    private static BlockPos resolveCanonicalLanding(ServerLevel level, BlockPos structural,
+                                                     BlockPos pivot, Vec3 rayDirection,
+                                                     int maximumGap, int maximumHeight) {
+        if (level == null || structural == null || pivot == null) return null;
         int dx = Integer.compare(structural.getX(), pivot.getX());
         int dz = Integer.compare(structural.getZ(), pivot.getZ());
-        int maxHeight = LivingWallConfig.MAX_HEIGHT.get();
+        int maxHeight = maximumHeight;
         int crestY = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, structural.getX(), structural.getZ());
         if (crestY > structural.getY() && crestY <= structural.getY() + maxHeight + 2) {
             BlockPos crest = new BlockPos(structural.getX(), crestY, structural.getZ());
-            if (isSafeLanding(level, crest) && hasLandingAndEgress(level, crest, pivot, crest)
+            if (hasLandingAndEgress(level, crest, pivot, crest)
                     && !isSheerWallFace(level, crest, dx, dz)) {
                 return crest.immutable();
             }
             if (dx != 0 || dz != 0) {
                 BlockPos forwardCrest = crest.offset(dx, 0, dz);
-                if (isSafeLanding(level, forwardCrest) && hasLandingAndEgress(level, forwardCrest, pivot, forwardCrest)
+                if (hasLandingAndEgress(level, forwardCrest, pivot, forwardCrest)
                         && !isSheerWallFace(level, forwardCrest, dx, dz)) {
                     return forwardCrest.immutable();
                 }
@@ -9594,53 +10197,57 @@ public final class LivingWallCoordinator {
             if (aboveState.getCollisionShape(level, above).isEmpty()
                     && level.getBlockState(above.above()).getCollisionShape(level, above.above()).isEmpty()
                     && hasStableSupport(level, above.below(), level.getBlockState(above.below()))) {
-                if (isSafeLanding(level, above) && hasLandingAndEgress(level, above, pivot, above)
+                if (hasLandingAndEgress(level, above, pivot, above)
                         && !isSheerWallFace(level, above, dx, dz)) {
                     return above.immutable();
                 }
                 if (dx != 0 || dz != 0) {
                     BlockPos forward = above.offset(dx, 0, dz);
-                    if (isSafeLanding(level, forward) && hasLandingAndEgress(level, forward, pivot, forward)
+                    if (hasLandingAndEgress(level, forward, pivot, forward)
                             && !isSheerWallFace(level, forward, dx, dz)) {
                         return forward.immutable();
                     }
                 }
             }
         }
-        List<BlockPos> candidates = new ArrayList<>();
+        CanonicalLandingChoice choice = new CanonicalLandingChoice(level, structural, pivot, dx, dz);
         if (dx != 0 || dz != 0) {
-            candidates.add(structural.offset(dx, 0, dz));
-            candidates.add(structural.offset(dx, 1, dz));
-            candidates.add(structural.offset(2 * dx, 0, 2 * dz));
-            candidates.add(structural.offset(2 * dx, 1, 2 * dz));
+            if (choice.consider(structural.offset(dx, 0, dz))) return choice.bestCandidate.immutable();
+            if (choice.consider(structural.offset(dx, 1, dz))) return choice.bestCandidate.immutable();
+            if (choice.consider(structural.offset(2 * dx, 0, 2 * dz))) return choice.bestCandidate.immutable();
+            if (choice.consider(structural.offset(2 * dx, 1, 2 * dz))) return choice.bestCandidate.immutable();
         }
         if (rayDirection != null) {
             int rx = rayComponentSign(rayDirection.x);
             int rz = rayComponentSign(rayDirection.z);
-            if (rx != 0 || rz != 0) candidates.add(structural.offset(rx, 0, rz));
+            if ((rx != 0 || rz != 0) && choice.consider(structural.offset(rx, 0, rz))) {
+                return choice.bestCandidate.immutable();
+            }
         }
-        int maxRad = Math.min(4, Math.max(1, LivingWallConfig.MAX_GAP.get()));
+        int maxRad = Math.min(4, Math.max(1, maximumGap));
         for (int radius = 1; radius <= maxRad; radius++) {
+            if (minimumCanonicalLandingRingScore(radius, maxHeight) >= choice.bestScore) break;
             for (int x = -radius; x <= radius; x++) {
                 for (int z = -radius; z <= radius; z++) {
                     if (Math.max(Math.abs(x), Math.abs(z)) != radius) continue;
                     for (int yOff = 0; yOff <= maxHeight; yOff++) {
-                        candidates.add(structural.offset(x, yOff, z));
+                        if (!choice.canImprove(x, yOff, z)) continue;
+                        if (choice.consider(structural.offset(x, yOff, z))) {
+                            return choice.bestCandidate.immutable();
+                        }
                     }
                 }
             }
         }
-        return candidates.stream().filter(candidate -> !isSheerWallFace(level, candidate, dx, dz)
-                        && (isSafeLanding(level, candidate) || isInvasionEndpoint(level, pivot, candidate))
-                        && hasLandingAndEgress(level, candidate, pivot, candidate))
-                .min(Comparator.comparingDouble(candidate -> {
-                    double distSqr = candidate.distSqr(structural);
-                    if (candidate.getY() > structural.getY()) {
-                        distSqr *= 0.5D;
-                    }
-                    return distSqr;
-                }))
-                .map(BlockPos::immutable).orElse(null);
+        return choice.bestCandidate == null ? null : choice.bestCandidate.immutable();
+    }
+
+    static double minimumCanonicalLandingRingScore(int radius, int maxHeight) {
+        int safeRadius = Math.max(1, radius);
+        int safeHeight = Math.max(0, maxHeight);
+        double horizontalMinimum = (double) safeRadius * safeRadius;
+        return safeHeight > 0 ? Math.min(horizontalMinimum, (horizontalMinimum + 1.0D) * 0.5D)
+                : horizontalMinimum;
     }
 
     private static boolean isOpenTrapdoor(BlockState state) {
@@ -9917,24 +10524,17 @@ public final class LivingWallCoordinator {
         alreadyChosen.addAll(formation.pendingBuilderIds);
         PerLevelState state = state(level);
         double maxDistSqr = ACTIVE_ASSEMBLY_MAX_RECRUITMENT_DISTANCE * ACTIVE_ASSEMBLY_MAX_RECRUITMENT_DISTANCE;
+        Vec3 pivotCenter = Vec3.atBottomCenterOf(formation.pivot);
         candidates.removeIf(m -> m == leader || !m.isAlive() || m.isRemoved() || !isEligible(m)
-                || m.distanceToSqr(Vec3.atBottomCenterOf(formation.pivot)) > maxDistSqr
+                || m.distanceToSqr(pivotCenter) > maxDistSqr
                 || alreadyChosen.contains(m.getUUID()) || isBeyondAnchor(formation, m)
                 || !compatibleGeometry(m, formation)
                 || formation.recruitmentBlacklist.containsKey(m.getUUID())
                 || formation.terminalSafeBaseFailures.contains(m.getUUID())
-                || shouldYieldBridgeCombat(m)
                 || state.basinEvacuations.containsKey(m.getUUID())
-                || state.mobOwners.containsKey(m.getUUID()) && !formation.id.equals(state.mobOwners.get(m.getUUID())));
-        candidates.sort(Comparator.comparingDouble((Mob mob) -> {
-                    double dist = distanceToNearestAssemblyCell(mob, formation);
-
-                    return dist <= 8.0D ? 0 : 1;
-                })
-                .thenComparingInt((Mob mob) -> recruitmentElevationOrder(formation.pivot.getY(), mob.getY()))
-                .thenComparing((Mob mob) -> !formation.transferredWorkerIds.contains(mob.getUUID()))
-                .thenComparingDouble(mob -> distanceToNearestAssemblyCell(mob, formation))
-                .thenComparing(mob -> mob.getUUID().toString()));
+                || state.mobOwners.containsKey(m.getUUID()) && !formation.id.equals(state.mobOwners.get(m.getUUID()))
+                || shouldYieldBridgeCombat(m));
+        sortRecruitmentCandidates(formation, candidates);
         if (candidates.size() > MAX_SCAN_CANDIDATES) candidates = new ArrayList<>(candidates.subList(0, MAX_SCAN_CANDIDATES));
         syncClaimedBridgeWorkers(level, formation, candidates);
         refreshCandidateHolding(level, formation, candidates, now);
@@ -10186,6 +10786,11 @@ public final class LivingWallCoordinator {
                 continue;
             }
             if (pathBudget > 0) {
+                if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                        level, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) {
+                    search.cursor--;
+                    break;
+                }
                 pathBudget--;
                 var path = mob.getNavigation().createPath(cell, 0);
                 if (path == null || !path.canReach() || path.getTarget() == null
@@ -10388,6 +10993,34 @@ public final class LivingWallCoordinator {
                 mob == null ? "none" : mob.position(), target);
     }
 
+    private record RecruitmentCandidate(Mob mob, int proximityOrder, int elevationOrder, boolean notTransferred,
+                                        double distanceToAssembly, String workerId) {
+    }
+
+    private static final Comparator<RecruitmentCandidate> RECRUITMENT_CANDIDATE_ORDER =
+            Comparator.comparingInt(RecruitmentCandidate::proximityOrder)
+                    .thenComparingInt(RecruitmentCandidate::elevationOrder)
+                    .thenComparing(RecruitmentCandidate::notTransferred)
+                    .thenComparingDouble(RecruitmentCandidate::distanceToAssembly)
+                    .thenComparing(RecruitmentCandidate::workerId);
+
+    private static void sortRecruitmentCandidates(Formation formation, List<Mob> candidates) {
+        if (candidates.size() < 2) return;
+        int pivotY = formation.pivot.getY();
+        List<RecruitmentCandidate> ranked = new ArrayList<>(candidates.size());
+        for (Mob mob : candidates) {
+            double distance = distanceToNearestAssemblyCell(mob, formation);
+            UUID workerId = mob.getUUID();
+            ranked.add(new RecruitmentCandidate(mob, distance <= 8.0D ? 0 : 1,
+                    recruitmentElevationOrder(pivotY, mob.getY()), !formation.transferredWorkerIds.contains(workerId),
+                    distance, workerId.toString()));
+        }
+        ranked.sort(RECRUITMENT_CANDIDATE_ORDER);
+        for (int index = 0; index < ranked.size(); index++) {
+            candidates.set(index, ranked.get(index).mob());
+        }
+    }
+
     private static double distanceToNearestAssemblyCell(Mob mob, Formation formation) {
         double best = Double.MAX_VALUE;
         for (BlockPos cell : formation.plan.assemblySlots()) {
@@ -10571,6 +11204,8 @@ public final class LivingWallCoordinator {
             return true;
         }
         if (state(level).pathSurveysRemaining <= 0) return false;
+        if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                level, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) return false;
         state(level).pathSurveysRemaining--;
         var path = mob.getNavigation().createPath(cell, 0);
         boolean reachable = path != null && ((path.canReach() && path.getTarget() != null && path.getTarget().distSqr(cell) <= 4.0D)
@@ -10588,10 +11223,8 @@ public final class LivingWallCoordinator {
         }
         formation.pathSurveys.put(key, new PathSurvey(reachable, source, now + PATH_SURVEY_CACHE_TICKS));
         if (!reachable && DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ROUTING)) {
-            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ADMISSION)) {
             SoundAttractMod.LOGGER.debug("[LivingWallCoordinator] admission_route_rejected bridge={} mob={} slot={} source={}",
                     formation.id, mob.getUUID(), cell, source);
-            }
         }
         return reachable;
     }
@@ -10605,6 +11238,7 @@ public final class LivingWallCoordinator {
                 && now - assignment.lastIntakeReplanTick < CAPTURE_RETRY_COOLDOWN_TICKS) return;
         assignment.lastIntakeReplanTick = now;
         logRecruitmentEvent(formation, mob, "capture_retry:" + reason, assignment, null);
+        formation.deferredRecruitmentRouteProbes.remove(mob.getUUID());
         IntakeWindow previous = assignment.intakeWindow;
         IntakeWindow replacement = null;
         if (formation.plan != null && formation.plan.intakeWindows() != null) {
@@ -10618,11 +11252,13 @@ public final class LivingWallCoordinator {
             }
         }
         if (replacement != null) {
+            formation.deferredRecruitmentRouteProbes.remove(mob.getUUID());
             assignment.intakeWindow = replacement;
             assignment.intakeWindowFailures = 0;
             logRecruitmentEvent(formation, mob, "feeder_replan:" + reason, assignment,
                     Vec3.atBottomCenterOf(replacement.feederCell()));
         } else {
+            if (formation.deferredRecruitmentRouteProbes.remove(mob.getUUID())) return;
             assignment.intakeWindowFailures++;
             if (shouldTerminateIntakeCaptureFailure(assignment.intakeWindowFailures)) {
                 logRecruitmentEvent(formation, mob, "intake_terminal_release:" + reason, assignment, null);
@@ -10812,7 +11448,8 @@ public final class LivingWallCoordinator {
                 destination = assignment.intakeWindow.feederApproach();
             }
             double distance = mob.position().distanceToSqr(Vec3.atBottomCenterOf(destination));
-            if (formation.movementDiagnostics++ < 160) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_FORMATION)
+                    && SoundAttractMod.LOGGER.isInfoEnabled() && formation.movementDiagnostics++ < 160) {
                 boolean navDone = mob.getNavigation().isDone();
                 String authority = mob.goalSelector.getRunningGoals()
                         .map(wrapped -> wrapped.getGoal().getClass().getSimpleName())
@@ -11282,14 +11919,55 @@ public final class LivingWallCoordinator {
     private static void recoverStaleControlledMob(ServerLevel level, Mob mob, String reason) {
         if (level == null || mob == null || mob.isRemoved() || !mob.isAlive()) return;
         CompoundTag root = mob.getPersistentData();
+        Formation localOwner = getFormation(mob);
+        if (localOwner != null && !localOwner.collapsed) return;
+        LivingBridgeRouteSnapshot trusted = trustedDurableRouteSnapshot(level, mob);
+        if (trusted != null && hasLiveFormation(level, trusted.formationId())) return;
+        if (root.contains(CONTROL_TAG, net.minecraft.nbt.Tag.TAG_COMPOUND)) {
+            CompoundTag marker = root.getCompound(CONTROL_TAG);
+            if (marker.hasUUID(CONTROL_SESSION) && hasLiveFormation(level, marker.getUUID(CONTROL_SESSION))) return;
+        }
+        if (!"entity_join".equals(reason) && level.getGameTime()
+                < state(level).durableRecoveryRetryAfter.getOrDefault(mob.getUUID(), Long.MIN_VALUE)) {
+            holdDurableRouteOwner(mob);
+            queueDurableRecovery(level, mob.getUUID());
+            return;
+        }
+        if (!"entity_join".equals(reason) && state(level).durableRecoveryStepTick.getOrDefault(
+                mob.getUUID(), Long.MIN_VALUE) == level.getGameTime()) {
+            queueDurableRecovery(level, mob.getUUID());
+            return;
+        }
+        if ("entity_join".equals(reason) && trusted != null
+                && !LivingBridgeRouteData.isTerminalLaneState(trusted.lifecycleState())) {
+            BlockPos endpoint = trusted.safeEndpoint() == null ? null : BlockPos.containing(
+                    trusted.safeEndpoint().x() / 4096.0D, trusted.safeEndpoint().y() / 4096.0D,
+                    trusted.safeEndpoint().z() / 4096.0D);
+            boolean recovering = "RECOVERING_TO_SAFE_ENDPOINT".equals(trusted.lifecycleState())
+                    && ("RECOVERING_TO_SAFE_ENDPOINT".equals(trusted.movementMode())
+                    || "ORPHAN_RECOVERY_TO_SAFE_ENDPOINT".equals(trusted.movementMode()));
+            boolean walking = "WALKING_TO_STAGING".equals(trusted.lifecycleState())
+                    && "SAFE_STAGING_NAVIGATION".equals(trusted.movementMode());
+            if (recovering || walking || endpoint != null && BlockPos.containing(mob.position()).equals(endpoint)) {
+                holdDurableRouteOwner(mob);
+                queueDurableRecovery(level, mob.getUUID());
+            }
+            return;
+        }
         if (!"entity_join".equals(reason)) {
-            boolean recovered = advanceControlledSafeRecovery(level, mob);
-            if (recovered || completeSafeRecoveryAtPersistedEndpoint(level, mob)) {
+            boolean progressed = advanceControlledSafeRecovery(level, mob);
+            boolean completed = !progressed && completeSafeRecoveryAtPersistedEndpoint(level, mob);
+            if (!progressed && !completed) progressed = beginUnsupportedOrphanRecovery(level, mob);
+            if (completed || progressed && !mustPreserveDurableRouteOwner(level, mob)) {
                 root.remove("livingBridgeRecoveryRequiredLogged");
+            }
+            if (!progressed && !completed && mustPreserveDurableRouteOwner(level, mob)) {
+                deferDurableRecovery(level, mob);
             }
         }
         if (mustPreserveDurableRouteOwner(level, mob)) {
             holdDurableRouteOwner(mob);
+            if (shouldQueueDurableRecovery(level, mob)) queueDurableRecovery(level, mob.getUUID());
             if (!root.getBoolean("livingBridgeRecoveryRequiredLogged")) {
                 root.putBoolean("livingBridgeRecoveryRequiredLogged", true);
                 SoundAttractMod.LOGGER.warn("[LivingWallCoordinator] durable_route_owner_held reason={} mob={} dimension={} pos={} resolution=restore_trusted_formation_or_operator_safe_recovery",
@@ -11328,6 +12006,23 @@ public final class LivingWallCoordinator {
             }
         }
 
+        if (hasRouteControl) {
+            try {
+                CompoundTag capsule = root.getCompound("livingBridgeControl");
+                if (capsule.getInt("schema") == LivingBridgeRouteData.CURRENT_SCHEMA) {
+                    LivingBridgeRouteSnapshot entity = LivingBridgeRouteSnapshot.fromTag(capsule.getCompound("snapshot"));
+                    LivingBridgeRouteSnapshot saved = LivingBridgeRouteData.get(level).snapshot(entity.reservationId());
+                    if (saved != null && saved.exactlyEquals(entity) && entity.ownerId().equals(mob.getUUID())
+                            && entity.dimension().equals(level.dimension().location().toString())
+                            && LivingBridgeRouteData.isTerminalLaneState(entity.lifecycleState())) {
+                        originalGravity = !entity.originalNoGravity();
+                        originalNoPhysics = entity.originalNoPhysics();
+                    }
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+
         mob.setNoGravity(!originalGravity);
         mob.noPhysics = originalNoPhysics;
         ((MobAccessor) mob).setPersistenceRequiredFlag(originalPersistence);
@@ -11343,6 +12038,86 @@ public final class LivingWallCoordinator {
             SoundAttractMod.LOGGER.info("[LivingWallCoordinator] stale_marker_restored reason={} mob={} session={} pos={}",
                     reason, mob.getUUID(), session, mob.position());
         }
+    }
+
+    private static boolean shouldQueueDurableRecovery(ServerLevel level, Mob mob) {
+        LivingBridgeRouteSnapshot current = trustedDurableRouteSnapshot(level, mob);
+        Formation owner = getFormation(mob);
+        if (current == null || current.safeEndpoint() == null || hasLiveFormation(level, current.formationId())
+                || owner != null && !owner.collapsed) return false;
+        BlockPos endpoint = BlockPos.containing(current.safeEndpoint().x() / 4096.0D,
+                current.safeEndpoint().y() / 4096.0D, current.safeEndpoint().z() / 4096.0D);
+        if (BlockPos.containing(mob.position()).equals(endpoint)) return true;
+        if ("RECOVERING_TO_SAFE_ENDPOINT".equals(current.lifecycleState())) {
+            return "RECOVERING_TO_SAFE_ENDPOINT".equals(current.movementMode())
+                    || "ORPHAN_RECOVERY_TO_SAFE_ENDPOINT".equals(current.movementMode());
+        }
+        if (!"WALKING_TO_STAGING".equals(current.lifecycleState())
+                || !"SAFE_STAGING_NAVIGATION".equals(current.movementMode())) return false;
+        return true;
+    }
+
+    private static LivingBridgeRouteSnapshot trustedDurableRouteSnapshot(ServerLevel level, Mob mob) {
+        if (level == null || mob == null || level.getServer() == null || !level.getServer().isSameThread()
+                || !mob.getPersistentData().contains("livingBridgeControl", net.minecraft.nbt.Tag.TAG_COMPOUND)) return null;
+        try {
+            CompoundTag capsule = mob.getPersistentData().getCompound("livingBridgeControl");
+            if (!capsule.contains("schema", net.minecraft.nbt.Tag.TAG_INT)
+                    || capsule.getInt("schema") != LivingBridgeRouteData.CURRENT_SCHEMA) return null;
+            LivingBridgeRouteSnapshot current = LivingBridgeRouteSnapshot.fromTag(capsule.getCompound("snapshot"));
+            LivingBridgeRouteData data = LivingBridgeRouteData.get(level);
+            if (!current.ownerId().equals(mob.getUUID())
+                    || !current.dimension().equals(level.dimension().location().toString())
+                    || !data.canRecoverOwner(current)
+                    || !current.digest().equals(capsule.getString("snapshotDigest"))) return null;
+            return current;
+        } catch (RuntimeException malformed) {
+            return null;
+        }
+    }
+
+    private static void queueDurableRecovery(ServerLevel level, UUID ownerId) {
+        if (level == null || ownerId == null) return;
+        PerLevelState state = state(level);
+        if (state.pendingDurableRecoveryIds.add(ownerId)) state.pendingDurableRecoveries.addLast(ownerId);
+    }
+
+    private static void processPendingDurableRecoveries(ServerLevel level, PerLevelState state) {
+        if (level == null || state == null || level.getServer() == null || !level.getServer().isSameThread()) return;
+        int attempts = Math.min(state.durableRecoveryWorkRemaining, state.pendingDurableRecoveries.size());
+        for (int processed = 0; processed < attempts; processed++) {
+            UUID ownerId = state.pendingDurableRecoveries.pollFirst();
+            if (ownerId == null) return;
+            state.durableRecoveryWorkRemaining--;
+            state.pendingDurableRecoveryIds.remove(ownerId);
+            if (!(level.getEntity(ownerId) instanceof Mob mob) || !mob.isAlive() || mob.isRemoved()) {
+                clearDurableRecoveryState(state, ownerId);
+                continue;
+            }
+            long retryAfter = state.durableRecoveryRetryAfter.getOrDefault(ownerId, Long.MIN_VALUE);
+            if (level.getGameTime() < retryAfter) {
+                queueDurableRecovery(level, ownerId);
+                continue;
+            }
+            LivingBridgeRouteSnapshot trusted = trustedDurableRouteSnapshot(level, mob);
+            Formation localOwner = getFormation(mob);
+            if (trusted != null && (hasLiveFormation(level, trusted.formationId())
+                    || localOwner != null && !localOwner.collapsed)) {
+                queueDurableRecovery(level, ownerId);
+                continue;
+            }
+            if (!shouldQueueDurableRecovery(level, mob)) {
+                clearDurableRecoveryState(state, ownerId);
+                continue;
+            }
+            recoverStaleControlledMob(level, mob, "durable_recovery_tick");
+        }
+    }
+
+    private static void clearDurableRecoveryState(PerLevelState state, UUID ownerId) {
+        if (state == null || ownerId == null) return;
+        state.durableRecoveryRetryAfter.remove(ownerId);
+        state.durableRecoveryStepTick.remove(ownerId);
     }
 
     private static boolean isAtAssemblySlot(Vec3 position, BlockPos cell) {
@@ -11386,7 +12161,7 @@ public final class LivingWallCoordinator {
         if (existing != null && existing.routeRevision() == formation.request.revision()
                 && safeBaseReservationBoundToBuilder(level, mob, formation, existing)) return existing;
         if (!mob.onGround() && !repairSafeBaseGroundState(level, formation, mob, slot)) return null;
-        boolean diagnosticEnabled = DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_RECOVERY);
+        boolean diagnosticEnabled = DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ROUTING);
         long requestRevision = formation.request.revision();
         boolean diagnosticSuppressed = diagnosticEnabled
                 && Long.valueOf(requestRevision).equals(
@@ -11451,6 +12226,8 @@ public final class LivingWallCoordinator {
                 if (diagnostics != null) diagnostics.record("prior_candidate", candidate);
                 continue;
             }
+            if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                    level, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED)) return null;
             if (diagnostics != null) diagnostics.pathAttempts++;
             var path = mob.getNavigation().createPath(candidate, 0);
             if (path == null) {
@@ -11509,6 +12286,8 @@ public final class LivingWallCoordinator {
                 || supportState.getCollisionShape(level, support).isEmpty()
                 || supportState.is(BlockTags.TRAPDOORS) || supportState.getBlock() instanceof TrapDoorBlock
                 || !feetState.getFluidState().isEmpty() || !headState.getFluidState().isEmpty()
+                || !feetState.getCollisionShape(level, feet).isEmpty()
+                || !headState.getCollisionShape(level, feet.above()).isEmpty()
                 || feetState.is(BlockTags.TRAPDOORS) || feetState.getBlock() instanceof TrapDoorBlock
                 || !com.example.soundattract.pathfinding.HazardClassifier.isSafeGround(level, feet)
                 || isNearHazard(level, feet, formation.plan.hazardCells(), formation.plan.forward())) {
@@ -11830,15 +12609,35 @@ public final class LivingWallCoordinator {
                     || LivingBridgeRouteData.isTerminalLaneState(current.lifecycleState())) return false;
             BlockPos endpoint = BlockPos.containing(current.safeEndpoint().x() / 4096.0D,
                     current.safeEndpoint().y() / 4096.0D, current.safeEndpoint().z() / 4096.0D);
-            if (!BlockPos.containing(mob.position()).equals(endpoint) || !isSafeSite(level, endpoint)
-                    || !com.example.soundattract.pathfinding.HazardClassifier.isSafeGround(level, endpoint)
-                    || mob.isInLava() || !isEntityClearAt(level, mob, mob.position(), mob.position())) return false;
+            Vec3 endpointPosition = new Vec3(current.safeEndpoint().x() / 4096.0D,
+                    current.safeEndpoint().y() / 4096.0D, current.safeEndpoint().z() / 4096.0D);
+            boolean orphanRecovery = "ORPHAN_RECOVERY_TO_SAFE_ENDPOINT".equals(current.movementMode());
+            Vec3 completionPosition = orphanRecovery ? endpointPosition : mob.position();
+            if (!BlockPos.containing(mob.position()).equals(endpoint)
+                    || orphanRecovery && mob.position().distanceToSqr(endpointPosition) > 0.0025D) return false;
+            if (!recoveryTerrainChunksLoaded(level, mob, mob.getBoundingBox(), endpoint)) {
+                return deferDurableRecovery(level, mob);
+            }
+            boolean strictOrphanLanding = orphanRecovery
+                    && isLoadedSafeOrphanLanding(level, mob, endpoint, mob.position());
+            boolean footprintOrphanLanding = orphanRecovery
+                    && isLoadedRecoveryFootprintLanding(level, mob, endpoint, mob.position());
+            if (orphanRecovery && (!isLoadedRecoveryFootprintLanding(level, mob, endpoint, endpointPosition)
+                    || !orphanRecoverySweepClear(level, mob, mob.position(), endpointPosition))) return false;
+            if (orphanRecovery && !strictOrphanLanding && !footprintOrphanLanding
+                    || !footprintOrphanLanding && (!isSafeSite(level, endpoint)
+                    || !com.example.soundattract.pathfinding.HazardClassifier.isSafeGroundUncached(level, endpoint))
+                    || mob.isInLava() || !hasStrictRecoveryContact(level, mob, mob.getBoundingBox())
+                    || !isEntityClearAt(level, mob, mob.position(), completionPosition)) return false;
             LivingBridgeRouteSnapshot terminal = LivingBridgeRouteData.safeRecoverySnapshot(current,
                     mob.chunkPosition().x, mob.chunkPosition().z);
             if (!data.commitSafeRecoveryTransition(current, terminal, mob)) return false;
+            PerLevelState levelState = state(level);
+            clearDurableRecoveryState(levelState, mob.getUUID());
             mob.getNavigation().stop();
             mob.setDeltaMovement(Vec3.ZERO);
             mob.fallDistance = 0.0F;
+            if (orphanRecovery) mob.setPos(endpointPosition.x, endpointPosition.y, endpointPosition.z);
             mob.setNoGravity(terminal.originalNoGravity());
             mob.noPhysics = terminal.originalNoPhysics();
             mob.getPersistentData().remove("livingBridgeSafeBaseRouteActive");
@@ -11868,13 +12667,18 @@ public final class LivingWallCoordinator {
         try {
             LivingBridgeRouteSnapshot current = LivingBridgeRouteSnapshot.fromTag(capsule.getCompound("snapshot"));
             LivingBridgeRouteSnapshot saved = data.snapshot(current.reservationId());
+            Formation localOwner = getFormation(mob);
             if (saved == null || !saved.exactlyEquals(current)
                     || !current.digest().equals(capsule.getString("snapshotDigest"))
                     || !current.ownerId().equals(mob.getUUID())
                     || !current.dimension().equals(level.dimension().location().toString())
                     || current.safeEndpoint() == null
                     || !data.canRecoverOwner(current)
-                    || LivingBridgeRouteData.isTerminalLaneState(current.lifecycleState())) return false;
+                    || LivingBridgeRouteData.isTerminalLaneState(current.lifecycleState())
+                    || localOwner != null && !localOwner.collapsed) return false;
+            PerLevelState levelState = state(level);
+            if (levelState.durableRecoveryStepTick.getOrDefault(mob.getUUID(), Long.MIN_VALUE)
+                    == level.getGameTime()) return false;
 
             LivingBridgeRouteSnapshot recovering = current;
             if (!"RECOVERING_TO_SAFE_ENDPOINT".equals(current.lifecycleState())) {
@@ -11912,13 +12716,24 @@ public final class LivingWallCoordinator {
                     }
                 }
                 if (sampled.size() < 2) return false;
+                BlockPos safe = BlockPos.containing(endpoint);
+                for (int i = 1; i < sampled.size(); i++) {
+                    Vec3 from = new Vec3(sampled.get(i - 1).x() / 4096.0D,
+                            sampled.get(i - 1).y() / 4096.0D, sampled.get(i - 1).z() / 4096.0D);
+                    Vec3 to = new Vec3(sampled.get(i).x() / 4096.0D,
+                            sampled.get(i).y() / 4096.0D, sampled.get(i).z() / 4096.0D);
+                    if (!recoveryTerrainChunksLoaded(level, mob,
+                            translatedBoundingBox(mob, from).minmax(translatedBoundingBox(mob, to)), safe)) {
+                        return deferDurableRecovery(level, mob);
+                    }
+                }
                 List<BlockPos> lane = sampled.stream().map(point -> BlockPos.containing(
                         point.x() / 4096.0D, point.y() / 4096.0D, point.z() / 4096.0D)).distinct().toList();
                 double width = current.halfWidth() * 2.0D / 4096.0D;
                 if (data.hasConflictingRecoveryLane(current, lane, width, APPROACH_LANE_SPACING)) return false;
-                BlockPos safe = BlockPos.containing(endpoint);
-                if (!level.isLoaded(safe) || !isSafeSite(level, safe)
-                        || !com.example.soundattract.pathfinding.HazardClassifier.isSafeGround(level, safe)) return false;
+                if (!recoveryTerrainChunksLoaded(level, mob, mob.getBoundingBox(), safe)
+                        || !level.isLoaded(safe) || !isSafeSite(level, safe)
+                        || !com.example.soundattract.pathfinding.HazardClassifier.isSafeGroundUncached(level, safe)) return false;
                 recovering = LivingBridgeRouteData.recoveringSnapshot(current, sampled, 1,
                         mob.chunkPosition().x, mob.chunkPosition().z);
                 if (!data.commitRecoveryTransition(current, recovering, mob)) return false;
@@ -11930,16 +12745,37 @@ public final class LivingWallCoordinator {
 
             List<LivingBridgeRouteSnapshot.Point> route = recovering.recoveryRoute();
             int nextIndex = recovering.recoveryIndex();
+            boolean orphanRecovery = "ORPHAN_RECOVERY_TO_SAFE_ENDPOINT".equals(recovering.movementMode());
             if (route.size() < 2 || nextIndex < 1 || nextIndex > route.size()) return false;
-            if (nextIndex == route.size()) return completeSafeRecoveryAtPersistedEndpoint(level, mob, data);
+            if (nextIndex == route.size()) {
+                return orphanRecovery
+                        ? continueSegmentedOrphanRecovery(level, mob, data, recovering)
+                        : completeSafeRecoveryAtPersistedEndpoint(level, mob, data);
+            }
             LivingBridgeRouteSnapshot.Point previous = route.get(nextIndex - 1);
             LivingBridgeRouteSnapshot.Point next = route.get(nextIndex);
             Vec3 expected = new Vec3(previous.x() / 4096.0D, previous.y() / 4096.0D, previous.z() / 4096.0D);
             Vec3 target = new Vec3(next.x() / 4096.0D, next.y() / 4096.0D, next.z() / 4096.0D);
             Vec3 actual = mob.position();
             double quantizedStepLimit = 0.2D + Math.sqrt(3.0D) / 4096.0D;
-            if (actual.distanceToSqr(expected) > 0.01D || actual.distanceTo(target) > quantizedStepLimit
-                    || !isEntityClearAt(level, mob, actual, target)) return false;
+            if (actual.distanceToSqr(expected) > 0.01D || actual.distanceTo(target) > quantizedStepLimit) return false;
+            AABB sweptBody = translatedBoundingBox(mob, actual).minmax(translatedBoundingBox(mob, target));
+            BlockPos safe = BlockPos.containing(recovering.safeEndpoint().x() / 4096.0D,
+                    recovering.safeEndpoint().y() / 4096.0D, recovering.safeEndpoint().z() / 4096.0D);
+            if (!recoveryTerrainChunksLoaded(level, mob, sweptBody, safe)) {
+                return deferDurableRecovery(level, mob);
+            }
+            if (orphanRecovery) {
+                if (!orphanRecoverySweepClear(level, mob, actual, target)) {
+                    if (recoveryTerrainChunksLoaded(level, mob, sweptBody, safe)
+                            && !orphanRecoveryTerrainSweepClear(level, mob, actual, target)) {
+                        replanBlockedOrphanRecovery(level, mob);
+                    }
+                    return false;
+                }
+            } else if (!isEntityClearAt(level, mob, actual, target)) {
+                return false;
+            }
             List<BlockPos> lane = route.subList(nextIndex - 1, route.size()).stream()
                     .map(point -> BlockPos.containing(point.x() / 4096.0D,
                             point.y() / 4096.0D, point.z() / 4096.0D)).distinct().toList();
@@ -11948,19 +12784,400 @@ public final class LivingWallCoordinator {
             LivingBridgeRouteSnapshot advanced = LivingBridgeRouteData.recoveringSnapshot(recovering, route,
                     nextIndex + 1, mob.chunkPosition().x, mob.chunkPosition().z);
             if (!data.commitRecoveryTransition(recovering, advanced, mob)) return false;
+            levelState.durableRecoveryStepTick.put(mob.getUUID(), level.getGameTime());
             mob.setNoGravity(true);
             mob.noPhysics = true;
             mob.getNavigation().stop();
             mob.setDeltaMovement(Vec3.ZERO);
             mob.setPos(target.x, target.y, target.z);
             mob.fallDistance = 0.0F;
-            if (nextIndex + 1 == route.size()) return completeSafeRecoveryAtPersistedEndpoint(level, mob, data);
+            if (nextIndex + 1 == route.size()) {
+                if (orphanRecovery) continueSegmentedOrphanRecovery(level, mob, data, advanced);
+                else completeSafeRecoveryAtPersistedEndpoint(level, mob, data);
+            }
             return true;
         } catch (RuntimeException malformed) {
             data.quarantine("SAFE_RECOVERY_ROUTE_DIVERGENCE", null, capsule,
                     level.dimension().location().toString());
             return false;
         }
+    }
+
+    private static boolean beginUnsupportedOrphanRecovery(ServerLevel level, Mob mob) {
+        return beginUnsupportedOrphanRecovery(level, mob, false);
+    }
+
+    private static boolean continueSegmentedOrphanRecovery(ServerLevel level, Mob mob,
+                                                             LivingBridgeRouteData data,
+                                                             LivingBridgeRouteSnapshot current) {
+        if (level == null || mob == null || data == null || current == null
+                || !"ORPHAN_RECOVERY_TO_SAFE_ENDPOINT".equals(current.movementMode())
+                || current.safeEndpoint() == null) return false;
+        Vec3 endpoint = new Vec3(current.safeEndpoint().x() / 4096.0D,
+                current.safeEndpoint().y() / 4096.0D, current.safeEndpoint().z() / 4096.0D);
+        Vec3 start = mob.position();
+        if (start.distanceToSqr(endpoint) <= 3.0D / (4096.0D * 4096.0D)) {
+            return completeSafeRecoveryAtPersistedEndpoint(level, mob, data);
+        }
+        double segmentDrop = Math.floor((LivingBridgeRouteSnapshot.MAX_ROUTE_POINTS - 1) * 0.2D) - 1.0D;
+        double segmentY = Math.max(endpoint.y, start.y - segmentDrop);
+        if (segmentY >= start.y) return false;
+        Vec3 segmentEndpoint = new Vec3(endpoint.x, segmentY, endpoint.z);
+        List<LivingBridgeRouteSnapshot.Point> route = buildOrphanRecoveryRoute(level, mob, start, segmentEndpoint);
+        if (route == null || route.size() < 2) return false;
+        List<BlockPos> lane = route.stream().map(point -> BlockPos.containing(
+                point.x() / 4096.0D, point.y() / 4096.0D, point.z() / 4096.0D)).distinct().toList();
+        if (data.hasConflictingRecoveryLane(current, lane,
+                current.halfWidth() * 2.0D / 4096.0D, APPROACH_LANE_SPACING)) return false;
+        LivingBridgeRouteSnapshot next = LivingBridgeRouteData.orphanRecoveringSnapshot(current, route, 1,
+                current.safeEndpoint(), mob.chunkPosition().x, mob.chunkPosition().z);
+        if (!data.commitRecoveryTransition(current, next, mob)) return false;
+        holdDurableRouteOwner(mob);
+        return true;
+    }
+
+    private static boolean beginUnsupportedOrphanRecovery(ServerLevel level, Mob mob, boolean blockedRoute) {
+        if (level == null || mob == null || level.getServer() == null || !level.getServer().isSameThread()
+                || !mob.isAlive() || mob.isRemoved() || mob.isNoGravity() == false || !mob.noPhysics
+                || !mob.getPersistentData().contains("livingBridgeControl", net.minecraft.nbt.Tag.TAG_COMPOUND)) return false;
+        CompoundTag capsule = mob.getPersistentData().getCompound("livingBridgeControl");
+        if (!capsule.contains("schema", net.minecraft.nbt.Tag.TAG_INT)
+                || capsule.getInt("schema") != LivingBridgeRouteData.CURRENT_SCHEMA) return false;
+        try {
+            LivingBridgeRouteSnapshot current = LivingBridgeRouteSnapshot.fromTag(capsule.getCompound("snapshot"));
+            LivingBridgeRouteData data = LivingBridgeRouteData.get(level);
+            PerLevelState levelState = state(level);
+            Formation localOwner = getFormation(mob);
+            if (levelState.durableRecoveryStepTick.getOrDefault(mob.getUUID(), Long.MIN_VALUE)
+                    == level.getGameTime()) return false;
+            if (!current.ownerId().equals(mob.getUUID())
+                    || !current.dimension().equals(level.dimension().location().toString())
+                    || !knownOrphanRecoverySource(current)
+                    || current.safeEndpoint() == null || current.originalNoGravity() || current.originalNoPhysics()
+                    || !current.digest().equals(capsule.getString("snapshotDigest"))
+                    || !data.canRecoverOwner(current) || hasLiveFormation(level, current.formationId())
+                    || localOwner != null && !localOwner.collapsed
+                    || !blockedRoute && current.recoveryIndex() < current.recoveryRoute().size()
+                    && positionWithinStoredRoute(mob.position(), current.corridor(),
+                    Math.max(1.0D, current.halfWidth() / 4096.0D + mob.getBbWidth()))
+                    && isAtPersistedRecoveryCursor(mob, current)) return false;
+            if (level.getGameTime() < levelState.durableRecoveryRetryAfter.getOrDefault(
+                    mob.getUUID(), Long.MIN_VALUE)) return false;
+            if (!recoveryTerrainChunksLoaded(level, mob, mob.getBoundingBox(), null)) {
+                return deferDurableRecovery(level, mob);
+            }
+            if (hasStrictRecoveryContact(level, mob, mob.getBoundingBox())) {
+                return completeSafeRecoveryAtPhysicalLanding(level, mob, data, current, capsule);
+            }
+
+            Vec3 start = mob.position();
+            int maximumPoints = LivingBridgeRouteSnapshot.MAX_ROUTE_POINTS;
+            int maxDrop = (int) Math.floor((maximumPoints - 1) * 0.2D);
+            int firstFeetY = Mth.floor(start.y);
+            for (int feetY = firstFeetY; feetY >= level.getMinBuildHeight() + 2; feetY--) {
+                for (int landingPass = 0; landingPass < 2; landingPass++) {
+                    boolean footprintFallback = landingPass == 1;
+                    for (int[] offset : blockedRoute ? ORPHAN_REPLAN_LANDING_OFFSETS : ORPHAN_LANDING_OFFSETS) {
+                        double landingX = start.x + offset[0];
+                        double landingZ = start.z + offset[1];
+                    Vec3 endpoint = new Vec3(landingX, feetY, landingZ);
+                    LivingBridgeRouteSnapshot.Point persistedEndpoint = LivingBridgeRouteSnapshot.Point.from(
+                            endpoint.x, endpoint.y, endpoint.z);
+                    Vec3 committedEndpoint = new Vec3(persistedEndpoint.x() / 4096.0D,
+                            persistedEndpoint.y() / 4096.0D, persistedEndpoint.z() / 4096.0D);
+                    BlockPos feet = BlockPos.containing(committedEndpoint);
+                    BlockPos supportPos = feet.below();
+                    if (!level.isLoaded(supportPos)) continue;
+                    BlockState supportState = level.getBlockState(supportPos);
+                    if (supportState.is(BlockTags.LEAVES) || supportState.isAir()
+                            || supportState.getCollisionShape(level, supportPos, CollisionContext.of(mob)).isEmpty()) continue;
+                    boolean strictLanding = isLoadedSafeOrphanLanding(level, mob, feet, committedEndpoint);
+                    if (!strictLanding && (!footprintFallback
+                            || !isLoadedRecoveryFootprintLanding(level, mob, feet, committedEndpoint))) continue;
+                    Vec3 routeEndpoint = committedEndpoint;
+                    if (start.y - committedEndpoint.y > maxDrop - 1.0D) {
+                        routeEndpoint = new Vec3(start.x, start.y - (maxDrop - 1.0D), start.z);
+                    }
+                    List<LivingBridgeRouteSnapshot.Point> route = buildOrphanRecoveryRoute(
+                            level, mob, start, routeEndpoint);
+                    if (route == null) continue;
+                    List<BlockPos> lane = route.stream().map(point -> BlockPos.containing(
+                            point.x() / 4096.0D, point.y() / 4096.0D, point.z() / 4096.0D)).distinct().toList();
+                    double width = current.halfWidth() * 2.0D / 4096.0D;
+                    if (data.hasConflictingRecoveryLane(current, lane, width, APPROACH_LANE_SPACING)) continue;
+                    LivingBridgeRouteSnapshot recovering = LivingBridgeRouteData.orphanRecoveringSnapshot(current,
+                            route, 1, persistedEndpoint, mob.chunkPosition().x, mob.chunkPosition().z);
+                    if (!data.commitRecoveryTransition(current, recovering, mob)) continue;
+                    levelState.durableRecoveryRetryAfter.remove(mob.getUUID());
+                    holdDurableRouteOwner(mob);
+                    return true;
+                }
+                }
+            }
+            return deferDurableRecovery(level, mob);
+        } catch (RuntimeException malformed) {
+            return false;
+        }
+    }
+
+    private static boolean isAtPersistedRecoveryCursor(Mob mob, LivingBridgeRouteSnapshot current) {
+        if (mob == null || current == null
+                || !"RECOVERING_TO_SAFE_ENDPOINT".equals(current.lifecycleState())) return false;
+        List<LivingBridgeRouteSnapshot.Point> route = current.recoveryRoute();
+        int nextIndex = current.recoveryIndex();
+        if (route.size() < 2 || nextIndex < 1 || nextIndex >= route.size()) return false;
+        LivingBridgeRouteSnapshot.Point previous = route.get(nextIndex - 1);
+        LivingBridgeRouteSnapshot.Point next = route.get(nextIndex);
+        Vec3 actual = mob.position();
+        Vec3 expected = new Vec3(previous.x() / 4096.0D, previous.y() / 4096.0D, previous.z() / 4096.0D);
+        Vec3 target = new Vec3(next.x() / 4096.0D, next.y() / 4096.0D, next.z() / 4096.0D);
+        double quantizedStepLimit = 0.2D + Math.sqrt(3.0D) / 4096.0D;
+        return actual.distanceToSqr(expected) <= 0.01D && actual.distanceTo(target) <= quantizedStepLimit;
+    }
+
+    private static boolean knownOrphanRecoverySource(LivingBridgeRouteSnapshot snapshot) {
+        if (snapshot == null) return false;
+        if ("WALKING_TO_STAGING".equals(snapshot.lifecycleState())) {
+            return "SAFE_STAGING_NAVIGATION".equals(snapshot.movementMode());
+        }
+        return "RECOVERING_TO_SAFE_ENDPOINT".equals(snapshot.lifecycleState())
+                && ("RECOVERING_TO_SAFE_ENDPOINT".equals(snapshot.movementMode())
+                || "ORPHAN_RECOVERY_TO_SAFE_ENDPOINT".equals(snapshot.movementMode()));
+    }
+
+    private static boolean deferDurableRecovery(ServerLevel level, Mob mob) {
+        if (level != null && mob != null && level.getServer() != null && level.getServer().isSameThread()) {
+            PerLevelState levelState = state(level);
+            levelState.durableRecoveryRetryAfter.put(mob.getUUID(), level.getGameTime() + 20L);
+        }
+        return false;
+    }
+
+    private static void replanBlockedOrphanRecovery(ServerLevel level, Mob mob) {
+        if (level == null || mob == null) return;
+        PerLevelState levelState = state(level);
+        long now = level.getGameTime();
+        if (now < levelState.durableRecoveryRetryAfter.getOrDefault(mob.getUUID(), Long.MIN_VALUE)) return;
+        if (beginUnsupportedOrphanRecovery(level, mob, true)) {
+            levelState.durableRecoveryRetryAfter.remove(mob.getUUID());
+        } else {
+            levelState.durableRecoveryRetryAfter.put(mob.getUUID(), now + 20L);
+        }
+    }
+
+    private static boolean positionWithinStoredRoute(Vec3 position,
+                                                     List<LivingBridgeRouteSnapshot.Point> route,
+                                                     double tolerance) {
+        if (position == null || route == null || route.isEmpty()) return false;
+        double bestDistanceSqr = Double.POSITIVE_INFINITY;
+        Vec3 previous = new Vec3(route.get(0).x() / 4096.0D, route.get(0).y() / 4096.0D,
+                route.get(0).z() / 4096.0D);
+        for (int index = 1; index < route.size(); index++) {
+            LivingBridgeRouteSnapshot.Point point = route.get(index);
+            Vec3 next = new Vec3(point.x() / 4096.0D, point.y() / 4096.0D, point.z() / 4096.0D);
+            Vec3 segment = next.subtract(previous);
+            double lengthSqr = segment.lengthSqr();
+            double projection = lengthSqr < 1.0E-12D ? 0.0D
+                    : Mth.clamp(position.subtract(previous).dot(segment) / lengthSqr, 0.0D, 1.0D);
+            bestDistanceSqr = Math.min(bestDistanceSqr,
+                    position.distanceToSqr(previous.add(segment.scale(projection))));
+            previous = next;
+        }
+        if (route.size() == 1) bestDistanceSqr = position.distanceToSqr(previous);
+        return bestDistanceSqr <= tolerance * tolerance;
+    }
+
+    private static boolean isLoadedSafeOrphanLanding(ServerLevel level, Mob mob, BlockPos feet, Vec3 position) {
+        if (level == null || mob == null || feet == null
+                || !recoveryTerrainChunksLoaded(level, mob, translatedBoundingBox(mob, position), feet)
+                || !level.isLoaded(feet)
+                || !level.isLoaded(feet.below()) || !level.isLoaded(feet.above())) return false;
+        for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++) {
+            if (!level.isLoaded(feet.offset(dx, -1, dz)) || !level.isLoaded(feet.offset(dx, 0, dz))) return false;
+        }
+        BlockState support = level.getBlockState(feet.below());
+        if (support.is(BlockTags.LEAVES) || !support.getFluidState().isEmpty()
+                || !level.getBlockState(feet).getFluidState().isEmpty()
+                || !level.getBlockState(feet.above()).getFluidState().isEmpty()
+                || level.getBlockState(feet).is(net.minecraft.world.level.block.Blocks.FIRE)
+                || level.getBlockState(feet).is(net.minecraft.world.level.block.Blocks.SOUL_FIRE)
+                || level.getBlockState(feet.above()).is(net.minecraft.world.level.block.Blocks.FIRE)
+                || level.getBlockState(feet.above()).is(net.minecraft.world.level.block.Blocks.SOUL_FIRE)) return false;
+        AABB body = translatedBoundingBox(mob, position);
+        return isSafeSite(level, feet)
+                && com.example.soundattract.pathfinding.HazardClassifier.isSafeGroundUncached(level, feet)
+                && hasMobCompatibleStartSupport(level, mob, body)
+                && hasStrictRecoveryContact(level, mob, body)
+                && orphanRecoverySweepClear(level, mob, position, position);
+    }
+
+    private static boolean isLoadedRecoveryFootprintLanding(ServerLevel level, Mob mob, BlockPos feet,
+                                                             Vec3 position) {
+        if (level == null || mob == null || feet == null || position == null
+                || !recoveryTerrainChunksLoaded(level, mob, translatedBoundingBox(mob, position), feet)
+                || !level.isLoaded(feet) || !level.isLoaded(feet.below()) || !level.isLoaded(feet.above())) return false;
+        BlockState support = level.getBlockState(feet.below());
+        BlockState bodyState = level.getBlockState(feet);
+        BlockState headState = level.getBlockState(feet.above());
+        if (support.is(BlockTags.LEAVES) || support.is(BlockTags.TRAPDOORS)
+                || !hasStructuralSupport(level, feet.below(), support)
+                || !support.getFluidState().isEmpty() || !bodyState.getFluidState().isEmpty()
+                || !headState.getFluidState().isEmpty()
+                || isRecoveryContactHazard(bodyState) || isRecoveryContactHazard(headState)
+                || isRecoveryContactHazard(support)
+                || isUnsafeColumn(level, feet)) return false;
+        AABB body = translatedBoundingBox(mob, position);
+        return level.noCollision(mob, body)
+                && recoveryLandingFootprintIsHazardFree(level, mob, body)
+                && hasMobCompatibleStartSupport(level, mob, body)
+                && hasStrictRecoveryContact(level, mob, body)
+                && orphanRecoverySweepClear(level, mob, position, position);
+    }
+
+    private static boolean recoveryLandingFootprintIsHazardFree(ServerLevel level, Mob mob, AABB body) {
+        if (level == null || mob == null || body == null) return false;
+        int minX = Mth.floor(body.minX + CONTACT_EPSILON);
+        int maxX = Mth.floor(body.maxX - CONTACT_EPSILON);
+        int minY = Mth.floor(body.minY + CONTACT_EPSILON);
+        int maxY = Mth.floor(body.maxY - CONTACT_EPSILON);
+        int minZ = Mth.floor(body.minZ + CONTACT_EPSILON);
+        int maxZ = Mth.floor(body.maxZ - CONTACT_EPSILON);
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        for (int x = minX; x <= maxX; x++) for (int y = minY; y <= maxY; y++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                cursor.set(x, y, z);
+                if (!level.isLoaded(cursor) || isRecoveryContactHazard(level.getBlockState(cursor))) return false;
+            }
+        }
+        int supportY = Mth.floor(body.minY - CONTACT_EPSILON);
+        for (int x = minX; x <= maxX; x++) for (int z = minZ; z <= maxZ; z++) {
+            cursor.set(x, supportY, z);
+            if (!level.isLoaded(cursor)) return false;
+            BlockState support = level.getBlockState(cursor);
+            if (isRecoveryContactHazard(support)
+                    && isMobCompatibleWorkerSupportShape(support.getCollisionShape(level, cursor,
+                    CollisionContext.of(mob)), body, cursor)) return false;
+        }
+        return true;
+    }
+
+    private static boolean isRecoveryContactHazard(BlockState blockState) {
+        if (blockState == null) return true;
+        return blockState.is(net.minecraft.world.level.block.Blocks.FIRE)
+                || blockState.is(net.minecraft.world.level.block.Blocks.SOUL_FIRE)
+                || blockState.is(net.minecraft.world.level.block.Blocks.MAGMA_BLOCK)
+                || blockState.is(net.minecraft.world.level.block.Blocks.CACTUS)
+                || blockState.is(net.minecraft.world.level.block.Blocks.CAMPFIRE)
+                || blockState.is(net.minecraft.world.level.block.Blocks.SOUL_CAMPFIRE)
+                || blockState.is(net.minecraft.world.level.block.Blocks.SWEET_BERRY_BUSH)
+                || blockState.is(net.minecraft.world.level.block.Blocks.WITHER_ROSE)
+                || blockState.is(net.minecraft.world.level.block.Blocks.POWDER_SNOW);
+    }
+
+    private static boolean completeSafeRecoveryAtPhysicalLanding(ServerLevel level, Mob mob,
+                                                                   LivingBridgeRouteData data,
+                                                                   LivingBridgeRouteSnapshot current,
+                                                                   CompoundTag capsule) {
+        if (level == null || mob == null || data == null || current == null || capsule == null
+                || !current.digest().equals(capsule.getString("snapshotDigest"))
+                || !current.ownerId().equals(mob.getUUID())
+                || !data.canRecoverOwner(current)
+                || !isLoadedRecoveryFootprintLanding(level, mob, BlockPos.containing(mob.position()), mob.position())) {
+            return false;
+        }
+        LivingBridgeRouteSnapshot terminal = LivingBridgeRouteData.safeRecoverySnapshot(current,
+                LivingBridgeRouteSnapshot.Point.from(mob.getX(), mob.getY(), mob.getZ()),
+                mob.chunkPosition().x, mob.chunkPosition().z);
+        if (!data.commitSafeRecoveryTransition(current, terminal, mob)) return false;
+        clearDurableRecoveryState(state(level), mob.getUUID());
+        mob.getNavigation().stop();
+        mob.setDeltaMovement(Vec3.ZERO);
+        mob.fallDistance = 0.0F;
+        mob.setNoGravity(terminal.originalNoGravity());
+        mob.noPhysics = terminal.originalNoPhysics();
+        mob.getPersistentData().remove("livingBridgeSafeBaseRouteActive");
+        mob.getPersistentData().remove("livingBridgeRecoveryRequiredLogged");
+        return true;
+    }
+
+    private static List<LivingBridgeRouteSnapshot.Point> buildOrphanRecoveryRoute(ServerLevel level, Mob mob,
+                                                                                   Vec3 start, Vec3 endpoint) {
+        if (level == null || mob == null || start == null || endpoint == null) return null;
+        Vec3 staging = new Vec3(endpoint.x, start.y, endpoint.z);
+        Vec3[] waypoints = {staging, endpoint};
+        List<LivingBridgeRouteSnapshot.Point> route = new ArrayList<>();
+        route.add(LivingBridgeRouteSnapshot.Point.from(start.x, start.y, start.z));
+        Vec3 previous = start;
+        if (!orphanRecoverySweepClear(level, mob, start, start)) return null;
+        for (Vec3 waypoint : waypoints) {
+            Vec3 segmentStart = previous;
+            if (segmentStart.distanceToSqr(waypoint) <= 1.0E-12D) continue;
+            int steps = Math.max(1, Mth.ceil(segmentStart.distanceTo(waypoint) / 0.2D));
+            if (route.size() + steps > LivingBridgeRouteSnapshot.MAX_ROUTE_POINTS) return null;
+            for (int step = 1; step <= steps; step++) {
+                Vec3 next = segmentStart.lerp(waypoint, step / (double) steps);
+                if (!orphanRecoverySweepClear(level, mob, previous, next)) return null;
+                route.add(LivingBridgeRouteSnapshot.Point.from(next.x, next.y, next.z));
+                previous = next;
+            }
+        }
+        return route;
+    }
+
+    private static boolean orphanRecoverySweepClear(ServerLevel level, Mob mob, Vec3 from, Vec3 to) {
+        if (level == null || mob == null || from == null || to == null) return false;
+        AABB body = translatedBoundingBox(mob, from).minmax(translatedBoundingBox(mob, to));
+        if (!recoveryTerrainChunksLoaded(level, mob, body, null) || !isEntityClearAt(level, mob, from, to)) return false;
+        return orphanRecoveryTerrainSweepClear(level, mob, from, to);
+    }
+
+    private static boolean orphanRecoveryTerrainSweepClear(ServerLevel level, Mob mob, Vec3 from, Vec3 to) {
+        if (level == null || mob == null || from == null || to == null) return false;
+        AABB body = translatedBoundingBox(mob, from).minmax(translatedBoundingBox(mob, to));
+        if (!recoveryTerrainChunksLoaded(level, mob, body, null)) return false;
+        int minX = Mth.floor(body.minX - 1.0E-7D);
+        int maxX = Mth.floor(body.maxX + 1.0E-7D);
+        int minY = Mth.floor(body.minY - 1.0E-7D);
+        int maxY = Mth.floor(body.maxY + 1.0E-7D);
+        int minZ = Mth.floor(body.minZ - 1.0E-7D);
+        int maxZ = Mth.floor(body.maxZ + 1.0E-7D);
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    BlockPos cell = new BlockPos(x, y, z);
+                    if (y < level.getMinBuildHeight() || y >= level.getMaxBuildHeight()
+                            || !level.isLoaded(cell)) return false;
+                    BlockState state = level.getBlockState(cell);
+                    if (!state.getFluidState().isEmpty()
+                            || state.is(net.minecraft.world.level.block.Blocks.FIRE)
+                            || state.is(net.minecraft.world.level.block.Blocks.SOUL_FIRE)) return false;
+                    VoxelShape collision = state.getCollisionShape(level, cell, CollisionContext.of(mob));
+                    for (AABB shape : collision.toAabbs()) {
+                        if (shape.move(x, y, z).intersects(body)) return false;
+                    }
+                }
+            }
+        }
+        AABB fromBody = translatedBoundingBox(mob, from);
+        AABB toBody = translatedBoundingBox(mob, to);
+        for (int x = Mth.floor(toBody.minX); x <= Mth.floor(toBody.maxX); x++) {
+            for (int y = Mth.floor(toBody.minY); y <= Mth.floor(toBody.maxY); y++) {
+                for (int z = Mth.floor(toBody.minZ); z <= Mth.floor(toBody.maxZ); z++) {
+                    BlockPos cell = new BlockPos(x, y, z);
+                    if (!isRecoveryContactHazard(level.getBlockState(cell))) continue;
+                    AABB hazard = new AABB(x, y, z, x + 1.0D, y + 1.0D, z + 1.0D);
+                    if (overlapVolume(toBody, hazard) > overlapVolume(fromBody, hazard) + 1.0E-9D) return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static double overlapVolume(AABB first, AABB second) {
+        double x = Math.max(0.0D, Math.min(first.maxX, second.maxX) - Math.max(first.minX, second.minX));
+        double y = Math.max(0.0D, Math.min(first.maxY, second.maxY) - Math.max(first.minY, second.minY));
+        double z = Math.max(0.0D, Math.min(first.maxZ, second.maxZ) - Math.max(first.minZ, second.minZ));
+        return x * y * z;
     }
 
     private static boolean isStructuralApproachLaneAvailable(ServerLevel level, Formation formation, UUID ownerId,
@@ -11998,7 +13215,8 @@ public final class LivingWallCoordinator {
 
     private static boolean isAssemblyStagePoseValid(ServerLevel level, Formation formation, Mob mob,
                                                     MobTicket assignment, Vec3 next) {
-        if (level == null || formation == null || mob == null || assignment == null || next == null) return false;
+        if (level == null || formation == null || formation.plan == null || mob == null
+                || assignment == null || next == null) return false;
         if (!isCurrentAssemblyOwner(level, formation, mob, assignment)) return false;
         if (!isSafeAssemblySlot(level, mob, assignment.assemblySlot, formation)) return false;
         if (!isWithinAssemblyAcceptanceEnvelope(next, assignment.assemblySlot)) return false;
@@ -12006,10 +13224,10 @@ public final class LivingWallCoordinator {
             return false;
         }
 
-        boolean isBridge = isCanonicalLivingBridge(formation);
-        Vec3 clearanceTarget = isBridge ? Vec3.atBottomCenterOf(assignment.assemblySlot) : next;
+        int assemblySlot = assemblySlotIndex(formation, assignment.assemblySlot);
+        if (assemblySlot < 0 || !hasSupportedAssemblyMove(level, formation, assemblySlot, mob, mob.position(), next)) return false;
         double progress = formation != null ? formation.assembledSlots + 1.0D : 0.0D;
-        if (!resolveClearance(level, mob, clearanceTarget, mob.maxUpStep(), formation, progress).clear()) return false;
+        if (!resolveClearance(level, mob, next, mob.maxUpStep(), formation, progress).clear()) return false;
         return findAssemblyOccupant(level, formation, mob, mob.position(), next, assignment.assemblySlot) == null;
     }
 
@@ -12038,20 +13256,21 @@ public final class LivingWallCoordinator {
 
     private static boolean isExactAssemblyLockValid(ServerLevel level, Formation formation, Mob mob,
                                                     MobTicket assignment, Vec3 exactTarget) {
-        if (level == null || formation == null || mob == null || assignment == null || exactTarget == null) return false;
+        if (level == null || formation == null || formation.plan == null || mob == null
+                || assignment == null || exactTarget == null) return false;
         if (!isCurrentAssemblyOwner(level, formation, mob, assignment)) return false;
         if (!isAtAssemblySlot(mob.position(), assignment.assemblySlot)) return false;
-        boolean isBridge = isCanonicalLivingBridge(formation);
-        boolean isFoundationSlot = formation.plan != null && formation.plan.assemblySlots() != null
-                && !formation.plan.assemblySlots().isEmpty()
-                && assignment.assemblySlot.equals(formation.plan.assemblySlots().get(0));
-        if (!isBridge || isFoundationSlot) {
-            if (!hasFoundationTerrainSupport(level, exactTarget)) return false;
-        }
+        int assemblySlot = assemblySlotIndex(formation, assignment.assemblySlot);
+        if (assemblySlot < 0 || !hasVerifiedSupport(level, formation, assemblySlot, mob, exactTarget)) return false;
         double progress = formation != null ? formation.assembledSlots + 1.0D : 0.0D;
         if (!resolveClearance(level, mob, exactTarget, 0.0D, formation, progress).clear()) return false;
         return isEntityClearAt(level, mob, mob.position(), exactTarget)
                 && findAssemblyOccupant(level, formation, mob, exactTarget, exactTarget, assignment.assemblySlot) == null;
+    }
+
+    private static int assemblySlotIndex(Formation formation, BlockPos slot) {
+        return formation == null || formation.plan == null || formation.plan.assemblySlots() == null || slot == null
+                ? -1 : formation.plan.assemblySlots().indexOf(slot);
     }
 
     static boolean foundationMayAssembleWithoutIntake(int slot, int columns, BlockPos intakeCell) {
@@ -12142,8 +13361,10 @@ public final class LivingWallCoordinator {
         if (assignment == null || assignment.state != MobTicketState.ASSEMBLED
                 || !isAtAssemblySlot(mob.position(), assignment.assemblySlot)) return false;
         if (!canAdmitUpperLayerWorker(level, formation, assignment.assemblySlot)) return false;
+        formation.deferredRecruitmentRouteProbes.remove(mob.getUUID());
         IntakeWindow intakeWindow = assignIntakeWindow(level, formation, mob, assignment.assemblySlot, now);
         if (intakeWindow == null) {
+            if (formation.deferredRecruitmentRouteProbes.remove(mob.getUUID())) return false;
             logRecruitmentEvent(formation, mob, "mob_route_failed:to_feeder", assignment, null);
             releaseRecruiter(level, formation, mob.getUUID(), now);
             return false;
@@ -12284,7 +13505,16 @@ public final class LivingWallCoordinator {
             return cached.reachable() && validateTraversalEntry(level, mob, formation, assemblySlot, intakeWindow, source, intakeApproach);
         }
         if (cached != null && cached.expiresAt() <= now) formation.recruitmentRoutes.remove(routeKey, cached);
-        if (state(level).pathSurveysRemaining <= 0) return false;
+        if (state(level).pathSurveysRemaining <= 0) {
+            formation.deferredRecruitmentRouteProbes.add(mob.getUUID());
+            return false;
+        }
+        if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                level, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED)) {
+            formation.deferredRecruitmentRouteProbes.add(mob.getUUID());
+            return false;
+        }
+        formation.deferredRecruitmentRouteProbes.remove(mob.getUUID());
         state(level).pathSurveysRemaining--;
         var path = mob.getNavigation().createPath(intakeApproach, 0);
         boolean feederReachable = path != null && path.canReach() && path.getTarget() != null
@@ -12555,18 +13785,20 @@ public final class LivingWallCoordinator {
             if (mob == null || !mob.isAlive() || mob.isRemoved()) continue;
             Vec3 position = formation.structuralSlotPositions.getOrDefault(slot,
                     formationSlotPosition(formation, slot, 0.0D));
+            if (!hasVerifiedSupport(level, formation, slot, mob, position)) {
+                formation.assemblyFatal = true;
+                return;
+            }
             formation.assemblyHoldPositions.put(mob.getUUID(), position);
             traceStructuralMove(formation, mob, slot, "assembly_repin", mob.position(), position);
-            if (formation.committedFoundationIds.contains(mob.getUUID())) {
-                pinAssemblyWorker(mob, position);
-                continue;
-            }
             ClearanceResolution resolved = resolveClearance(level, mob, position, mob.maxUpStep());
             Vec3 repin = resolved.position() == null ? position : resolved.position();
-            if (isEntityClearAt(level, mob, mob.position(), repin)) {
+            if (hasVerifiedSupport(level, formation, slot, mob, repin)
+                    && isEntityClearAt(level, mob, mob.position(), repin)) {
                 pinAssemblyWorker(mob, repin);
             } else {
-                pinAssemblyWorker(mob, formation.assemblyHoldPositions.getOrDefault(mob.getUUID(), mob.position()));
+                formation.assemblyFatal = true;
+                return;
             }
         }
     }
@@ -12637,9 +13869,9 @@ public final class LivingWallCoordinator {
 
     private static double wallLedgeArcAdjustedVerticalTouchStep(BlockPos pivot, BlockPos end, double verticalTouchStep) {
         if (pivot == null || end == null || end.getY() <= pivot.getY()) return verticalTouchStep;
-        // The configured touch step includes CONTACT_EPSILON, which permits a
-        // small visible gap. Use the actual body height, then reserve for the
-        // maximum extra rise from the upward arc between adjacent layers.
+
+
+
         double bodyHeight = Math.max(0.05D, verticalTouchStep - CONTACT_EPSILON);
         return bodyHeight / (1.0D + 0.3D * Math.PI);
     }
@@ -12884,6 +14116,10 @@ public final class LivingWallCoordinator {
     }
 
     private static void repinAnchoredMembers(ServerLevel level, Formation formation) {
+        if (!plannedBridgeChainConnects(level, formation, 1.0D, formation.members.size())) {
+            collapse(level, formation, "anchored_projected_contact_lost");
+            return;
+        }
         int slot = 0;
         for (UUID id : new ArrayList<>(formation.members)) {
             Mob mob = getMob(level, id);
@@ -12934,6 +14170,10 @@ public final class LivingWallCoordinator {
             formation.tiltLayerCursor = 1;
         }
         double progress = Math.min(1.0D, (++formation.shiftTick) / (double) formation.shiftDuration);
+        if (!plannedBridgeChainConnects(level, formation, progress, formation.requiredBodies)) {
+            collapse(level, formation, "tilt_projected_contact_lost");
+            return;
+        }
         for (int slot = 0; slot < formation.requiredBodies; slot++) {
             Mob mob = getMob(level, formation.members.get(slot));
             if (mob == null || !mob.isAlive() || mob.isRemoved()) {
@@ -12958,6 +14198,10 @@ public final class LivingWallCoordinator {
 
     private static void restoreTiltSource(ServerLevel level, Formation formation) {
         double sourceProgress = formation.targetAngle <= 0.0D ? 0.0D : formation.tiltAngle / formation.targetAngle;
+        if (!plannedBridgeChainConnects(level, formation, sourceProgress, formation.members.size())) {
+            collapse(level, formation, "tilt_restore_contact_lost");
+            return;
+        }
         for (int slot = 0; slot < formation.members.size(); slot++) {
             Mob mob = getMob(level, formation.members.get(slot));
             if (mob == null || !mob.isAlive() || mob.isRemoved()) continue;
@@ -13218,6 +14462,10 @@ public final class LivingWallCoordinator {
 
     private static boolean structureHasContact(ServerLevel level, Formation formation, int slotCount) {
         int limit = Math.min(slotCount, formation.members.size());
+        if (limit <= 0) return false;
+        Mob root = getMob(level, formation.members.get(0));
+        if (root == null || !root.isAlive() || root.isRemoved()
+                || !hasFoundationTerrainSupport(level, root, root.position())) return false;
         for (int slot = 0; slot < limit; slot++) {
             int layer = slot / formation.columnCount;
             int column = slot % formation.columnCount;
@@ -13237,25 +14485,9 @@ public final class LivingWallCoordinator {
         Mob first = getMob(level, formation.members.get(firstSlot));
         Mob second = getMob(level, formation.members.get(secondSlot));
         if (first == null || second == null || !first.isAlive() || !second.isAlive()) return false;
-        if (formation.plan != null && (formation.plan.scenario() == ConstructionScenario.WALL_LEDGE
-                || formation.plan.scenario() == ConstructionScenario.DROP_TO_LEDGE
-                || isDirectSpan(formation.plan.scenario())
-                || hasElbowBends(formation))) {
-            double step = Math.max(formation.pillarStep, formation.horizontalTouchStep);
-            double allowedDist = Math.max(3.0D, step + 1.0D);
-            double maxDistanceSqr = (formation.plan.scenario() == ConstructionScenario.DROP_TO_LEDGE
-                    || hasElbowBends(formation)
-                    || isDirectSpan(formation.plan.scenario()))
-                    && Math.min(firstSlot, secondSlot) == 0 ? 25.0D : allowedDist * allowedDist;
-            return first.distanceToSqr(second) <= maxDistanceSqr;
-        }
         AABB a = first.getBoundingBox();
         AABB b = second.getBoundingBox();
-        boolean controlledTiltPose = formation.plan != null && requiresTilt(formation.plan.scenario())
-                && formation.phase != Phase.SCAN && formation.phase != Phase.ASSEMBLE;
-        return controlledTiltPose
-                ? controlledTiltBodiesConnected(a, b, CONTACT_EPSILON - TILT_CONTACT_MARGIN)
-                : structuralBodiesTouch(a, b);
+        return physicalBodiesConnect(a, b);
     }
 
     private static boolean isStructuralMob(Mob mob) {
@@ -13270,6 +14502,35 @@ public final class LivingWallCoordinator {
 
     static boolean structuralBodiesTouch(AABB first, AABB second) {
         return structuralBodiesTouch(first, second, CONTACT_EPSILON);
+    }
+
+    static boolean physicalBodiesConnect(AABB first, AABB second) {
+        return structuralBodiesTouch(first, second) || boxesPenetrate(first, second);
+    }
+
+    private static boolean plannedBridgeChainConnects(ServerLevel level, Formation formation,
+                                                       double progress, int requestedSlots) {
+        if (level == null || formation == null || formation.plan == null || !Double.isFinite(progress)) return false;
+        int limit = Math.min(Math.min(requestedSlots, formation.members.size()), formation.requiredBodies);
+        if (limit <= 0) return false;
+        List<AABB> projectedBodies = new ArrayList<>(limit);
+        for (int slot = 0; slot < limit; slot++) {
+            Mob mob = getMob(level, formation.members.get(slot));
+            if (mob == null || !mob.isAlive() || mob.isRemoved()) return false;
+            AABB projected = translatedBoundingBox(mob, formationSlotPosition(formation, slot, progress));
+            projectedBodies.add(projected);
+            int layer = slot / Math.max(1, formation.columnCount);
+            int column = slot % Math.max(1, formation.columnCount);
+            int supportSlot = layer == 0 ? (column == 1 ? slot - 1 : -1) : slot - formation.columnCount;
+            if (supportSlot < 0) continue;
+            AABB support = projectedBodies.get(supportSlot);
+            boolean connected = requiresTilt(formation.plan.scenario())
+                    ? physicalBodiesConnect(projected, support)
+                    : layer == 0 ? bodiesHaveHorizontalContact(projected, support)
+                    : loadBearingBodiesTouch(projected, support);
+            if (!connected) return false;
+        }
+        return true;
     }
 
     private static boolean structuralBodiesTouch(AABB first, AABB second, double contactTolerance) {
@@ -13392,10 +14653,12 @@ public final class LivingWallCoordinator {
         if (!isServerThread(level)) return null;
         ArticulationCandidate candidate = solveArticulationCandidate(level, formation, nextSlot, mob, blocker, null);
         if (candidate == null) return null;
+        if (!hasVerifiedSupport(level, formation, nextSlot, mob, candidate.bend())) return null;
         formation.elbowPoints.clear();
         formation.elbowPoints.addAll(candidate.bends());
         formation.structuralSlotPositions.clear();
         formation.structuralSlotPositions.putAll(candidate.slots());
+        resetStructuralRoute(formation, nextSlot, level.getGameTime());
         SoundAttractMod.LOGGER.info("[LivingWallCoordinator] route_repair_selected bridge={} slot={} bend={} fingerprint={} angle={}",
                 formation.id, nextSlot, candidate.bend(), candidate.fingerprint(), candidate.angle());
         return candidate.bend();
@@ -13474,6 +14737,13 @@ public final class LivingWallCoordinator {
                     }
                 }
                 if (articulatedPos != null) {
+                    if (!hasVerifiedSupport(level, formation, nextSlot, mob, articulatedPos)) {
+                        logAssemblyFailure(level, formation, nextSlot, mob, "articulated_support_invalid",
+                                articulatedPos, intakeCell);
+                        if (++formation.activeStructuralRouteRetries < 25) return false;
+                        formation.assemblyFatal = true;
+                        return false;
+                    }
                     slotPosition = articulatedPos;
                     formation.structuralSlotPositions.put(nextSlot, slotPosition);
                 } else if (++formation.activeStructuralRouteRetries < 25) {
@@ -13517,7 +14787,10 @@ public final class LivingWallCoordinator {
                 }
                 if (!formation.activeMemberSuctionEngaged) {
                     if (reservation == null) {
-                        mob.getNavigation().moveTo(base.x, base.y, base.z, 1.25D);
+                        if (com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                                level, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED)) {
+                            mob.getNavigation().moveTo(base.x, base.y, base.z, 1.25D);
+                        }
                         boolean progressed = hasStructuralProgress(formation,
                                 mob.position().distanceToSqr(base), now);
                         if (!progressed && structuralNoProgressExceeded(formation, now)) {
@@ -13589,12 +14862,6 @@ public final class LivingWallCoordinator {
             }
             Vec3 offset = assemblyTarget.subtract(mob.position());
             double distance = offset.length();
-            if (!mob.noPhysics || !mob.isNoGravity()) {
-                mob.setNoGravity(true);
-                mob.noPhysics = true;
-                mob.getNavigation().stop();
-                mob.setDeltaMovement(Vec3.ZERO);
-            }
             double waypointThreshold = (route != null && !route.isFinalWaypoint()) ? 0.25D : 0.08D;
             double climbSpeed = LivingWallConfig.CLIMB_SPEED_BLOCKS_PER_TICK.get();
             double cappedStep = Math.min(Math.min(climbSpeed, 1.5D), distance);
@@ -13640,6 +14907,11 @@ public final class LivingWallCoordinator {
                         }
                     }
                 }
+                if (!hasSupportedAssemblyMove(level, formation, nextSlot, mob, mob.position(), next)) {
+                    logAssemblyFailure(level, formation, nextSlot, mob, "unsupported_step", next, intakeCell);
+                    formation.assemblyFatal = true;
+                    return false;
+                }
                 boolean progressed = hasStructuralProgress(formation, next.distanceToSqr(assemblyTarget), now);
                 if (!progressed && structuralNoProgressExceeded(formation, now)) {
                     rerouteOrReleaseStructuralMember(level, formation, mob, nextSlot, "zero_progress");
@@ -13647,6 +14919,11 @@ public final class LivingWallCoordinator {
                 }
                 if (progressed) {
                     formation.activeStructuralRouteRetries = 0;
+                }
+                if (!mob.noPhysics || !mob.isNoGravity()) {
+                    mob.setNoGravity(true);
+                    mob.noPhysics = true;
+                    mob.getNavigation().stop();
                 }
                 mob.setDeltaMovement(Vec3.ZERO);
                 mob.setPos(next.x, next.y, next.z);
@@ -13664,6 +14941,16 @@ public final class LivingWallCoordinator {
                     rerouteOrReleaseStructuralMember(level, formation, mob, nextSlot, "blocked_step");
                     return false;
                 }
+            }
+            if (!hasSupportedAssemblyMove(level, formation, nextSlot, mob, mob.position(), assemblyTarget)) {
+                logAssemblyFailure(level, formation, nextSlot, mob, "unsupported_waypoint", assemblyTarget, intakeCell);
+                formation.assemblyFatal = true;
+                return false;
+            }
+            if (!mob.noPhysics || !mob.isNoGravity()) {
+                mob.setNoGravity(true);
+                mob.noPhysics = true;
+                mob.getNavigation().stop();
             }
             mob.setDeltaMovement(Vec3.ZERO);
             mob.setPos(assemblyTarget.x, assemblyTarget.y, assemblyTarget.z);
@@ -13895,7 +15182,7 @@ public final class LivingWallCoordinator {
                 .thenComparingDouble(candidate -> candidate.z));
         for (Vec3 candidate : candidates) {
             Vec3 elevated = new Vec3(candidate.x, dock.y, candidate.z);
-            if (!hasFoundationTerrainSupport(level, candidate)) continue;
+            if (!hasFoundationTerrainSupport(level, mob, candidate)) continue;
             boolean alreadyElevated = current.y > candidate.y + 0.8D;
             if (!alreadyElevated && !isStructuralPoseClear(level, mob, current, candidate)) continue;
             if (alreadyElevated && !isStructuralPoseClear(level, mob, current, elevated)) continue;
@@ -14002,8 +15289,10 @@ public final class LivingWallCoordinator {
         int maxRetries = "structural_lane_conflict".equals(reason)
                 ? STRUCTURAL_LANE_CONFLICT_RETRY_WINDOWS
                 : STRUCTURAL_ROUTE_RETRY_WINDOWS;
-        SoundAttractMod.LOGGER.info("[LivingWallCoordinator] Structural member step retry: bridge={}, slot={}, mob={}, reason={}, retries={}/{}",
-                formation.id, slot, mob.getUUID(), reason, formation.activeStructuralRouteRetries, maxRetries);
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_FORMATION)) {
+            SoundAttractMod.LOGGER.info("[LivingWallCoordinator] Structural member step retry: bridge={}, slot={}, mob={}, reason={}, retries={}/{}",
+                    formation.id, slot, mob.getUUID(), reason, formation.activeStructuralRouteRetries, maxRetries);
+        }
         if (formation.activeStructuralRouteRetries > maxRetries) {
             UUID workerId = formation.members.get(slot);
             formation.activeStructuralRouteRetries = 0;
@@ -14013,8 +15302,10 @@ public final class LivingWallCoordinator {
             releaseMember(level, formation, workerId);
             formation.recruitmentBlacklist.put(workerId, level.getGameTime() + RECRUITER_PATH_FAILURE_BLACKLIST_TICKS);
             formation.lastAssemblyProgressTick = level.getGameTime();
-            SoundAttractMod.LOGGER.info("[LivingWallCoordinator] Structural member released: bridge={}, slot={}, mob={}, reason={}",
-                    formation.id, slot, workerId, reason);
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_FORMATION)) {
+                SoundAttractMod.LOGGER.info("[LivingWallCoordinator] Structural member released: bridge={}, slot={}, mob={}, reason={}",
+                        formation.id, slot, workerId, reason);
+            }
             return false;
         }
         return true;
@@ -14040,44 +15331,89 @@ public final class LivingWallCoordinator {
     }
 
     private static boolean hasVerifiedSupport(ServerLevel level, Formation formation, int slot, Mob mob, Vec3 target) {
+        if (level == null || formation == null || formation.plan == null || mob == null || target == null) return false;
         if (slot < formation.columnCount) {
-            BlockPos feet = BlockPos.containing(target);
-            BlockPos support = feet.below();
-            if (!level.isLoaded(feet) || !level.isLoaded(support)
-                    || level.getBlockState(support).getCollisionShape(level, support).isEmpty()) return false;
-            if (slot == 0) return true;
+            if (hasFoundationTerrainSupport(level, mob, target)) return true;
+            if (slot == 0) return false;
             Mob sibling = getMob(level, formation.members.get(slot - 1));
             return sibling != null && sibling.noPhysics && sibling.isNoGravity()
-                    && plannedBodiesTouch(mob, target, sibling);
+                    && (requiresTilt(formation.plan.scenario())
+                    ? physicalBodiesConnect(translatedBoundingBox(mob, target), sibling.getBoundingBox())
+                    : loadBearingBodiesTouch(translatedBoundingBox(mob, target), sibling.getBoundingBox()));
         }
         int lowerSlot = slot - formation.columnCount;
         if (lowerSlot < 0 || lowerSlot >= formation.assembledSlots) return false;
         Mob lower = getMob(level, formation.members.get(lowerSlot));
         if (lower == null || !lower.isAlive() || lower.isRemoved() || !lower.noPhysics || !lower.isNoGravity()) return false;
-        if (formation.plan != null && (formation.plan.scenario() == ConstructionScenario.WALL_LEDGE
-                || formation.plan.scenario() == ConstructionScenario.DROP_TO_LEDGE
-                || isDirectSpan(formation.plan.scenario())
-                || hasElbowBends(formation))) {
-            double step = Math.max(formation.pillarStep, formation.horizontalTouchStep);
-            double allowedDist = Math.max(3.0D, step + 1.0D);
-            double maxDistanceSqr = (formation.plan.scenario() == ConstructionScenario.DROP_TO_LEDGE
-                    || hasElbowBends(formation)
-                    || isDirectSpan(formation.plan.scenario())) && lowerSlot == 0
-                    ? 25.0D : allowedDist * allowedDist;
-            return target.distanceToSqr(lower.position()) <= maxDistanceSqr;
-        }
         if (!structureHasContact(level, formation, formation.assembledSlots)) return false;
-        Vec3 expected = formationSlotPosition(formation, lowerSlot, 0.0D);
-        return lower.position().distanceToSqr(expected) <= 0.01D && plannedBodiesTouch(mob, target, lower);
+        return requiresTilt(formation.plan.scenario())
+                ? physicalBodiesConnect(translatedBoundingBox(mob, target), lower.getBoundingBox())
+                : loadBearingBodiesTouch(translatedBoundingBox(mob, target), lower.getBoundingBox());
+    }
+
+    private static boolean hasStructuralSupportAt(ServerLevel level, Formation formation, int slot,
+                                                   Mob moving, Vec3 position) {
+        if (level == null || formation == null || moving == null || position == null) return false;
+        if (hasFoundationTerrainSupport(level, moving, position)) return true;
+        int placedLimit = Math.min(Math.min(slot, formation.assembledSlots), formation.members.size());
+        for (int supportSlot = 0; supportSlot < placedLimit; supportSlot++) {
+            Mob support = getMob(level, formation.members.get(supportSlot));
+            if (support != null && support.isAlive() && !support.isRemoved()
+                    && support.noPhysics && support.isNoGravity()
+                    && (formation.plan != null && requiresTilt(formation.plan.scenario())
+                    ? physicalBodiesConnect(translatedBoundingBox(moving, position), support.getBoundingBox())
+                    : loadBearingBodiesTouch(translatedBoundingBox(moving, position), support.getBoundingBox())
+                    || bodiesHaveHorizontalContact(translatedBoundingBox(moving, position), support.getBoundingBox()))) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasSupportedAssemblyMove(ServerLevel level, Formation formation, int slot,
+                                                     Mob moving, Vec3 current, Vec3 next) {
+        if (current == null || next == null) return false;
+        if (next.y > current.y + OVERLAP_EPSILON) {
+            return hasLoadBearingSupportAt(level, formation, slot, moving, next);
+        }
+        return hasStructuralSupportAt(level, formation, slot, moving, next);
+    }
+
+    private static boolean hasLoadBearingSupportAt(ServerLevel level, Formation formation, int slot,
+                                                    Mob moving, Vec3 position) {
+        if (level == null || formation == null || moving == null || position == null) return false;
+        if (hasFoundationTerrainSupport(level, moving, position)) return true;
+        int placedLimit = Math.min(Math.min(slot, formation.assembledSlots), formation.members.size());
+        AABB proposed = translatedBoundingBox(moving, position);
+        for (int supportSlot = 0; supportSlot < placedLimit; supportSlot++) {
+            Mob support = getMob(level, formation.members.get(supportSlot));
+            if (support != null && support.isAlive() && !support.isRemoved()
+                    && support.noPhysics && support.isNoGravity()
+                    && loadBearingBodiesTouch(proposed, support.getBoundingBox())) return true;
+        }
+        return false;
     }
 
     private static boolean plannedBodiesTouch(Mob moving, Vec3 target, Mob support) {
-        if (target != null && support != null && target.distanceToSqr(support.position()) <= 25.0D) {
-            return true;
-        }
+        if (moving == null || target == null || support == null) return false;
         AABB proposed = translatedBoundingBox(moving, target);
         AABB actual = support.getBoundingBox();
-        return structuralBodiesTouch(proposed, actual);
+        return physicalBodiesConnect(proposed, actual);
+    }
+
+    static boolean loadBearingBodiesTouch(AABB upper, AABB lower) {
+        if (upper == null || lower == null) return false;
+        double overlapX = Math.min(upper.maxX, lower.maxX) - Math.max(upper.minX, lower.minX);
+        double overlapZ = Math.min(upper.maxZ, lower.maxZ) - Math.max(upper.minZ, lower.minZ);
+        double verticalGap = upper.minY - lower.maxY;
+        return overlapX > OVERLAP_EPSILON && overlapZ > OVERLAP_EPSILON
+                && Math.abs(verticalGap) <= CONTACT_EPSILON;
+    }
+
+    private static boolean bodiesHaveHorizontalContact(AABB first, AABB second) {
+        if (first == null || second == null || axisOverlap(first.minY, first.maxY, second.minY, second.maxY)
+                <= OVERLAP_EPSILON) return false;
+        double gapX = Math.max(0.0D, Math.max(second.minX - first.maxX, first.minX - second.maxX));
+        double gapZ = Math.max(0.0D, Math.max(second.minZ - first.maxZ, first.minZ - second.maxZ));
+        return Math.sqrt(gapX * gapX + gapZ * gapZ) <= CONTACT_EPSILON + OVERLAP_EPSILON;
     }
 
     private static Vec3 formationSlotPosition(Formation formation, int slot, double progress) {
@@ -14147,7 +15483,10 @@ public final class LivingWallCoordinator {
     private static boolean selectSourceStagingOffset(ServerLevel level, Formation formation, Mob leader,
                                                      SourceStagingBudget budget) {
         if (!isServerThread(level) || formation == null || leader == null) {
-            if (formation != null) SoundAttractMod.LOGGER.info("[LivingWallCoordinator] admission_articulation_rejected reason=wrong_server_thread");
+            if (formation != null
+                    && DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.LIVING_WALL_ADMISSION)) {
+                SoundAttractMod.LOGGER.info("[LivingWallCoordinator] admission_articulation_rejected reason=wrong_server_thread");
+            }
             return false;
         }
         Vec3 originalOffset = formation.sourceStagingOffset;
@@ -14740,20 +16079,22 @@ public final class LivingWallCoordinator {
         if (level == null || mob == null) return false;
         CompoundTag entityData = mob.getPersistentData();
         if (!entityData.contains("livingBridgeControl")) return false;
-        if (!entityData.contains("livingBridgeControl", net.minecraft.nbt.Tag.TAG_COMPOUND)) return false;
+        boolean legacyOwnerMarker = entityData.contains("soundattract_living_bridge");
+        boolean physicsOwned = mob.isNoGravity() && mob.noPhysics;
+        if (!entityData.contains("livingBridgeControl", net.minecraft.nbt.Tag.TAG_COMPOUND)) return legacyOwnerMarker || physicsOwned;
         CompoundTag capsule = entityData.getCompound("livingBridgeControl");
         if (!capsule.contains("schema", net.minecraft.nbt.Tag.TAG_INT)
-                || capsule.getInt("schema") != LivingBridgeRouteData.CURRENT_SCHEMA) return false;
+                || capsule.getInt("schema") != LivingBridgeRouteData.CURRENT_SCHEMA) return legacyOwnerMarker || physicsOwned;
         try {
             LivingBridgeRouteSnapshot entity = LivingBridgeRouteSnapshot.fromTag(capsule.getCompound("snapshot"));
             LivingBridgeRouteSnapshot saved = LivingBridgeRouteData.get(level).snapshot(entity.reservationId());
             if (saved == null || !entity.digest().equals(capsule.getString("snapshotDigest"))
                     || !saved.exactlyEquals(entity) || !entity.ownerId().equals(mob.getUUID())
-                    || !entity.dimension().equals(level.dimension().location().toString())) return false;
+                    || !entity.dimension().equals(level.dimension().location().toString())) return legacyOwnerMarker || physicsOwned;
             return LivingBridgeSafeBaseRoute.mustPreserveOwner(true,
                     LivingBridgeRouteData.isTerminalLaneState(entity.lifecycleState()));
         } catch (RuntimeException malformed) {
-            return false;
+            return legacyOwnerMarker || physicsOwned;
         }
     }
 
@@ -14999,9 +16340,6 @@ public final class LivingWallCoordinator {
                         continue;
                     }
                     if (isPlannedTiltContact(formation, cursor, state, progress)) {
-                        continue;
-                    }
-                    if (isOpenTrapdoor(state)) {
                         continue;
                     }
                     AABB worldShapeBounds = shapeBounds;
@@ -15315,11 +16653,7 @@ public final class LivingWallCoordinator {
                     }
                 }
                 case FALLING -> {
-                    if (updateFallingCrosser(level, formation, mob, transit)) {
-                        formation.completedCrossers.add(uuid);
-                        formation.crosserCompletionTicks.put(uuid, level.getGameTime());
-                        removeCrosserTransit(formation, uuid);
-                    }
+                    updateFallingCrosser(level, formation, mob, transit);
                 }
                 case LANDING_VALIDATION -> {
                     if (updateLandingValidation(level, formation, mob, transit, now)) {
@@ -15400,6 +16734,8 @@ public final class LivingWallCoordinator {
                         if (mob.distanceToSqr(target) <= 9.0D) {
                             return false;
                         }
+                        if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                                level, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMBAT)) return false;
                         var path = mob.getNavigation().createPath(target, 0);
                         if (path != null && path.canReach()) {
                             return false;
@@ -15557,7 +16893,8 @@ public final class LivingWallCoordinator {
                 ensureBridgeWorkGoal(mob);
                 return true;
             }
-            com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, baseStation, 1.2D);
+            com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(mob, baseStation, 1.2D,
+                    com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED);
             return true;
         }
         BlockPos routeTarget = window.feederApproach() != null && isIntakeRouteTarget(window, window.feederApproach())
@@ -15581,7 +16918,8 @@ public final class LivingWallCoordinator {
         mob.noPhysics = false;
         mob.fallDistance = 0.0F;
         com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(
-                mob, Vec3.atCenterOf(routeTarget), 1.2D);
+                mob, Vec3.atCenterOf(routeTarget), 1.2D,
+                com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED);
         return true;
     }
 
@@ -15597,11 +16935,9 @@ public final class LivingWallCoordinator {
             return CrosserPullResult.FAILED;
         }
         CrosserWaypoint waypoint = walkwayWaypoint(level, formation, mob, 0);
-        Vec3 target = waypoint.valid() && waypoint.position() != null ? waypoint.position() : null;
-        if (target == null) {
-            Vec3 station = slotPosition(formation, 0);
-            target = new Vec3(station.x, station.y + 1.85D, station.z);
-        }
+        Vec3 target = waypoint.valid() ? waypoint.position() : null;
+        if (target == null) return CrosserPullResult.FAILED;
+        if (!hasCrosserSupportAt(level, formation, mob, 0, mob.position())) return CrosserPullResult.FAILED;
         if (formation.plan != null && requiresTilt(formation.plan.scenario())) {
             Vec3 baseStation = slotPosition(formation, 0);
             double horizDistSq = (mob.getX() - baseStation.x) * (mob.getX() - baseStation.x)
@@ -15624,6 +16960,7 @@ public final class LivingWallCoordinator {
         double horizontalDistSq = (delta.x * delta.x) + (delta.z * delta.z);
         double distance = delta.length();
         if (distance <= CONTROLLED_INTAKE_SETTLE_DISTANCE || (horizontalDistSq <= 0.25D && Math.abs(delta.y) <= 0.6D)) {
+            if (!hasCrosserSupportAt(level, formation, mob, 0, target)) return CrosserPullResult.FAILED;
             mob.setPos(target.x, target.y, target.z);
             mob.setDeltaMovement(Vec3.ZERO);
             mob.fallDistance = 0.0F;
@@ -15634,7 +16971,8 @@ public final class LivingWallCoordinator {
         }
         Vec3 step = delta.scale(Math.min(CROSSER_INTAKE_PULL_STEP, distance) / distance);
         Vec3 next = mob.position().add(step);
-        if (findBlockingSlotBlock(level, mob, next) != null) {
+        if (findBlockingSlotBlock(level, mob, next) != null
+                || !hasCrosserSupportAt(level, formation, mob, 0, next)) {
             return CrosserPullResult.FAILED;
         }
         mob.setTarget(null);
@@ -15683,44 +17021,63 @@ public final class LivingWallCoordinator {
 
     private static boolean advanceCrosser(ServerLevel level, Formation formation, Mob mob,
                                           CrosserTransit transit, long now) {
+        boolean walkingOffBridge = transit.state == CrosserTransitState.DISMOUNT && transit.dismountBridgeReached;
+        if (!walkingOffBridge && !hasCrosserSupportAt(level, formation, mob, transit.slot, mob.position())) return false;
         TiltExitProjection exit = resolveTiltThreatExit(level, formation);
         if (transit.state == CrosserTransitState.TRAVERSE && exit != null && transit.slot >= exit.slot()) {
             transit.state = CrosserTransitState.DISMOUNT;
             transit.stateTick = now;
             transit.handoffGoal = exit.handoffGoal();
+            clearCrosserDismountProgress(transit);
         }
         if (transit.state == CrosserTransitState.DISMOUNT && exit != null) {
             Vec3 bridgeTarget = exit.bridgeWaypoint();
             if (bridgeTarget == null) {
                 CrosserWaypoint waypoint = walkwayWaypoint(level, formation, mob, exit.slot());
                 bridgeTarget = waypoint.valid() && waypoint.position() != null ? waypoint.position() : null;
-                if (bridgeTarget == null) {
-                    Vec3 station = slotPosition(formation, exit.slot());
-                    bridgeTarget = new Vec3(station.x, station.y + 1.85D, station.z);
-                }
+                if (bridgeTarget == null) return false;
             }
-            Vec3 target = (mob.position().distanceToSqr(bridgeTarget) > 0.36D)
-                    ? bridgeTarget : exit.dismountWaypoint();
-            if (!moveCrosserBounded(level, mob, target, 0.22D)) {
+            if (transit.dismountExitSlot != exit.slot()
+                    || !Objects.equals(transit.dismountBridgeWaypoint, bridgeTarget)
+                    || !Objects.equals(transit.dismountWaypoint, exit.dismountWaypoint())) {
+                transit.dismountExitSlot = exit.slot();
+                transit.dismountBridgeWaypoint = bridgeTarget;
+                transit.dismountWaypoint = exit.dismountWaypoint();
+                transit.dismountBridgeReached = false;
+            }
+            if (!transit.dismountBridgeReached
+                    && mob.position().distanceToSqr(bridgeTarget) <= 0.36D) {
+                transit.dismountBridgeReached = true;
+            }
+            Vec3 target = transit.dismountBridgeReached ? exit.dismountWaypoint() : bridgeTarget;
+            if (!moveCrosserBounded(level, formation, mob, target, 0.22D, exit.slot(), !transit.dismountBridgeReached)) {
                 transit.stuckTicks++;
                 if (transit.stuckTicks > 60) return false;
                 applyCoordinatorCrosserControl(mob);
                 return true;
             }
-            transit.stuckTicks = 0;
-            if (mob.position().distanceToSqr(exit.dismountWaypoint()) <= 0.16D) {
-                startCrosserFall(mob, transit, exit);
+            if (mob.position().distanceToSqr(exit.dismountWaypoint()) <= 1.0E-6D) {
+                AABB releaseBox = translatedBoundingBox(mob, exit.dismountWaypoint());
+                if (findBlockingSlotBlock(level, mob, exit.dismountWaypoint()) == null
+                        && level.noCollision(mob, releaseBox)) {
+                    transit.stuckTicks = 0;
+                    startCrosserFall(mob, transit, exit);
+                } else if (++transit.stuckTicks > 60) {
+                    return false;
+                }
+            } else {
+                transit.stuckTicks = 0;
             }
             formation.crosserSlots.put(mob.getUUID(), exit.slot());
             return true;
         }
+        if (transit.state == CrosserTransitState.DISMOUNT) {
+            clearCrosserDismountProgress(transit);
+        }
         CrosserWaypoint waypoint = walkwayWaypoint(level, formation, mob, transit.slot);
         Vec3 target = waypoint.valid() && waypoint.position() != null ? waypoint.position() : null;
-        if (target == null) {
-            Vec3 station = slotPosition(formation, transit.slot);
-            target = new Vec3(station.x, station.y + 1.85D, station.z);
-        }
-        if (!moveCrosserBounded(level, mob, target, 0.22D)) {
+        if (target == null) return false;
+        if (!moveCrosserBounded(level, formation, mob, target, 0.22D, transit.slot, true)) {
             transit.stuckTicks++;
             if (transit.stuckTicks > 60) return false;
             applyCoordinatorCrosserControl(mob);
@@ -15768,17 +17125,36 @@ public final class LivingWallCoordinator {
         return true;
     }
 
-    private static boolean moveCrosserBounded(ServerLevel level, Mob mob, Vec3 target, double maxStep) {
-        if (level == null || mob == null || target == null) return false;
+    private static boolean moveCrosserBounded(ServerLevel level, Formation formation, Mob mob, Vec3 target,
+                                              double maxStep, int slot, boolean requireSupport) {
+        if (level == null || formation == null || mob == null || target == null) return false;
         Vec3 current = mob.position();
         Vec3 delta = target.subtract(current);
         double distance = delta.length();
         if (distance < 1.0E-6D) return true;
         Vec3 next = distance <= maxStep ? target : current.add(delta.scale(maxStep / distance));
-        applyCoordinatorCrosserControl(mob);
         if (findBlockingSlotBlock(level, mob, next) != null) return false;
+        if (requireSupport && !hasCrosserSupportAt(level, formation, mob, slot, next)) return false;
+        applyCoordinatorCrosserControl(mob);
         placeCrosserOnWaypoint(mob, next);
         return true;
+    }
+
+    private static boolean hasCrosserSupportAt(ServerLevel level, Formation formation, Mob crosser,
+                                               int slot, Vec3 position) {
+        if (hasFoundationTerrainSupport(level, crosser, position)) return true;
+        int bounded = Math.max(0, Math.min(Math.max(0, formation.members.size() - 1), slot));
+        int columns = Math.max(1, formation.columnCount);
+        int layerStart = bounded - Math.floorMod(bounded, columns);
+        int layerEnd = Math.min(formation.members.size(), layerStart + columns);
+        AABB proposed = translatedBoundingBox(crosser, position);
+        for (int memberSlot = layerStart; memberSlot < layerEnd && memberSlot < formation.assembledSlots; memberSlot++) {
+            Mob support = getMob(level, formation.members.get(memberSlot));
+            if (support != null && support.isAlive() && !support.isRemoved()
+                    && support.noPhysics && support.isNoGravity()
+                    && loadBearingBodiesTouch(proposed, support.getBoundingBox())) return true;
+        }
+        return false;
     }
 
     private static void startCrosserFall(Mob mob, CrosserTransit transit, TiltExitProjection exit) {
@@ -15787,26 +17163,32 @@ public final class LivingWallCoordinator {
         mob.setDeltaMovement(Vec3.ZERO);
         mob.setNoGravity(false);
         mob.noPhysics = false;
+        mob.setOnGround(false);
         mob.getNavigation().stop();
         mob.fallDistance = 0.0F;
         transit.state = CrosserTransitState.FALLING;
         transit.handoffGoal = exit.handoffGoal();
     }
 
-    private static boolean updateFallingCrosser(ServerLevel level, Formation formation, Mob mob, CrosserTransit transit) {
-        if (level == null || formation == null || mob == null || transit == null) return false;
+    private static void updateFallingCrosser(ServerLevel level, Formation formation, Mob mob, CrosserTransit transit) {
+        if (level == null || formation == null || mob == null || transit == null) return;
         if (!mob.onGround()) {
             mob.getNavigation().stop();
             if (++transit.landingWatchdogTicks > 100) {
                 transit.state = CrosserTransitState.ABORTED;
-                releaseCrosser(level, formation, mob.getUUID());
-                return true;
             }
-            return true;
+            return;
         }
         transit.state = CrosserTransitState.LANDING_VALIDATION;
         transit.stateTick = level.getGameTime();
-        return false;
+    }
+
+    private static void clearCrosserDismountProgress(CrosserTransit transit) {
+        if (transit == null) return;
+        transit.dismountExitSlot = -1;
+        transit.dismountBridgeWaypoint = null;
+        transit.dismountWaypoint = null;
+        transit.dismountBridgeReached = false;
     }
 
     private static boolean updateLandingValidation(ServerLevel level, Formation formation, Mob mob,
@@ -15817,10 +17199,12 @@ public final class LivingWallCoordinator {
             releaseCrosser(level, formation, mob.getUUID());
             return true;
         }
+        if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                level, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED)) return false;
+        if (!mob.getNavigation().moveTo(transit.handoffGoal.getX() + 0.5D,
+                transit.handoffGoal.getY(), transit.handoffGoal.getZ() + 0.5D, 1.0D)) return false;
         releaseCrosser(level, formation, mob.getUUID());
         transit.state = CrosserTransitState.HANDED_OFF;
-        mob.getNavigation().moveTo(transit.handoffGoal.getX() + 0.5D,
-                transit.handoffGoal.getY(), transit.handoffGoal.getZ() + 0.5D, 1.0D);
         return true;
     }
 
@@ -15837,7 +17221,7 @@ public final class LivingWallCoordinator {
     }
 
     private static CrosserWaypoint walkwayWaypoint(ServerLevel level, Formation formation, Mob crosser, int slot) {
-        if (level == null || formation == null || crosser == null || formation.members.isEmpty()) {
+        if (level == null || formation == null || crosser == null) {
             return new CrosserWaypoint(null, -1, 0.0D, false, "missing_context");
         }
         Vec3 station = slotPosition(formation, slot);
@@ -15856,13 +17240,15 @@ public final class LivingWallCoordinator {
         int layerStart = Math.max(0, bounded - Math.floorMod(bounded, Math.max(1, formation.columnCount)));
         int layerEnd = Math.min(formation.members.size() - 1, layerStart + Math.max(1, formation.columnCount) - 1);
         for (int candidateSlot = layerStart; candidateSlot <= layerEnd; candidateSlot++) {
+            if (candidateSlot >= formation.assembledSlots) continue;
             Mob candidate = getMob(level, formation.members.get(candidateSlot));
-            if (candidate == null || !candidate.isAlive() || candidate.isRemoved()) {
+            if (candidate == null || !candidate.isAlive() || candidate.isRemoved()
+                    || !candidate.noPhysics || !candidate.isNoGravity()) {
                 continue;
             }
             AABB supportBox = candidate.getBoundingBox();
             AABB horizontalBox = new AABB(supportBox.minX, -1.0D, supportBox.minZ, supportBox.maxX, 1.0D, supportBox.maxZ);
-            if (!horizontalBox.inflate(CONTACT_EPSILON).intersects(footprint)) {
+            if (!horizontalBox.intersects(footprint)) {
                 continue;
             }
             if (supportBox.maxY > supportTop) {
@@ -15871,19 +17257,14 @@ public final class LivingWallCoordinator {
                 supportTop = supportBox.maxY;
             }
         }
-        if (support == null && bounded < formation.members.size()) {
-            Mob candidate = getMob(level, formation.members.get(bounded));
-            if (candidate != null && candidate.isAlive() && !candidate.isRemoved()) {
-                support = candidate;
-                supportSlot = bounded;
-                supportTop = candidate.getBoundingBox().maxY;
-            }
-        }
         if (support == null) {
-            supportTop = station.y + 1.85D;
-            Vec3 feet = new Vec3(station.x, supportTop, station.z);
-            if (findBlockingSlotBlock(level, crosser, feet) == null) {
-                return new CrosserWaypoint(feet, bounded, supportTop, true, "fallback_station");
+            if (hasFoundationTerrainSupport(level, crosser, station)) {
+                ClearanceResolution clearance = resolveClearance(level, crosser, station, crosser.maxUpStep());
+                Vec3 feet = clearance.position() != null ? clearance.position() : station;
+                if (findBlockingSlotBlock(level, crosser, feet) == null
+                        && hasFoundationTerrainSupport(level, crosser, feet)) {
+                    return new CrosserWaypoint(feet, bounded, feet.y, true, "terrain_support");
+                }
             }
             return new CrosserWaypoint(null, -1, 0.0D, false, "support_missing");
         }
@@ -15894,6 +17275,9 @@ public final class LivingWallCoordinator {
                 : (findBlockingSlotBlock(level, crosser, feet) == null ? feet : null);
         if (resolvedPos == null) {
             return new CrosserWaypoint(null, supportSlot, supportTop, false, "blocked");
+        }
+        if (!loadBearingBodiesTouch(translatedBoundingBox(crosser, resolvedPos), support.getBoundingBox())) {
+            return new CrosserWaypoint(null, supportSlot, supportTop, false, "support_lost_after_clearance");
         }
         return new CrosserWaypoint(resolvedPos, supportSlot, supportTop, true, "ok");
     }
@@ -15951,9 +17335,6 @@ public final class LivingWallCoordinator {
 
     private static TiltExitProjection computeTiltThreatExit(ServerLevel level, Formation formation) {
         if (formation == null || formation.plan == null) return null;
-        if (formation.plan.scenario() == ConstructionScenario.WALL_LEDGE) {
-            return null;
-        }
         BlockPos threat = formation.request.threatDestination();
         Vec3 pivotCenter = Vec3.atBottomCenterOf(formation.pivot);
         BlockPos structuralEnd = tiltStructuralEnd(formation.plan);
@@ -16018,13 +17399,17 @@ public final class LivingWallCoordinator {
         double[] offsets = {0.0D, 0.6D, -0.6D, 1.2D, -1.2D};
         FallColumnResolution best = null;
         double bestScore = Double.NEGATIVE_INFINITY;
+        Mob exitMob = exitSlot >= 0 && exitSlot < formation.members.size()
+                ? getMob(level, formation.members.get(exitSlot)) : null;
+        int safeFallDepth = Math.min(TILT_EXIT_MAX_FALL_DEPTH,
+                Math.max(4, Mth.floor(exitMob == null ? 6.0F : exitMob.getMaxHealth()) - 2));
         for (double offsetScale : offsets) {
             Vec3 candidateRelease = releaseWaypoint.add(lateral.scale(offsetScale));
             BlockPos releaseCell = BlockPos.containing(candidateRelease.x, candidateRelease.y - CONTACT_EPSILON, candidateRelease.z);
-            for (int fall = 1; fall <= TILT_EXIT_MAX_FALL_DEPTH; fall++) {
+            for (int fall = 1; fall <= safeFallDepth; fall++) {
                 BlockPos support = releaseCell.below(fall);
                 fingerprint.add(fingerprintCell(level, support, false, false));
-                if (!level.isLoaded(support) || isBridgeHazard(level, support)) break;
+                if (!level.isLoaded(support) || isTiltExitFallHazard(level, support)) break;
                 BlockState supportState = level.getBlockState(support);
                 if (!hasStableSupport(level, support, supportState)) continue;
                 BlockPos landing = support.above();
@@ -16053,6 +17438,15 @@ public final class LivingWallCoordinator {
             }
         }
         return best;
+    }
+
+    private static boolean isTiltExitFallHazard(ServerLevel level, BlockPos pos) {
+        if (level == null || pos == null || !level.isLoaded(pos)) return true;
+        BlockState state = level.getBlockState(pos);
+        return isBridgeHazard(state)
+                || state.getBlock() instanceof net.minecraft.world.level.block.NetherPortalBlock
+                || state.getBlock() instanceof net.minecraft.world.level.block.EndGatewayBlock
+                || state.getBlock() instanceof net.minecraft.world.level.block.EndPortalBlock;
     }
 
     private static boolean isValidTiltExitApproach(ServerLevel level, Formation formation, Mob mob, Vec3 current,
@@ -16143,7 +17537,8 @@ public final class LivingWallCoordinator {
         BlockPos handoff = exit == null ? threat : exit.handoffGoal();
         if (handoff != null && level.isLoaded(handoff)) {
             com.example.soundattract.pathfinding.PursuitNavigation.maybeMoveTo(
-                    mob, Vec3.atCenterOf(handoff), 1.0D);
+                    mob, Vec3.atCenterOf(handoff), 1.0D,
+                    com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED);
         }
     }
 
@@ -16253,8 +17648,9 @@ public final class LivingWallCoordinator {
         if (mob != null && mob.isAlive() && !mob.isRemoved()) {
             advanceControlledSafeRecovery(level, mob);
             completeSafeRecoveryAtPersistedEndpoint(level, mob);
-            if (!formation.collapsed && mustPreserveDurableRouteOwner(level, mob)) {
+            if (mustPreserveDurableRouteOwner(level, mob)) {
                 holdDurableRouteOwner(mob);
+                queueDurableRecovery(level, uuid);
             } else {
                 Boolean gravity = formation.originalGravity.get(uuid);
                 mob.setNoGravity(gravity != null && !gravity);
@@ -16315,7 +17711,7 @@ public final class LivingWallCoordinator {
                 target = reacquirePostBridgeTarget(level, formation, mob);
             }
             mob.setTarget(target);
-            mob.setAggressive(target != null);
+            mob.setAggressive(false);
             logCombatHandoff(formation, mob, uuid, target, target == null ? "passive_no_target" : "passive_original");
             return;
         }
@@ -16333,12 +17729,69 @@ public final class LivingWallCoordinator {
         mob.setTarget(target);
         LivingEntity actualTarget = mob.getTarget();
         mob.setAggressive(actualTarget != null);
-        if (actualTarget != null) {
-            mob.getNavigation().moveTo(actualTarget, 1.0D);
-        } else {
-            mob.getNavigation().moveTo(target.getX(), target.getY(), target.getZ(), 1.0D);
+        if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED)) {
+            queueCombatHandoff(level, mob, target);
+            logCombatHandoff(formation, mob, uuid, target, reason + "_path_deferred");
+            return;
+        }
+        boolean accepted = actualTarget != null
+                ? mob.getNavigation().moveTo(actualTarget, 1.0D)
+                : mob.getNavigation().moveTo(target.getX(), target.getY(), target.getZ(), 1.0D);
+        if (!accepted) {
+            queueCombatHandoff(level, mob, target);
+            logCombatHandoff(formation, mob, uuid, target, reason + "_path_retry");
+            return;
         }
         logCombatHandoff(formation, mob, uuid, target, reason);
+    }
+
+    private static void queueCombatHandoff(ServerLevel level, Mob mob, LivingEntity target) {
+        if (level == null || mob == null || target == null || !target.isAlive() || target.isRemoved()) return;
+        PerLevelState levelState = state(level);
+        UUID mobId = mob.getUUID();
+        if (!levelState.pendingCombatHandoffs.containsKey(mobId)
+                && levelState.pendingCombatHandoffs.size() >= 512) {
+            levelState.pendingCombatHandoffs.remove(levelState.pendingCombatHandoffs.keySet().iterator().next());
+        }
+        levelState.pendingCombatHandoffs.put(mobId, new PendingCombatHandoff(target.getUUID(),
+                target.blockPosition().immutable(), level.getGameTime() + 40L));
+    }
+
+    private static void processPendingCombatHandoffs(ServerLevel level, PerLevelState levelState, long now) {
+        if (level == null || levelState == null || levelState.pendingCombatHandoffs.isEmpty()) return;
+        int processed = 0;
+        int scanned = 0;
+        Iterator<Map.Entry<UUID, PendingCombatHandoff>> iterator = levelState.pendingCombatHandoffs.entrySet().iterator();
+        while (iterator.hasNext() && processed < 8 && scanned++ < 32) {
+            Map.Entry<UUID, PendingCombatHandoff> entry = iterator.next();
+            PendingCombatHandoff handoff = entry.getValue();
+            if (handoff.expiresAt() <= now) {
+                iterator.remove();
+                continue;
+            }
+            if (!(level.getEntity(entry.getKey()) instanceof Mob mob) || !mob.isAlive() || mob.isRemoved()) continue;
+            if (isControlled(mob)) {
+                iterator.remove();
+                continue;
+            }
+            if (!(level.getEntity(handoff.targetId()) instanceof LivingEntity target)
+                    || !target.isAlive() || target.isRemoved() || !mob.canAttack(target)
+                    || mob.getTarget() != null && mob.getTarget() != target) {
+                iterator.remove();
+                continue;
+            }
+            if (!com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                    level, com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMMITTED)) break;
+            boolean accepted = mob.getTarget() == target
+                    ? mob.getNavigation().moveTo(target, 1.0D)
+                    : mob.getNavigation().moveTo(handoff.targetPosition().getX() + 0.5D,
+                    handoff.targetPosition().getY(), handoff.targetPosition().getZ() + 0.5D, 1.0D);
+            if (accepted) {
+                iterator.remove();
+                processed++;
+            }
+        }
     }
 
     private static LivingEntity restoredOriginalTarget(ServerLevel level, Formation formation, UUID uuid, Mob mob) {
@@ -16549,10 +18002,12 @@ public final class LivingWallCoordinator {
             return null;
         }
         PerLevelState state = LEVELS.get(level.dimension().location());
-        if (state == null) {
-            return null;
-        }
-        UUID id = state.mobOwners.get(mob.getUUID());
+        return getFormation(state, mob.getUUID());
+    }
+
+    private static Formation getFormation(PerLevelState state, UUID mobId) {
+        if (state == null || mobId == null) return null;
+        UUID id = state.mobOwners.get(mobId);
         return id == null ? null : state.formations.get(id);
     }
 
@@ -16617,8 +18072,9 @@ public final class LivingWallCoordinator {
             if (mob != null && mob.isAlive() && !mob.isRemoved()) {
                 advanceControlledSafeRecovery(level, mob);
                 completeSafeRecoveryAtPersistedEndpoint(level, mob);
-                if (!formation.collapsed && mustPreserveDurableRouteOwner(level, mob)) {
+                if (mustPreserveDurableRouteOwner(level, mob)) {
                     holdDurableRouteOwner(mob);
+                    queueDurableRecovery(level, uuid);
                 } else {
                     Boolean original = formation.originalGravity.get(uuid);
                     mob.setNoGravity(original != null && !original);
@@ -16629,7 +18085,7 @@ public final class LivingWallCoordinator {
                     } else if (!mob.hasCustomName()) {
                         ((MobAccessor) mob).setPersistenceRequiredFlag(false);
                     }
-                    mob.noPhysics = false;
+                    mob.noPhysics = Boolean.TRUE.equals(formation.originalNoPhysics.get(uuid));
                     clearControlledMarker(mob, formation.id);
                     mob.getPersistentData().remove("livingBridgeSafeBaseRouteActive");
                     mob.getPersistentData().remove("livingBridgeControl");
@@ -16776,6 +18232,10 @@ public final class LivingWallCoordinator {
             Mob mob = getMob(level, id);
             if (formation == null) {
                 if (mob != null && mob.isAlive() && !mob.isRemoved()) {
+                    if (mustPreserveDurableRouteOwner(level, mob)) {
+                        holdDurableRouteOwner(mob);
+                        continue;
+                    }
                     mob.setNoGravity(false);
                     mob.noPhysics = false;
                     mob.setTarget(null);
@@ -16805,9 +18265,10 @@ public final class LivingWallCoordinator {
     }
 
     private static void recoverLoadedMarkers(ServerLevel level, long now) {
-        if (level == null || now % 40L != 0L) return;
+        if (level == null) return;
+        PerLevelState state = state(level);
         Set<UUID> visited = new HashSet<>();
-        int budget = 16;
+        int budget = state.durableRecoveryWorkRemaining;
         for (var player : level.players()) {
             if (budget <= 0) break;
             AABB area = player.getBoundingBox().inflate(RECRUITMENT_RADIUS);
@@ -16815,6 +18276,7 @@ public final class LivingWallCoordinator {
                     candidate -> candidate.getPersistentData().contains(CONTROL_TAG))) {
                 if (!visited.add(mob.getUUID())) continue;
                 recoverStaleControlledMob(level, mob, "periodic_scan");
+                state.durableRecoveryWorkRemaining--;
                 if (--budget <= 0) break;
             }
         }
@@ -16887,6 +18349,7 @@ public final class LivingWallCoordinator {
         clearLocalSafeBaseOwnership(level, mob);
         PerLevelState state = LEVELS.get(level.dimension().location());
         if (state == null) return;
+        clearDurableRecoveryState(state, mob.getUUID());
         List<Formation> formations;
         synchronized (state.formations) {
             formations = new ArrayList<>(state.formations.values());
@@ -16901,11 +18364,12 @@ public final class LivingWallCoordinator {
     @SubscribeEvent
     public static void onEntityLeaveLevel(EntityLeaveLevelEvent event) {
         if (event == null || !(event.getEntity() instanceof Mob mob)
-                || mob.getRemovalReason() != net.minecraft.world.entity.Entity.RemovalReason.DISCARDED
                 || !(event.getLevel() instanceof ServerLevel level) || level.getServer() == null
                 || !level.getServer().isSameThread()) return;
-        clearLocalSafeBaseOwnership(level, mob);
         PerLevelState state = LEVELS.get(level.dimension().location());
+        if (state != null) clearDurableRecoveryState(state, mob.getUUID());
+        if (mob.getRemovalReason() != net.minecraft.world.entity.Entity.RemovalReason.DISCARDED) return;
+        clearLocalSafeBaseOwnership(level, mob);
         if (state == null) return;
         List<Formation> formations;
         synchronized (state.formations) {
@@ -17020,6 +18484,47 @@ public final class LivingWallCoordinator {
 
     private static void clearLevel(ServerLevel level) {
         clearLevel(level, "manual_clear");
+    }
+
+    private static void processDisabledLevel(ServerLevel level) {
+        if (level == null) return;
+        PerLevelState state = LEVELS.get(level.dimension().location());
+        if (state == null) return;
+        state.durableRecoveryWorkRemaining = DURABLE_RECOVERY_BUDGET_PER_TICK;
+        if (!state.disabledCleanupDone) {
+            List<Formation> formations;
+            synchronized (state.formations) {
+                formations = new ArrayList<>(state.formations.values());
+                state.formations.clear();
+            }
+            for (Formation formation : formations) {
+                formation.collapsed = true;
+                logLifecycleCleanup(level, "config_disabled", formation, null);
+                releaseFormation(level, formation);
+            }
+            state.leaderToFormations.clear();
+            state.serviceRing.clear();
+            state.targetScans.clear();
+            state.wallProfiles.clear();
+            state.terrainRejections.clear();
+            state.contentionCooldowns.clear();
+            state.mobOwners.clear();
+            state.footprintOwners.clear();
+            state.constructionIntents.clear();
+            state.rememberedThreats.clear();
+            state.basinEvacuations.clear();
+            state.basinFailures.clear();
+            state.admissionCompletions.clear();
+            state.admissionInFlight = false;
+            state.admissionGeneration++;
+            state.admissionBackoffUntil = Long.MAX_VALUE;
+            WallProfileScanner.clearCaches(level.dimension().location());
+            state.disabledCleanupDone = true;
+        }
+        processPendingDurableRecoveries(level, state);
+        if (state.pendingDurableRecoveries.isEmpty()) {
+            LEVELS.remove(level.dimension().location(), state);
+        }
     }
 
     private static void clearLevel(ServerLevel level, String reason) {

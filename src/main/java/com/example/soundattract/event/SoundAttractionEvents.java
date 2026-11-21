@@ -437,19 +437,14 @@ public class SoundAttractionEvents {
         if (!(event.getEntity() instanceof Mob mob)) return;
         if (event.getLevel().isClientSide()) return;
 
-        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
-            SoundAttractMod.LOGGER.info("[SoundAttractionEvents] CustomNPCs integration enabled: {}",
-                SoundAttractConfig.COMMON.enableCustomNpcsIntegration.get());
-        }
-
-        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_ATTRACTION)) {
             SoundAttractMod.LOGGER.info("[SoundAttractionEvents] Mob joined: {} of type {}, isCustomNpcs: {}",
                 mob.getName().getString(), EntityType.getKey(mob.getType()), isCustomNpcsMob(mob));
         }
 
         Set<EntityType<?>> blacklistedEntityTypes = getCachedBlacklistedEntityTypes();
         if (blacklistedEntityTypes.contains(mob.getType())) {
-            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_ATTRACTION)) {
                 SoundAttractMod.LOGGER.info("[SoundAttractionEvents] Mob {} is on the blacklist, ignoring.", EntityType.getKey(mob.getType()));
             }
             return;
@@ -460,17 +455,22 @@ public class SoundAttractionEvents {
         boolean hasMatchingprofile = SoundAttractConfig.getMatchingProfile(mob) != null;
         boolean isCustomNpcs = isCustomNpcsMob(mob);
 
-        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_ATTRACTION)) {
             SoundAttractMod.LOGGER.info("[SoundAttractionEvents] {} eligibility - type:{}, profile:{}, customNpcs:{}",
                 mob.getName().getString(), isAttractedByType, hasMatchingprofile, isCustomNpcs);
         }
 
         if (!isAttractedByType && !hasMatchingprofile && !isCustomNpcs) {
-            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_ATTRACTION)) {
                 SoundAttractMod.LOGGER.info("[SoundAttractionEvents] Mob {} not eligible - type:{}, profile:{}, customNpcs:{}",
                     mob.getName().getString(), isAttractedByType, hasMatchingprofile, isCustomNpcs);
             }
             return;
+        }
+
+        if (com.example.soundattract.ai.MeleeJumpAttemptGoal.supports(mob)) {
+            scheduleAddGoal(mob, Integer.MAX_VALUE - 1,
+                    new com.example.soundattract.ai.MeleeJumpAttemptGoal(mob));
         }
 
         if (isCustomNpcs && SoundAttractConfig.COMMON.enableCustomNpcsIntegration.get()) {
@@ -483,11 +483,16 @@ public class SoundAttractionEvents {
 
         if (SoundAttractConfig.COMMON.enableSmartBrainLibIntegration.get()) {
             if (SmartBrainLibCompat.tryAttachSoundAttractBrain(mob)) {
-                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SMART_BRAIN_LIB)) {
                     SoundAttractMod.LOGGER.info("[SoundAttractionEvents] Using SmartBrainLib integration for mob {} of type {}", mob.getName().getString(), EntityType.getKey(mob.getType()));
                 }
                 return;
             }
+        }
+
+        if (SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()
+                && mob.getNavigation() instanceof net.minecraft.world.entity.ai.navigation.FlyingPathNavigation) {
+            scheduleAddGoal(mob, 2, new com.example.soundattract.ai.AerialEdgeScoutGoal(mob));
         }
 
         double moveSpeed = SoundAttractConfig.COMMON.mobMoveSpeed.get();
@@ -499,7 +504,7 @@ public class SoundAttractionEvents {
                     scheduleAddGoal(mob, 2, new TeleportToSoundGoal(mob));
                 }
             } catch (Exception e) {
-                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_ATTRACTION)) {
                     SoundAttractMod.LOGGER.warn("[SoundAttractionEvents] Failed to apply TeleportToSoundGoal tag check for mob {}: {}", EntityType.getKey(mob.getType()), e.getMessage());
                 }
             }
@@ -512,7 +517,7 @@ public class SoundAttractionEvents {
                     scheduleAddGoal(mob, 2, new PickUpAndThrowToSoundGoal(mob));
                 }
             } catch (Exception e) {
-                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_ATTRACTION)) {
                     SoundAttractMod.LOGGER.warn("[SoundAttractionEvents] Failed to apply PickUpAndThrowToSoundGoal tag check for mob {}: {}", EntityType.getKey(mob.getType()), e.getMessage());
                 }
             }
@@ -520,7 +525,7 @@ public class SoundAttractionEvents {
 
         if (RelentlessUndeadIntegration.isMobEligibleForClimbing(mob)) {
              scheduleAddGoal(mob, 0, new com.example.soundattract.ai.SoundClimbGoal(mob));
-             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
+              if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_ATTRACTION)) {
                   SoundAttractMod.LOGGER.info("[SoundAttractionEvents] Scheduled SoundClimbGoal for mob {}", mob.getName().getString());
              }
         }
@@ -532,8 +537,9 @@ public class SoundAttractionEvents {
             scheduleAddGoal(mob, 3, new AttractionGoal(mob, moveSpeed));
         }
         scheduleAddGoal(mob, 4, new FollowLeaderGoal(mob, moveSpeed));
+        scheduleAddGoal(mob, 6, new com.example.soundattract.ai.ClueInvestigationGoal(mob));
 
-        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_ATTRACTION)) {
             SoundAttractMod.LOGGER.info("[SoundAttractionEvents] Scheduled goals for mob {} of type {}", mob.getName().getString(), EntityType.getKey(mob.getType()));
         }
 
@@ -569,9 +575,15 @@ public class SoundAttractionEvents {
                 .anyMatch(wrappedGoal -> wrappedGoal.getGoal() instanceof FollowerEdgeRelayGoal);
         boolean hasFollowLeaderGoal = mob.goalSelector.getAvailableGoals().stream()
                 .anyMatch(wrappedGoal -> wrappedGoal.getGoal() instanceof FollowLeaderGoal);
+        boolean hasAerialScoutGoal = mob.goalSelector.getAvailableGoals().stream()
+                .anyMatch(wrappedGoal -> wrappedGoal.getGoal() instanceof com.example.soundattract.ai.AerialEdgeScoutGoal);
 
         boolean smartEdge = SoundAttractConfig.COMMON.edgeMobSmartBehavior.get();
         int attractionPriority = 0;
+
+        if (smartEdge && mob.getNavigation() instanceof net.minecraft.world.entity.ai.navigation.FlyingPathNavigation && !hasAerialScoutGoal) {
+            mob.goalSelector.addGoal(2, new com.example.soundattract.ai.AerialEdgeScoutGoal(mob));
+        }
 
         if (smartEdge) {
             if (!hasFollowerEdgeRelayGoal) {
@@ -619,6 +631,12 @@ public class SoundAttractionEvents {
             if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {
                 SoundAttractMod.LOGGER.info("[SoundAttractionEvents] Added FollowLeaderGoal to CustomNPCs {}", mob.getName().getString());
             }
+        }
+
+        boolean hasClueInvestigationGoal = mob.goalSelector.getAvailableGoals().stream()
+                .anyMatch(wrappedGoal -> wrappedGoal.getGoal() instanceof com.example.soundattract.ai.ClueInvestigationGoal);
+        if (!hasClueInvestigationGoal) {
+            mob.goalSelector.addGoal(attractionPriority + 3, new com.example.soundattract.ai.ClueInvestigationGoal(mob));
         }
 
         if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.CUSTOM_NPCS)) {

@@ -276,8 +276,8 @@ public class CsGrenadesEventHandler {
             return;
         }
 
-        // TACZ Hostiles use SmartBrainLib and its brain movement tasks can replace
-        // vanilla goal navigation every tick, so attach the flee behavior there.
+
+
         if (isTaczCombatNpc(mob)
                 && com.example.soundattract.integration.smartbrainlib.SmartBrainLibCompat.tryAttachFireFleeBrain(mob)) {
             return;
