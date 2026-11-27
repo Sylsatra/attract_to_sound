@@ -60,7 +60,10 @@ public class FleeFromUnseenAttackerGoal extends Goal {
 
     @Override
     public void start() {
-        this.mob.getNavigation().moveTo(this.wantedX, this.wantedY, this.wantedZ, this.speedModifier);
+        if (com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                this.mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.COMBAT)) {
+            this.mob.getNavigation().moveTo(this.wantedX, this.wantedY, this.wantedZ, this.speedModifier);
+        }
     }
 
     @Override

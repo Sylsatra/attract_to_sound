@@ -1,8 +1,7 @@
 {
   "pack": {
     "description": {
-      "text": "${mod_id} resources"
-    },
-    "pack_format": 15
+      "text": "Attract To Sound resources"
+    }
   }
 }

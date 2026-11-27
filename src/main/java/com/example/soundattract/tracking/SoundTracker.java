@@ -53,6 +53,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 public class SoundTracker {
 
     private static final AtomicLong SOUND_SEQUENCE = new AtomicLong(0L);
+    private static final AtomicLong SOUND_VIEW_REVISION = new AtomicLong(0L);
 
     public static long getSoundSequence() {
         return SOUND_SEQUENCE.get();
@@ -67,6 +68,7 @@ public class SoundTracker {
         public final String dimensionKey;
         public final double range;
         public final double weight;
+        public long clueSignalId;
 
         public SoundRecord(SoundEvent sound, String soundId, BlockPos pos, int lifetime, String dimensionKey, double range, double weight) {
             this.sound = sound;
@@ -153,8 +155,17 @@ public class SoundTracker {
         final String dimensionKey;
         final double range;
         final double weight;
+        final long clueSignalId;
+        final ResourceLocation baseSoundLocation;
 
-        SoundSnapshot(SoundEvent sound, String soundId, BlockPos pos, int ticksRemaining, String dimensionKey, double range, double weight) {
+        SoundSnapshot(SoundEvent sound, String soundId, BlockPos pos, int ticksRemaining, String dimensionKey,
+                      double range, double weight, long clueSignalId) {
+            this(sound, soundId, pos, ticksRemaining, dimensionKey, range, weight, clueSignalId,
+                    extractBaseSoundLocation(soundId));
+        }
+
+        SoundSnapshot(SoundEvent sound, String soundId, BlockPos pos, int ticksRemaining, String dimensionKey,
+                      double range, double weight, long clueSignalId, ResourceLocation baseSoundLocation) {
             this.sound = sound;
             this.soundId = soundId;
             this.pos = pos;
@@ -162,8 +173,16 @@ public class SoundTracker {
             this.dimensionKey = dimensionKey;
             this.range = range;
             this.weight = weight;
+            this.clueSignalId = clueSignalId;
+            this.baseSoundLocation = baseSoundLocation;
         }
     }
+
+    private record SoundViewKey(String dimensionKey, GridKey3D center, long gameTime, long revision) {}
+    private static final Cache<SoundViewKey, List<SoundSnapshot>> SOUND_VIEW_CACHE = Caffeine.newBuilder()
+            .maximumSize(4096)
+            .expireAfterWrite(2, TimeUnit.SECONDS)
+            .build();
 
     private record MuffledResult(double range, double weight) {}
 
@@ -177,6 +196,7 @@ public class SoundTracker {
     private static final Map<String, Map<GridKey3D, Map<String, SoundRecord>>> SPATIAL_SOUNDS = new ConcurrentHashMap<>();
     private static final Map<String, SoundRecord> LARGE_RANGE_SOUNDS = new ConcurrentHashMap<>();
     private static final Map<String, SoundRecord> SOUND_RECORDS_BY_ID = new ConcurrentHashMap<>();
+    private static final Map<Long, SoundRecord> SOUND_RECORDS_BY_CLUE = new ConcurrentHashMap<>();
     private static final java.util.Set<String> DEDUP_SET_A = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final java.util.Set<String> DEDUP_SET_B = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static java.util.Set<String> DEDUP_THIS_TICK = DEDUP_SET_A;
@@ -244,9 +264,54 @@ public class SoundTracker {
                 .computeIfAbsent(gridKey(r.pos), k -> new ConcurrentHashMap<>()).put(r.soundId, r);
         }
         SOUND_RECORDS_BY_ID.put(recordKey(r), r);
+        SOUND_VIEW_REVISION.incrementAndGet();
+        r.clueSignalId = com.example.soundattract.ai.ClueDirector.onSoundAccepted(
+                r.dimensionKey, r.pos, r.ticksRemaining, r.range, r.weight, null);
+        if (r.clueSignalId != 0L) SOUND_RECORDS_BY_CLUE.put(r.clueSignalId, r);
+    }
+
+    public static boolean isLiveClueEvidence(long clueSignalId, String dimensionKey, BlockPos position) {
+        if (clueSignalId == 0L || dimensionKey == null || position == null) return false;
+        SoundRecord record = SOUND_RECORDS_BY_CLUE.get(clueSignalId);
+        return record != null && record.clueSignalId == clueSignalId && record.ticksRemaining > 0
+                && dimensionKey.equals(record.dimensionKey) && position.equals(record.pos)
+                && SOUND_RECORDS_BY_ID.get(recordKey(record)) == record;
+    }
+
+    public static SoundRecord getLiveClueEvidence(long clueSignalId, String dimensionKey, BlockPos position) {
+        if (!isLiveClueEvidence(clueSignalId, dimensionKey, position)) return null;
+        return SOUND_RECORDS_BY_CLUE.get(clueSignalId);
+    }
+
+    public static SoundRecord getLiveClueEvidence(SoundRecord candidate) {
+        if (candidate == null || candidate.soundId == null || candidate.pos == null) return null;
+        SoundRecord live = SOUND_RECORDS_BY_ID.get(recordKey(candidate));
+        return live != null && live.ticksRemaining > 0 && live.pos.equals(candidate.pos)
+                && live.dimensionKey.equals(candidate.dimensionKey) ? live : null;
+    }
+
+    public static SoundRecord getLiveRecord(SoundRecord candidate) {
+        if (candidate == null || candidate.soundId == null || candidate.pos == null) return null;
+        SoundRecord live = SOUND_RECORDS_BY_ID.get(recordKey(candidate));
+        return live != null && live.ticksRemaining > 0 && live.pos.equals(candidate.pos)
+                && live.dimensionKey.equals(candidate.dimensionKey) ? live : null;
     }
 
     private static void removeRecordFromCollections(SoundRecord r) {
+        if (r.clueSignalId != 0L) {
+            SOUND_RECORDS_BY_CLUE.remove(r.clueSignalId, r);
+            net.minecraft.server.MinecraftServer server = net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer();
+            ResourceLocation dimension = ResourceLocation.tryParse(r.dimensionKey);
+            if (server != null && dimension != null) {
+                net.minecraft.server.level.ServerLevel level = server.getLevel(net.minecraft.resources.ResourceKey.create(
+                        net.minecraft.core.registries.Registries.DIMENSION, dimension));
+                if (level != null) {
+                    com.example.soundattract.ai.ClueDirector.onClueRemoved(level,
+                            com.example.soundattract.ai.ClueDirector.Type.SOUND, r.pos, r.clueSignalId);
+                }
+            }
+            r.clueSignalId = 0L;
+        }
         if (r.range > LARGE_SOUND_RANGE_THRESHOLD) {
             LARGE_RANGE_SOUNDS.remove(recordKey(r), r);
         } else {
@@ -254,8 +319,8 @@ public class SoundTracker {
             if (dimMap != null) {
                 Map<String, SoundRecord> gridCell = dimMap.get(gridKey(r.pos));
                 if (gridCell != null) {
-                    if (gridCell.remove(r.soundId) != null) {
-                        SOUND_RECORDS_BY_ID.remove(recordKey(r));
+                    if (gridCell.remove(r.soundId, r)) {
+                        SOUND_RECORDS_BY_ID.remove(recordKey(r), r);
                     }
                     if (gridCell.isEmpty()) {
 
@@ -270,6 +335,25 @@ public class SoundTracker {
             }
         }
         SOUND_RECORDS_BY_ID.remove(recordKey(r), r);
+        SOUND_VIEW_REVISION.incrementAndGet();
+    }
+
+    private static List<SoundSnapshot> getSoundSnapshotView(Level level, String dimensionKey, BlockPos pos,
+                                                            @Nullable java.util.Collection<net.minecraft.world.level.ChunkPos> additionalChunks) {
+        SoundViewKey key = new SoundViewKey(dimensionKey, gridKey(pos), level.getGameTime(), SOUND_VIEW_REVISION.get());
+        List<SoundSnapshot> cached = SOUND_VIEW_CACHE.getIfPresent(key);
+        if (cached != null) return cached;
+        List<SoundRecord> nearby = getNearbySounds(level, dimensionKey, pos, additionalChunks);
+        List<SoundSnapshot> snapshots = new ArrayList<>(nearby.size());
+        for (SoundRecord record : nearby) {
+            if (record != null && record.pos != null) {
+                snapshots.add(new SoundSnapshot(record.sound, record.soundId, record.pos, record.ticksRemaining,
+                        record.dimensionKey, record.range, record.weight, record.clueSignalId));
+            }
+        }
+        List<SoundSnapshot> result = List.copyOf(snapshots);
+        SOUND_VIEW_CACHE.put(key, result);
+        return result;
     }
 
     public static List<SoundRecord> getNearbySounds(Level level, String dim, BlockPos pos, @Nullable java.util.Collection<net.minecraft.world.level.ChunkPos> additionalChunks) {
@@ -481,12 +565,17 @@ public class SoundTracker {
     }
 
     public static void removeSoundAt(BlockPos pos, String dimensionKey) {
+        removeSoundAt(pos, dimensionKey, null);
+    }
+
+    public static void removeSoundAt(BlockPos pos, String dimensionKey, @Nullable String soundId) {
         writeLock.lock();
         try {
             Iterator<SoundRecord> iter = RECENT_SOUNDS.iterator();
             while (iter.hasNext()) {
                 SoundRecord r = iter.next();
-                if (r.pos.equals(pos) && r.dimensionKey.equals(dimensionKey)) {
+                if (r.pos.equals(pos) && r.dimensionKey.equals(dimensionKey)
+                        && (soundId == null || Objects.equals(r.soundId, soundId))) {
                     iter.remove();
                     removeRecordFromCollections(r);
                     break;
@@ -503,12 +592,21 @@ public class SoundTracker {
         public final BlockPos soundPos;
         public final String soundId;
         public final String dimensionKey;
+        public final long rangeBits;
+        public final long weightBits;
+        public final long gameTime;
+        public final boolean skipBiomassMuffle;
 
-        public RaycastCacheKey(BlockPos mobPos, BlockPos soundPos, String soundId, String dimensionKey) {
+        public RaycastCacheKey(BlockPos mobPos, BlockPos soundPos, String soundId, String dimensionKey,
+                               double initialRange, double initialWeight, long gameTime, boolean skipBiomassMuffle) {
             this.mobPos = mobPos;
             this.soundPos = soundPos;
             this.soundId = soundId;
             this.dimensionKey = dimensionKey;
+            this.rangeBits = Double.doubleToLongBits(initialRange);
+            this.weightBits = Double.doubleToLongBits(initialWeight);
+            this.gameTime = gameTime;
+            this.skipBiomassMuffle = skipBiomassMuffle;
         }
 
         @Override
@@ -519,12 +617,15 @@ public class SoundTracker {
             return java.util.Objects.equals(mobPos, other.mobPos)
                 && java.util.Objects.equals(soundPos, other.soundPos)
                 && java.util.Objects.equals(soundId, other.soundId)
-                && java.util.Objects.equals(dimensionKey, other.dimensionKey);
+                && java.util.Objects.equals(dimensionKey, other.dimensionKey)
+                && rangeBits == other.rangeBits && weightBits == other.weightBits
+                && gameTime == other.gameTime && skipBiomassMuffle == other.skipBiomassMuffle;
         }
 
         @Override
         public int hashCode() {
-            return java.util.Objects.hash(mobPos, soundPos, soundId, dimensionKey);
+            return java.util.Objects.hash(mobPos, soundPos, soundId, dimensionKey,
+                    rangeBits, weightBits, gameTime, skipBiomassMuffle);
         }
     }
     private static final class RaycastEntry {
@@ -595,9 +696,11 @@ public class SoundTracker {
             SPATIAL_SOUNDS.clear();
             LARGE_RANGE_SOUNDS.clear();
             SOUND_RECORDS_BY_ID.clear();
+            SOUND_RECORDS_BY_CLUE.clear();
             DEDUP_SET_A.clear();
             DEDUP_SET_B.clear();
             RAYCAST_CACHE.invalidateAll();
+            SOUND_VIEW_CACHE.invalidateAll();
             ASYNC_BEST_SOUND_BY_MOB.invalidateAll();
             ASYNC_BEST_SOUND_RANGE.invalidateAll();
             ASYNC_BEST_SOUND_WEIGHT.invalidateAll();
@@ -706,7 +809,9 @@ public class SoundTracker {
         int raycastMax = SoundAttractConfig.COMMON.raycastCacheMaxEntries.get();
         String dimensionKey = level.dimension().location().toString();
 
-        RaycastCacheKey cacheKey = useCache ? new RaycastCacheKey(dst, src, soundId, dimensionKey) : null;
+        long gameTime = level.getGameTime();
+        RaycastCacheKey cacheKey = useCache ? new RaycastCacheKey(dst, src, soundId, dimensionKey,
+                origRange, origWeight, gameTime, skipBiomassMuffle) : null;
         if (useCache && cacheKey != null) {
             RaycastEntry existing = RAYCAST_CACHE.getIfPresent(cacheKey);
             if (existing != null) {
@@ -723,6 +828,9 @@ public class SoundTracker {
             String key = new StringBuilder(128)
                 .append(dimensionKey).append('|')
                 .append(soundId).append('|')
+                .append(Double.toHexString(origRange)).append('|')
+                .append(Double.toHexString(origWeight)).append('|')
+                .append(skipBiomassMuffle).append('|').append(gameTime).append('|')
                 .append(dst.getX()).append(',').append(dst.getY()).append(',').append(dst.getZ()).append('|')
                 .append(src.getX()).append(',').append(src.getY()).append(',').append(src.getZ())
                 .toString();
@@ -995,7 +1103,9 @@ public class SoundTracker {
                         double distanceSq = asyncPick.pos.distSqr(mobPos);
                         if (distanceSq <= effectiveRange * effectiveRange) {
                             double effectiveWeight = asyncWeight != null ? asyncWeight.doubleValue() : asyncPick.weight;
-                            return new SoundRecord(asyncPick.sound, asyncPick.soundId, asyncPick.pos, asyncPick.ticksRemaining, asyncPick.dimensionKey, effectiveRange, effectiveWeight);
+                            SoundRecord copy = new SoundRecord(asyncPick.sound, asyncPick.soundId, asyncPick.pos, asyncPick.ticksRemaining, asyncPick.dimensionKey, effectiveRange, effectiveWeight);
+                            copy.clueSignalId = asyncPick.clueSignalId;
+                            return copy;
                         }
                     }
                 } else if (when != null && (level.getGameTime() - when) > asyncTtl) {
@@ -1011,15 +1121,7 @@ public class SoundTracker {
             }
 
             String dimensionKey = level.dimension().location().toString();
-            List<SoundRecord> nearbySounds = getNearbySounds(level, dimensionKey, mobPos, additionalChunks);
-            if (nearbySounds.isEmpty()) {
-                return null;
-            }
-            snapshotSounds = new ArrayList<>(nearbySounds.size());
-            for (SoundRecord r : nearbySounds) {
-                if (r == null || r.pos == null) continue;
-                snapshotSounds.add(new SoundSnapshot(r.sound, r.soundId, r.pos, r.ticksRemaining, r.dimensionKey, r.range, r.weight));
-            }
+            snapshotSounds = getSoundSnapshotView(level, dimensionKey, mobPos, additionalChunks);
         } finally {
             readLock.unlock();
         }
@@ -1038,7 +1140,9 @@ public class SoundTracker {
         int noveltyTicks = SoundAttractConfig.COMMON.soundNoveltyTimeTicks.get();
         int maxLifetime = SoundAttractConfig.COMMON.soundLifetimeTicks.get();
 
-        Map<String, SoundSnapshot> candidateRecordById = new HashMap<>(Math.min(snapshotSounds.size(), 128));
+        boolean prepareAsyncScoring = com.example.soundattract.async.AsyncManager.canAcceptCompute();
+        Map<String, SoundSnapshot> candidateRecordById = prepareAsyncScoring
+                ? new HashMap<>(Math.min(snapshotSounds.size(), 128)) : java.util.Collections.emptyMap();
 
         SoundSnapshot[] shortlist = new SoundSnapshot[MAX_SYNC_CANDIDATES];
         double[] shortlistRange = new double[MAX_SYNC_CANDIDATES];
@@ -1050,8 +1154,7 @@ public class SoundTracker {
 
         for (SoundSnapshot r : snapshotSounds) {
             String soundIdStr = r.soundId;
-            ResourceLocation rl = extractBaseSoundLocation(soundIdStr);
-            String integrationMeta = extractIntegrationMetadata(soundIdStr);
+            ResourceLocation rl = r.baseSoundLocation;
             if (!SoundAttractConfig.SOUND_ID_WHITELIST_CACHE.isEmpty() && (rl == null || !SoundAttractConfig.SOUND_ID_WHITELIST_CACHE.contains(rl))) {
                 continue;
             }
@@ -1106,8 +1209,10 @@ public class SoundTracker {
                 }
             }
 
-            if (soundIdStr != null) {
-                SoundSnapshot newRec = new SoundSnapshot(r.sound, r.soundId, r.pos, r.ticksRemaining, r.dimensionKey, effectiveInitialRange, effectiveInitialWeight);
+            if (prepareAsyncScoring && soundIdStr != null) {
+                SoundSnapshot newRec = new SoundSnapshot(r.sound, r.soundId, r.pos, r.ticksRemaining,
+                        r.dimensionKey, effectiveInitialRange, effectiveInitialWeight, r.clueSignalId,
+                        r.baseSoundLocation);
                 SoundSnapshot prev = candidateRecordById.get(soundIdStr);
                 if (prev == null) {
                     candidateRecordById.put(soundIdStr, newRec);
@@ -1299,7 +1404,9 @@ public class SoundTracker {
             if (bestSound.pos == null) {
                 return null;
             }
-            return new SoundRecord(bestSound.sound, bestSound.soundId, bestSound.pos, bestSound.ticksRemaining, bestSound.dimensionKey, bestSoundEffectiveRange, bestSoundEffectiveWeight);
+            SoundRecord copy = new SoundRecord(bestSound.sound, bestSound.soundId, bestSound.pos, bestSound.ticksRemaining, bestSound.dimensionKey, bestSoundEffectiveRange, bestSoundEffectiveWeight);
+            copy.clueSignalId = bestSound.clueSignalId;
+            return copy;
         }
         return null;
     }

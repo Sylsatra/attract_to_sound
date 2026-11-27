@@ -1,8 +1,11 @@
 package com.example.soundattract.util;
 
 import com.example.soundattract.SoundAttractMod;
+import com.example.soundattract.config.DebugLogLimiter;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.quantified.QuantifiedCacheCompat;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.entity.LivingEntity;
@@ -10,21 +13,35 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.server.ServerLifecycleHooks;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+@EventBusSubscriber(modid = SoundAttractMod.MOD_ID, bus = EventBusSubscriber.Bus.GAME)
 public final class EnvironmentalCamoColor {
     private record CacheEntry(Optional<Integer> color, long gameTime) {}
+    private static final int NO_COLOR = -1;
 
-    private static final ConcurrentHashMap<String, CacheEntry> LOCAL_CACHE = new ConcurrentHashMap<>();
+    private static final Cache<String, CacheEntry> LOCAL_CACHE = Caffeine.newBuilder()
+            .maximumSize(8192)
+            .expireAfterWrite(10, TimeUnit.MINUTES)
+            .build();
     private static volatile boolean viewerBackdropHealthy = true;
 
     private EnvironmentalCamoColor() {}
+
+    @SubscribeEvent
+    public static void onServerStopped(ServerStoppedEvent event) {
+        LOCAL_CACHE.invalidateAll();
+        viewerBackdropHealthy = true;
+    }
 
     public static EnvironmentalCamoSettings.SamplingMode parseMode(String raw) {
         return EnvironmentalCamoSettings.parseMode(raw);
@@ -83,18 +100,15 @@ public final class EnvironmentalCamoColor {
         }
 
         long now = level.getGameTime();
-        CacheEntry existing = LOCAL_CACHE.get(key);
+        CacheEntry existing = LOCAL_CACHE.getIfPresent(key);
         if (existing != null && (now - existing.gameTime()) <= ttl) {
             return existing.color();
         }
 
         Optional<Integer> computed = computeBackdropColor(target, looker, level);
         LOCAL_CACHE.put(key, new CacheEntry(computed, now));
-        if (LOCAL_CACHE.size() > 8192) {
-            LOCAL_CACHE.entrySet().removeIf(e -> (now - e.getValue().gameTime()) > ttl);
-            if (LOCAL_CACHE.size() > 8192) {
-                LOCAL_CACHE.clear();
-            }
+        if (LOCAL_CACHE.asMap().size() > 8192) {
+            LOCAL_CACHE.cleanUp();
         }
         return computed;
     }
@@ -108,56 +122,61 @@ public final class EnvironmentalCamoColor {
         List<Vec3> samples = samplePoints(target, eye);
         int limit = Math.max(1, Math.min(SoundAttractConfig.COMMON.envBackdropSampleRays.get(), samples.size()));
         int maxDistance = Math.max(1, SoundAttractConfig.COMMON.envBackdropMaxDistance.get());
-        List<Integer> colors = new ArrayList<>();
+        BlockPos.MutableBlockPos probe = new BlockPos.MutableBlockPos();
+        int r = 0, g = 0, b = 0;
+        int sampleCount = 0;
 
         for (int i = 0; i < limit; i++) {
-            sampleRayColor(level, eye, samples.get(i), maxDistance).ifPresent(colors::add);
+            int color = sampleRayColor(level, eye, samples.get(i), maxDistance, probe);
+            if (color != NO_COLOR) {
+                r += (color >> 16) & 0xFF;
+                g += (color >> 8) & 0xFF;
+                b += color & 0xFF;
+                sampleCount++;
+            }
         }
 
         int minSamples = Math.max(1, SoundAttractConfig.COMMON.envBackdropMinSamples.get());
-        if (colors.size() < minSamples) {
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
-                SoundAttractMod.LOGGER.info("[EnvBackdrop] Found {} backdrop samples, need {}.", colors.size(), minSamples);
+        if (sampleCount < minSamples) {
+            if (DebugLogLimiter.allow(DebugLogLimiter.Channel.CAMOUFLAGE_BACKDROP)) {
+                SoundAttractMod.LOGGER.info("[EnvBackdrop] Found {} backdrop samples, need {}.", sampleCount, minSamples);
             }
             return Optional.empty();
         }
 
-        Optional<Integer> average = average(colors);
-        if (average.isPresent() && SoundAttractConfig.COMMON.debugLogging.get()) {
+        int average = ((r / sampleCount) << 16) | ((g / sampleCount) << 8) | (b / sampleCount);
+        if (DebugLogLimiter.allow(DebugLogLimiter.Channel.CAMOUFLAGE_BACKDROP)) {
             SoundAttractMod.LOGGER.info("[EnvBackdrop] Backdrop color: 0x{} from {} samples.",
-                    String.format("%06X", average.get()), colors.size());
+                    Integer.toHexString(average).toUpperCase(java.util.Locale.ROOT), sampleCount);
         }
-        return average;
+        return Optional.of(average);
     }
 
-    private static Optional<Integer> sampleRayColor(Level level, Vec3 eye, Vec3 targetSample, int maxDistance) {
+    private static int sampleRayColor(Level level, Vec3 eye, Vec3 targetSample, int maxDistance, BlockPos.MutableBlockPos probe) {
         Vec3 dir = targetSample.subtract(eye);
-        if (dir.lengthSqr() < 1.0e-8) return Optional.empty();
+        if (dir.lengthSqr() < 1.0e-8) return NO_COLOR;
         dir = dir.normalize();
 
-        BlockPos lastPos = null;
         for (int i = 1; i <= maxDistance; i++) {
-            Vec3 probe = targetSample.add(dir.scale(i));
-            BlockPos pos = BlockPos.containing(probe);
-            lastPos = pos;
-            if (!level.isLoaded(pos)) {
-                return Optional.empty();
+            probe.set(targetSample.x + dir.x * i, targetSample.y + dir.y * i, targetSample.z + dir.z * i);
+            if (!level.isLoaded(probe)) {
+                return NO_COLOR;
             }
-            BlockState state = level.getBlockState(pos);
+            BlockState state = level.getBlockState(probe);
             if (!state.isAir()) {
                 try {
-                    int color = state.getMapColor(level, pos).col;
-                    return color == 0 ? Optional.empty() : Optional.of(color & 0xFFFFFF);
+                    int color = state.getMapColor(level, probe.immutable()).col;
+                    return color == 0 ? NO_COLOR : color & 0xFFFFFF;
                 } catch (Throwable ignored) {
-                    return Optional.empty();
+                    return NO_COLOR;
                 }
             }
         }
 
-        if (SoundAttractConfig.COMMON.envBackdropUseSkyColor.get() && lastPos != null && level.isLoaded(lastPos) && level.canSeeSky(lastPos)) {
-            return Optional.of(skyColor(level));
+        if (SoundAttractConfig.COMMON.envBackdropUseSkyColor.get() && level.isLoaded(probe) && level.canSeeSky(probe)) {
+            return skyColor(level);
         }
-        return Optional.empty();
+        return NO_COLOR;
     }
 
     private static List<Vec3> samplePoints(LivingEntity target, Vec3 eye) {
@@ -184,20 +203,6 @@ public final class EnvironmentalCamoColor {
         samples.add(torso.add(right.scale(side)));
         samples.add(torso.add(right.scale(-side)));
         return samples;
-    }
-
-    private static Optional<Integer> average(List<Integer> colors) {
-        if (colors == null || colors.isEmpty()) return Optional.empty();
-        long r = 0L;
-        long g = 0L;
-        long b = 0L;
-        for (int color : colors) {
-            r += (color >> 16) & 0xFF;
-            g += (color >> 8) & 0xFF;
-            b += color & 0xFF;
-        }
-        int size = colors.size();
-        return Optional.of(((int) (r / size) << 16) | ((int) (g / size) << 8) | (int) (b / size));
     }
 
     private static Optional<Integer> fallback(Supplier<Optional<Integer>> averageFallback) {
@@ -245,8 +250,8 @@ public final class EnvironmentalCamoColor {
     }
 
     private static void logFallback(String reason, double tps) {
-        if (SoundAttractConfig.COMMON != null && SoundAttractConfig.COMMON.debugLogging.get()) {
-            SoundAttractMod.LOGGER.info("[EnvBackdrop] Using average-area fallback: {} at {} TPS.", reason, String.format("%.2f", tps));
+        if (DebugLogLimiter.allow(DebugLogLimiter.Channel.CAMOUFLAGE_FALLBACK)) {
+            SoundAttractMod.LOGGER.info("[EnvBackdrop] Using average-area fallback: {} at {} TPS.", reason, tps);
         }
     }
 }

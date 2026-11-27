@@ -89,7 +89,10 @@ public class TeleportToSoundGoal extends Goal {
     public void start() {
         this.mob.getLookControl().setLookAt(this.toTeleport);
         this.mob.getNavigation().stop();
-        this.mob.getNavigation().moveTo(this.toTeleport, 1.5f);
+        if (com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                this.mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) {
+            this.mob.getNavigation().moveTo(this.toTeleport, 1.5f);
+        }
         this.toTeleport.getNavigation().stop();
     }
 
@@ -116,7 +119,10 @@ public class TeleportToSoundGoal extends Goal {
             this.mob.getLookControl().setLookAt(this.toTeleport);
             this.toTeleport.getNavigation().stop();
             if (this.mob.getNavigation().isDone())
-                this.mob.getNavigation().moveTo(this.toTeleport, 1.5f);
+                if (com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                        this.mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) {
+                    this.mob.getNavigation().moveTo(this.toTeleport, 1.5f);
+                }
             if (this.mob.distanceToSqr(this.toTeleport) <= 4f) {
                 hide(this.mob);
                 hide(this.toTeleport);

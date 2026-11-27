@@ -511,23 +511,24 @@ public final class CoreMechanicsGameTests {
         manager.replaceWindNodes(ownerA, List.of(windA));
         manager.replaceWindNodes(ownerB, List.of(windB));
 
-        manager.replaceWindNodes(ownerA, List.of(new ScentNode(Vec3.atCenterOf(helper.absolutePos(new BlockPos(6, 9, 2))), now, 1.0f,
-                ownerA, ScentSourceType.PLAYER_WIND)));
-        List<ScentNode> current = manager.getAllNodes();
-        if (current.size() != 3 || current.stream().anyMatch(node -> node == windA)) {
+        ScentNode replacement = new ScentNode(Vec3.atCenterOf(helper.absolutePos(new BlockPos(6, 9, 2))), now, 1.0f,
+                ownerA, ScentSourceType.PLAYER_WIND);
+        manager.replaceWindNodes(ownerA, List.of(replacement));
+        net.minecraft.world.level.ChunkPos center = new net.minecraft.world.level.ChunkPos(ordinary.getBlockPos());
+        List<ScentNode> current = manager.getNodesInArea(center);
+        if (current.size() != 3 || current.stream().anyMatch(node -> node == windA)
+                || !current.containsAll(List.of(ordinary, windB, replacement))) {
             helper.fail("Replacing one owner's wind trail did not replace only that owner's prior nodes");
             return;
         }
 
         ScentManager restored = new ScentManager(helper.getLevel());
         restored.deserializeNBT(manager.serializeNBT());
-        List<ScentNode> saved = restored.getAllNodes();
-        if (saved.size() != current.size()
-                || saved.stream().noneMatch(node -> node.getOwnerUUID().equals(ownerB)
-                    && node.getSourceType() == ScentSourceType.PLAYER_WIND)
+        List<ScentNode> saved = restored.getNodesInArea(center);
+        if (saved.size() != 1
                 || saved.stream().noneMatch(node -> node.getOwnerUUID().equals(ownerA)
                     && node.getSourceType() == ScentSourceType.PLAYER_WALK)) {
-            helper.fail("Scent NBT round-trip lost nodes or their owner/source metadata");
+            helper.fail("Scent NBT round-trip lost persistent nodes or their owner/source metadata");
             return;
         }
         helper.succeed();

@@ -1,5 +1,8 @@
 package com.example.soundattract.event;
 
+import com.example.soundattract.integration.csgrenades.CsGrenadesCompat;
+import com.example.soundattract.integration.csgrenades.CsGrenadesTracker;
+
 
 import net.minecraft.core.registries.BuiltInRegistries;
 import com.example.soundattract.SoundAttractMod;
@@ -218,14 +221,15 @@ public class FovEvents {
             return true;
         }
 
-        if (checkObstructions && !hasSmartLineOfSight(looker, target)) {
+        if (!isWithinFieldOfView(looker, target, fov.horizontal(), fov.vertical())) {
             return false;
         }
 
-        return isWithinFieldOfView(looker, target, fov.horizontal(), fov.vertical());
+        return !checkObstructions || hasSmartLineOfSight(looker, target);
     }
 
     public static boolean hasSmartLineOfSight(Mob looker, Entity target) {
+        if (isSmokeBlockingLineOfSight(looker, target)) return false;
         boolean enableOptimized = true;
         try {
             enableOptimized = SoundAttractConfig.COMMON.enableOptimizedLos.get();
@@ -235,6 +239,17 @@ public class FovEvents {
             return OptimizedLOS.canSee(looker, target);
         }
         return hasSmartLineOfSightLegacy(looker, target);
+    }
+
+    public static boolean isSmokeBlockingLineOfSight(Mob looker, Entity target) {
+        if (looker == null || target == null || !CsGrenadesCompat.isLoaded()
+                || !SoundAttractConfig.COMMON.enableCsgrenadesIntegration.get()
+                || !SoundAttractConfig.COMMON.enableSmokeLosBlocking.get()) {
+            return false;
+        }
+        Level level = looker.level();
+        return CsGrenadesTracker.smokeBlocksRay(level, looker.getEyePosition(), target.getBoundingBox().getCenter(),
+                SoundAttractConfig.COMMON.smokeLifetimeMaxTicks.get(), level.getGameTime());
     }
 
     private static boolean hasSmartLineOfSightLegacy(Mob looker, Entity target) {

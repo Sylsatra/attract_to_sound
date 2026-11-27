@@ -11,6 +11,7 @@ public class GeneralConfig {
     public static final ModConfigSpec.BooleanValue ENABLE_DATA_DRIVEN;
     public static final ModConfigSpec.ConfigValue<String> DATAPACK_PRIORITY;
     public static final ModConfigSpec.BooleanValue ENABLE_FLEE_FROM_UNSEEN_ATTACKER_GOAL;
+    public static final ModConfigSpec.BooleanValue ENABLE_SECOND_BRAIN;
     public static final ModConfigSpec.DoubleValue SOUND_SWITCH_RATIO;
     public static final ModConfigSpec.DoubleValue SOUND_NOVELTY_BONUS_WEIGHT;
     public static final ModConfigSpec.IntValue SOUND_NOVELTY_TIME_TICKS;
@@ -91,6 +92,9 @@ public class GeneralConfig {
         ENABLE_FLEE_FROM_UNSEEN_ATTACKER_GOAL = BUILDER.comment("Enable mobs fleeing after being hurt by unseen attacker.")
                 .define("enableFleeFromUnseenAttackerGoal", true);
 
+        ENABLE_SECOND_BRAIN = BUILDER.comment("Enable the shared, server-wide clue director for sound, scent, and confirmed sightings.")
+                .define("enableSecondBrain", true);
+
         SOUND_SWITCH_RATIO = BUILDER.comment("Switching threshold factor.")
                 .defineInRange("soundSwitchRatio", 0.5, 0.0, 1.0);
 
@@ -101,7 +105,7 @@ public class GeneralConfig {
                 .defineInRange("soundNoveltyTimeTicks", 100, 1, 200);
 
         CONFIG_SCHEMA_VERSION = BUILDER.comment("Internal schema version for config migrations. Do not change.")
-                .defineInRange("configSchemaVersion", 19, 0, Integer.MAX_VALUE);
+                .defineInRange("configSchemaVersion", 20, 0, Integer.MAX_VALUE);
 
         BUILDER.pop();
 
@@ -904,7 +908,12 @@ public class GeneralConfig {
                                      "spore:assassin_shot1;48;30", "spore:assassin_shot2;48;30",
                                      "soundattract:wooden_floor_creek;20;20",
                                      "soundattract:arrow_miss;16;10",
-                                     "soundattract:arrow_impact;24;15"
+                                     "soundattract:arrow_impact;24;15",
+                                     "csgrenades:he_explode;64;20",
+                                     "csgrenades:flash_bang_explode;32;8",
+                                     "csgrenades:smoke_explode;12;3",
+                                     "csgrenades:incendiary_explode;24;6",
+                                     "csgrenades:molotov_explode;24;6"
                 ), obj -> obj instanceof String && ((String) obj).split(";").length == 3);
         SOUND_ID_BLACKLIST = BUILDER.comment("List of sound IDs that are explicitly ignored by mobs, even if loud.")
                 .defineList("soundIdBlacklist", Arrays.asList(), obj -> obj instanceof String && net.minecraft.resources.ResourceLocation.tryParse((String) obj) != null);
@@ -1653,7 +1662,9 @@ public class GeneralConfig {
                             "spore:infected_gear_equip", "spore:pci_inject", "spore:shield_bash", "spore:syringegun_reload", "spore:syringegun_spin",
                             "spore:syringegun_shot", "spore:syringegun_inject", "spore:tumoroid_nuke", "spore:mistmaker_deploy", "spore:mistmaker_shot1",
                             "spore:mistmaker_shot2", "spore:bile_blaster_shot1", "spore:bile_blaster_shot2", "spore:assassin_shot1", "spore:assassin_shot2",
-                            "soundattract:wooden_floor_creek", "soundattract:arrow_miss", "soundattract:arrow_impact"
+                            "soundattract:wooden_floor_creek", "soundattract:arrow_miss", "soundattract:arrow_impact",
+                            "csgrenades:he_explode", "csgrenades:flash_bang_explode", "csgrenades:smoke_explode",
+                            "csgrenades:incendiary_explode", "csgrenades:molotov_explode"
                 ), obj -> obj instanceof String && net.minecraft.resources.ResourceLocation.tryParse((String) obj) != null);
         BUILDER.pop();
 
@@ -1664,7 +1675,8 @@ public class GeneralConfig {
         LEADER_SPACING_MULTIPLIER = BUILDER.defineInRange("leaderSpacingMultiplier", 1.0, 0.1, 10.0);
         NUM_EDGE_SECTORS = BUILDER.defineInRange("numEdgeSectors", 4, 1, 64);
         GROUP_UPDATE_INTERVAL = BUILDER.defineInRange("groupUpdateInterval", 200, 1, 20000);
-        MAX_LEADERS = BUILDER.defineInRange("maxLeaders", 16, 1, 64);
+        MAX_LEADERS = BUILDER.comment("Initial spaced leaders used to seed groups. More are added when needed to keep nearby mobs assigned.")
+                .defineInRange("maxLeaders", 16, 1, 64);
         SKIP_SOUND_SCAN_WHEN_HAS_TARGET = BUILDER.comment("If true, mobs skip sound scanning when they already have a live attack target. Dramatically reduces lag when mobs chase a player who fires a gun.")
                 .define("skipSoundScanWhenHasTarget", true);
         MAX_MUFFLING_RAYCASTS_PER_TICK = BUILDER.comment("Maximum number of muffling raycasts allowed per server tick. Prevents lag spikes from too many simultaneous muffling calculations. Set to 0 for unlimited.")
@@ -1705,12 +1717,12 @@ public class GeneralConfig {
         ENABLE_FLOOR_CREEK = BUILDER.comment("Enable wooden floor creak sounds when players move on wood flooring.")
                 .define("enableFloorCreek", true);
         FLOOR_CREEK_PROB_SWIMMING_CRAWLING = BUILDER.comment("Probability per step for swimming/crawling pose on wood.")
-                .defineInRange("floorCreekProbSwimmingCrawling", 0.40, 0.0, 1.0);
-        FLOOR_CREEK_PROB_SNEAKING = BUILDER.defineInRange("floorCreekProbSneaking", 0.30, 0.0, 1.0);
-        FLOOR_CREEK_PROB_WALKING = BUILDER.defineInRange("floorCreekProbWalking", 0.20, 0.0, 1.0);
-        FLOOR_CREEK_PROB_SPRINTING = BUILDER.defineInRange("floorCreekProbSprinting", 0.80, 0.0, 1.0);
-        FLOOR_CREEK_PROB_JUMP = BUILDER.comment("Probability applied on both jump takeoff and landing when on wood.")
-                .defineInRange("floorCreekProbJump", 0.80, 0.0, 1.0);
+                .defineInRange("floorCreekProbSwimmingCrawling", 0.10, 0.0, 1.0);
+        FLOOR_CREEK_PROB_SNEAKING = BUILDER.defineInRange("floorCreekProbSneaking", 0.05, 0.0, 1.0);
+        FLOOR_CREEK_PROB_WALKING = BUILDER.defineInRange("floorCreekProbWalking", 0.08, 0.0, 1.0);
+        FLOOR_CREEK_PROB_SPRINTING = BUILDER.defineInRange("floorCreekProbSprinting", 0.25, 0.0, 1.0);
+        FLOOR_CREEK_PROB_JUMP = BUILDER.comment("Probability applied when landing on wood after a jump.")
+                .defineInRange("floorCreekProbJump", 0.10, 0.0, 1.0);
         FLOOR_CREEK_DISTANCE_STEP = BUILDER.comment("Horizontal distance (blocks) between pose-probability rolls while moving on wood.")
                 .defineInRange("floorCreekDistanceStep", 2.0, 0.1, 64.0);
         BUILDER.pop();

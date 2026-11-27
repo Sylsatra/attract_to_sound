@@ -33,7 +33,9 @@ public abstract class HumanoidArmorLayerMixin {
 
     @Inject(method = "render", at = @At("HEAD"), cancellable = true, remap = false)
     private void soundattract$hideArmorWhenInvisible(PoseStack poseStack, MultiBufferSource buffer, int packedLight, LivingEntity entity, float limbSwing, float limbSwingAmount, float ageInTicks, float netHeadYaw, float headPitch, float tickDelta, CallbackInfo ci) {
-        if (entity.isInvisible() && SoundAttractConfig.shouldHideWornGearWhileInvisible()) {
+        if (entity.isInvisible()
+                && !com.example.soundattract.client.FromTheFogVisualCompat.shouldKeepInvisibleEquipment(entity)
+                && SoundAttractConfig.shouldHideWornGearWhileInvisible()) {
             boolean hasArmor = false;
             for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
                 ItemStack stack = entity.getItemBySlot(slot);

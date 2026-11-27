@@ -12,6 +12,7 @@ import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
@@ -124,6 +125,10 @@ public final class MobAlertRenderer {
                     detectedMissingEntity++;
                     detectedRenderState.add(mobAlert.entityId() + ":missing_entity");
                 }
+                continue;
+            }
+            ResourceLocation entityTypeId = BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType());
+            if (ClientConfig.isMobAlertEntityBlacklisted(entityTypeId == null ? null : entityTypeId.toString())) {
                 continue;
             }
             if (mob.distanceToSqr(mc.player) > maxDistance * maxDistance) {

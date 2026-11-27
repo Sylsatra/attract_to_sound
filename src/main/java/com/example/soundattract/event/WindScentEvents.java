@@ -2,7 +2,7 @@ package com.example.soundattract.event;
 
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.SoundAttractConfig;
-import com.example.soundattract.integration.weather2.Weather2WindCompat;
+import com.example.soundattract.integration.wind.AtmosphericWindCompat;
 import com.example.soundattract.integration.weather2.Weather2WindDebugLog;
 import com.example.soundattract.scents.ScentManager;
 import com.example.soundattract.scents.ScentNode;
@@ -41,9 +41,6 @@ public final class WindScentEvents {
 
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Post event) {
-        if (false) {
-            return;
-        }
         for (ServerLevel level : event.getServer().getAllLevels()) {
             tickLevel(level);
         }
@@ -89,27 +86,12 @@ public final class WindScentEvents {
                 continue;
             }
 
-            boolean useWeather2Wind = SoundAttractConfig.COMMON.enableWeather2WindIntegration.get()
-                    && ModList.get().isLoaded("weather2");
-            Vec3 direction = new Vec3(-1.0, 0.0, 0.0);
-            double windSpeed = 1.0;
-            boolean weather2Backed = false;
-            if (useWeather2Wind) {
-                Weather2WindCompat.WindSample wind = Weather2WindCompat.sample(level, player.blockPosition(), true);
-                direction = wind.direction();
-                windSpeed = wind.speed();
-                weather2Backed = wind.weather2Backed();
-            } else {
-                String reason = SoundAttractConfig.COMMON.enableWeather2WindIntegration.get()
-                        ? "weather2_missing" : "disabled_by_config";
-                Weather2WindDebugLog.report(level, "wind_scent_source", reason,
-                        () -> "Wind scent is using fallback wind in " + level.dimension().location()
-                                + " because Weather2 integration is "
-                                + (SoundAttractConfig.COMMON.enableWeather2WindIntegration.get()
-                                ? "enabled but Weather2 is not installed" : "disabled by config") + ".");
-            }
+            AtmosphericWindCompat.WindSample wind = AtmosphericWindCompat.sample(level, player.blockPosition());
+            Vec3 direction = wind.direction();
+            double windSpeed = wind.speed();
+            boolean windBacked = wind.backedByMod();
             Vec3 lateral = new Vec3(-direction.z, 0.0, direction.x);
-            double movement = weather2Backed
+            double movement = windBacked
                     ? Math.max(0.0, Math.min(2.0, windSpeed * SoundAttractConfig.COMMON.windScentSpeedScale.get()))
                     : 1.0;
 
@@ -200,7 +182,7 @@ public final class WindScentEvents {
                 levelParcels.put(owner, next);
                 replaceNodes(level, owner, next, level.getGameTime());
                 if (!continuing) {
-                    String source = weather2Backed ? "Weather2" : "fallback wind";
+                    String source = wind.source().label();
                     int parcelCount = next.size();
                     double loggedWindSpeed = windSpeed;
                     Weather2WindDebugLog.report(level, windScentComponent(owner), "active", () -> "Wind scent trail active for "

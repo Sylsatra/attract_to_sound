@@ -1,47 +1,40 @@
 package com.example.soundattract.loot;
 
-import com.example.soundattract.enchantment.ModEnchantments;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.core.Holder;
-import net.minecraft.core.registries.Registries;
-import net.minecraft.world.item.DiggerItem;
+import net.minecraft.world.item.BowItem;
+import net.minecraft.world.item.CrossbowItem;
+import net.minecraft.world.item.FishingRodItem;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.SwordItem;
+import net.minecraft.world.item.ShearsItem;
+import net.minecraft.world.item.ShieldItem;
+import net.minecraft.world.item.TieredItem;
+import net.minecraft.world.item.TridentItem;
 import net.minecraft.world.item.enchantment.Enchantment;
-import net.minecraft.world.item.enchantment.EnchantmentHelper;
-import net.minecraft.world.level.storage.loot.LootContext;
 import net.minecraft.world.level.storage.loot.predicates.LootItemCondition;
 import net.neoforged.neoforge.common.loot.IGlobalLootModifier;
-import net.neoforged.neoforge.common.loot.LootModifier;
-import org.jetbrains.annotations.NotNull;
 
-public class EnchantRandomToolModifier extends LootModifier {
-    public static final MapCodec<EnchantRandomToolModifier> CODEC =
-            RecordCodecBuilder.mapCodec(inst -> codecStart(inst).apply(inst, EnchantRandomToolModifier::new));
+public class EnchantRandomToolModifier extends EnchantRandomlyModifier {
+    public static final MapCodec<EnchantRandomToolModifier> CODEC = RecordCodecBuilder.mapCodec(instance ->
+            codecStart(instance).and(EnchantRandomlyModifier.<EnchantRandomToolModifier>enchantmentCodec())
+                    .apply(instance, EnchantRandomToolModifier::new));
 
-    public EnchantRandomToolModifier(LootItemCondition[] conditions) {
-        super(conditions);
+    public EnchantRandomToolModifier(LootItemCondition[] conditions, Holder<Enchantment> enchantment) {
+        super(conditions, enchantment);
     }
 
     @Override
-    protected @NotNull ObjectArrayList<ItemStack> doApply(ObjectArrayList<ItemStack> generatedLoot, LootContext context) {
-        var enchantmentRegistry = context.getLevel().registryAccess().registryOrThrow(Registries.ENCHANTMENT);
-        Holder<Enchantment> concealHolder = enchantmentRegistry.getHolderOrThrow(ModEnchantments.CONCEAL);
-
-        for (ItemStack stack : generatedLoot) {
-            if (!stack.isEmpty() &&
-                (stack.getItem() instanceof DiggerItem || stack.getItem() instanceof SwordItem) &&
-                concealHolder.value().canEnchant(stack) &&
-                EnchantmentHelper.getItemEnchantmentLevel(concealHolder, stack) == 0) {
-
-                stack.enchant(concealHolder, 1);
-                return generatedLoot;
-            }
-        }
-
-        return generatedLoot;
+    protected boolean isValidItem(ItemStack stack) {
+        Item item = stack.getItem();
+        return item instanceof TieredItem
+                || item instanceof BowItem
+                || item instanceof CrossbowItem
+                || item instanceof TridentItem
+                || item instanceof ShieldItem
+                || item instanceof ShearsItem
+                || item instanceof FishingRodItem;
     }
 
     @Override

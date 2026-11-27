@@ -13,5 +13,7 @@ public class SoundAttractNetwork {
         registrar.playToClient(CamoSyncMessage.TYPE, CamoSyncMessage.STREAM_CODEC, CamoSyncMessage::handle);
         registrar.playToServer(PacketCamoRemoval.TYPE, PacketCamoRemoval.STREAM_CODEC, PacketCamoRemoval::handle);
         registrar.playToClient(AwarenessSnapshotMessage.TYPE, AwarenessSnapshotMessage.STREAM_CODEC, AwarenessSnapshotMessage::handle);
+        registrar.playToClient(FromTheFogEquipmentMarkerMessage.TYPE, FromTheFogEquipmentMarkerMessage.STREAM_CODEC,
+                FromTheFogEquipmentMarkerMessage::handle);
     }
 }

@@ -25,6 +25,7 @@ public class RaidManager {
     private static class PerWorldData {
         final Map<Mob, Raid> leaderToRaid = Collections.synchronizedMap(new WeakHashMap<>());
         long lastCleanupTime = -1L;
+        long lastReinforcementTick = -1L;
     }
 
     private static final Map<ResourceLocation, PerWorldData> DATA = new ConcurrentHashMap<>();
@@ -37,19 +38,7 @@ public class RaidManager {
         if (!(leader.level() instanceof ServerLevel level)) return;
         PerWorldData d = getData(level);
         Raid raid = new Raid(leader, targetPos, now);
-        
-        leader.setPersistenceRequired(); 
-        raid.persistentParticipants.add(leader.getUUID());
-        
-        List<Mob> followers = MobGroupManager.getFollowers(leader);
-        if (followers != null) {
-            for (Mob follower : followers) {
-                if (follower != null && follower.isAlive() && !follower.isRemoved()) {
-                    follower.setPersistenceRequired(); 
-                    raid.persistentParticipants.add(follower.getUUID());
-                }
-            }
-        }
+        syncRaidParticipants(level, leader, raid, true);
 
         d.leaderToRaid.put(leader, raid);
         if (SoundAttractConfig.COMMON.debugLogging.get()) {
@@ -172,6 +161,7 @@ public class RaidManager {
                     it.remove();
                     continue;
                 }
+                syncRaidParticipants(level, leader, raid, false);
                 if (!raid.advancing) {
                     if (raid.ticksRemaining > 0) {
                         raid.ticksRemaining--;
@@ -179,7 +169,10 @@ public class RaidManager {
                             SoundAttractMod.LOGGER.info("[RaidManager] RAID ticking for leader {}: {} ticks remaining",
                                     leader.getName().getString(), raid.ticksRemaining);
                         }
-                        com.example.soundattract.raid.RaidReinforcementManager.trySpawnReinforcement(level, leader, raid.target);
+                        if (d.lastReinforcementTick != now) {
+                            d.lastReinforcementTick = now;
+                            com.example.soundattract.raid.RaidReinforcementManager.trySpawnReinforcement(level, leader, raid.target);
+                        }
                     }
                     if (raid.ticksRemaining <= 0) {
                         raid.ticksRemaining = 0;
@@ -205,12 +198,30 @@ public class RaidManager {
         }
     }
 
+    private static void syncRaidParticipants(ServerLevel level, Mob leader, Raid raid, boolean force) {
+        MobGroupManager.GroupRoster roster = MobGroupManager.getGroupRoster(leader);
+        long rosterEpoch = roster == null ? Long.MIN_VALUE : roster.epoch();
+        if (!force && raid.lastRosterEpoch == rosterEpoch) return;
+        raid.lastRosterEpoch = rosterEpoch;
+        addPersistentParticipant(level, raid, leader);
+        for (Mob follower : MobGroupManager.getFollowers(leader)) {
+            addPersistentParticipant(level, raid, follower);
+        }
+    }
+
+    private static void addPersistentParticipant(ServerLevel level, Raid raid, Mob mob) {
+        if (mob == null || !mob.isAlive() || mob.isRemoved() || mob.level() != level
+                || !raid.persistentParticipants.add(mob.getUUID())) return;
+        mob.setPersistenceRequired();
+    }
+
     private static class Raid {
         final WeakReference<Mob> leaderRef;
         volatile BlockPos target;
         int ticksRemaining;
         boolean advancing;
         final Set<UUID> persistentParticipants = new HashSet<>();
+        long lastRosterEpoch = Long.MIN_VALUE;
 
         Raid(Mob leader, BlockPos target, long now) {
             this.leaderRef = new WeakReference<>(leader);

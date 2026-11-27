@@ -88,7 +88,10 @@ public class PickUpAndThrowToSoundGoal extends Goal {
     public void start() {
         this.mob.getLookControl().setLookAt(this.pickUp);
         this.mob.getNavigation().stop();
-        this.mob.getNavigation().moveTo(this.pickUp, EnhancedAICompat.getPickUpSpeedModifier());
+        if (com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                this.mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) {
+            this.mob.getNavigation().moveTo(this.pickUp, EnhancedAICompat.getPickUpSpeedModifier());
+        }
         this.pickUp.getNavigation().stop();
     }
 
@@ -117,7 +120,10 @@ public class PickUpAndThrowToSoundGoal extends Goal {
         if (!this.mob.isVehicle()) {
             this.pickUp.getNavigation().stop();
             if (this.mob.getNavigation().isDone())
-                this.mob.getNavigation().moveTo(this.pickUp, EnhancedAICompat.getPickUpSpeedModifier());
+                if (com.example.soundattract.pathfinding.PathTaskScheduler.tryConsumePathAttempt(
+                        this.mob.level(), com.example.soundattract.pathfinding.PathTaskScheduler.Priority.OPTIONAL)) {
+                    this.mob.getNavigation().moveTo(this.pickUp, EnhancedAICompat.getPickUpSpeedModifier());
+                }
             if (this.mob.distanceToSqr(this.pickUp) <= 4f) {
                 this.pickUp.startRiding(this.mob, false);
                 this.cooldown = this.adjustedTickDelay(20);

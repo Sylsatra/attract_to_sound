@@ -37,14 +37,13 @@
   ],
   "item": {
     "id": "minecraft:enchanted_book",
-    "Count": 1,
-    "tag": {
-      "StoredEnchantments": [
-        {
-          "id": "soundattract:conceal",
-          "lvl": 1
+    "count": 1,
+    "components": {
+      "minecraft:stored_enchantments": {
+        "levels": {
+          "soundattract:conceal": 1
         }
-      ]
+      }
     }
   }
 }

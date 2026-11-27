@@ -33,6 +33,7 @@ public class RaidConfig {
                         "Enable the leader/edge/follower role system for mob groups.",
                         "ON: Mobs are assigned roles: leaders attract to sounds, edge mobs scout and relay info, followers follow the leader.",
                         "     Edge mobs suppress their own detection to relay data back to the leader instead of attacking directly.",
+                        "     Flying mobs are preferred for the existing edge-sector slots and make periodic scent-search swoops when scent tracking is enabled.",
                         "     During raids, only edge mobs can trigger scent-based raids and edge detection actions apply.",
                         "OFF: All edge and leader mobs chase sounds using AttractionGoal. Any mob can trigger scent raids.")
                 .define("edgeMobSmartBehavior", false);

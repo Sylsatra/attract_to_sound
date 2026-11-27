@@ -1,6 +1,7 @@
 package com.example.soundattract.config;
 
 import net.neoforged.neoforge.common.ModConfigSpec;
+import java.util.List;
 
 public final class ClientConfig {
     public static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
@@ -27,6 +28,7 @@ public final class ClientConfig {
     public static final ModConfigSpec.BooleanValue SHOW_SCENT_ALERT;
     public static final ModConfigSpec.BooleanValue SHOW_RAID_ALERT;
     public static final ModConfigSpec.BooleanValue SHOW_OTHER_ALERT;
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> MOB_ALERT_ENTITY_BLACKLIST;
 
     public enum HudPosition {
         BOTTOM_LEFT,
@@ -35,7 +37,7 @@ public final class ClientConfig {
 
     static {
         BUILDER.push("awareness_hud");
-        AWARENESS_HUD_ENABLED = BUILDER.define("enabled", true);
+        AWARENESS_HUD_ENABLED = BUILDER.define("enabled", false);
         HUD_SCALE = BUILDER.defineInRange("scale", 1.0, 0.5, 2.0);
         HUD_OPACITY = BUILDER.defineInRange("opacity", 190, 40, 255);
         HUD_ANCHOR = BUILDER.define("anchor", "AIR_LEVEL");
@@ -50,7 +52,7 @@ public final class ClientConfig {
         SHOW_WIND_SHIELD = BUILDER.comment("Show the wind shield awareness icon.").define("showWindShield", true);
         BUILDER.pop();
         BUILDER.push("mob_alerts");
-        MOB_ALERTS_ENABLED = BUILDER.define("enabled", true);
+        MOB_ALERTS_ENABLED = BUILDER.define("enabled", false);
         MOB_ALERT_SCALE = BUILDER.defineInRange("scale", 1.0, 0.25, 4.0);
         MOB_ALERT_HEIGHT_OFFSET = BUILDER.defineInRange("heightOffset", 0.45, 0.0, 4.0);
         MOB_ALERT_MAX_DISTANCE = BUILDER.defineInRange("maxDistance", 48.0, 1.0, 48.0);
@@ -61,10 +63,24 @@ public final class ClientConfig {
         SHOW_RAID_ALERT = BUILDER.comment("Show raid mob alert icons.").define("showRaid", true);
         SHOW_OTHER_ALERT = BUILDER.comment("Show fallback icons for unrecognized mob alert types.")
                 .define("showOther", true);
+        MOB_ALERT_ENTITY_BLACKLIST = BUILDER.comment("Entity type IDs that never show overhead awareness icons.")
+                .defineList("entityBlacklist", List.of("minecraft:armor_stand"), value -> value instanceof String);
         BUILDER.pop();
         SPEC = BUILDER.build();
     }
 
     private ClientConfig() {
+    }
+
+    public static boolean isMobAlertEntityBlacklisted(String entityTypeId) {
+        return isMobAlertEntityBlacklisted(entityTypeId, MOB_ALERT_ENTITY_BLACKLIST.get());
+    }
+
+    public static boolean isMobAlertEntityBlacklisted(String entityTypeId, Iterable<? extends String> blacklist) {
+        if (entityTypeId == null || blacklist == null) return false;
+        for (String blacklistedId : blacklist) {
+            if (entityTypeId.equals(blacklistedId)) return true;
+        }
+        return false;
     }
 }

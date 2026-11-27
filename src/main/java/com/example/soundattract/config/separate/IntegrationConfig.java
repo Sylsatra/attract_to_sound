@@ -10,6 +10,7 @@ public class IntegrationConfig {
 
     public static final ModConfigSpec.BooleanValue ENABLE_QUANTIFIED_INTEGRATION;
     public static final ModConfigSpec.BooleanValue ENABLE_WEATHER2_WIND_INTEGRATION;
+    public static final ModConfigSpec.BooleanValue ENABLE_PROJECT_ATMOSPHERE_WIND_INTEGRATION;
     public static final ModConfigSpec.BooleanValue ENABLE_SMART_BRAIN_LIB_INTEGRATION;
     public static final ModConfigSpec.BooleanValue ENABLE_CUSTOM_NPCS_INTEGRATION;
     public static final ModConfigSpec.BooleanValue ENABLE_QUANTIFIED_CACHE_INTEGRATION;
@@ -49,6 +50,12 @@ public class IntegrationConfig {
     public static final ModConfigSpec.IntValue XRAY_MAX_RANGE;
     public static final ModConfigSpec.DoubleValue XRAY_CHANCE;
 
+    public static final ModConfigSpec.BooleanValue ENABLE_RELENTLESS_CLIMBING;
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> RELENTLESS_ELIGIBLE_MOBS;
+    public static final ModConfigSpec.BooleanValue ZOMBIES_IGNORE_HEIGHT;
+    public static final ModConfigSpec.BooleanValue ZOMBIES_CAN_STACK;
+    public static final ModConfigSpec.DoubleValue ZOMBIE_FALL_DAMAGE_MULTIPLIER;
+
 
     public static final ModConfigSpec.BooleanValue ENABLE_IMMERSIVE_MELODIES_INTEGRATION;
     public static final ModConfigSpec.IntValue IMMERSIVE_MELODIES_POLL_INTERVAL;
@@ -87,6 +94,23 @@ public class IntegrationConfig {
     public static final ModConfigSpec.DoubleValue SOUND_RELAY_RANGE;
 
     public static final ModConfigSpec.BooleanValue ENABLE_TACZ_NPC_INTEGRATION;
+    public static final ModConfigSpec.BooleanValue ENABLE_CSGRENADES_INTEGRATION;
+    public static final ModConfigSpec.BooleanValue ENABLE_FLASHBANG_BLINDING;
+    public static final ModConfigSpec.DoubleValue FLASHBANG_BLIND_RADIUS;
+    public static final ModConfigSpec.IntValue FLASHBANG_BLIND_DURATION_TICKS;
+    public static final ModConfigSpec.BooleanValue FLASHBANG_REQUIRE_LINE_OF_SIGHT;
+    public static final ModConfigSpec.BooleanValue FLASHBANG_REQUIRE_FOV;
+    public static final ModConfigSpec.IntValue FLASHBANG_MOB_SCAN_BUDGET;
+    public static final ModConfigSpec.BooleanValue ENABLE_SMOKE_LOS_BLOCKING;
+    public static final ModConfigSpec.DoubleValue SMOKE_CLOUD_RADIUS;
+    public static final ModConfigSpec.IntValue SMOKE_LIFETIME_MAX_TICKS;
+    public static final ModConfigSpec.BooleanValue ENABLE_FIRE_FLEE;
+    public static final ModConfigSpec.DoubleValue FIRE_FLEE_DANGER_RADIUS;
+    public static final ModConfigSpec.DoubleValue FIRE_FLEE_AWAY_DISTANCE;
+    public static final ModConfigSpec.DoubleValue FIRE_FLEE_SPEED_MODIFIER;
+    public static final ModConfigSpec.IntValue FIRE_FLEE_COOLDOWN_TICKS;
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> FLEE_FROM_FIRE_ELIGIBLE_MOBS;
+    public static final ModConfigSpec.IntValue CSGRENADES_TRACKER_SCAN_INTERVAL_TICKS;
 
     public static final ModConfigSpec.BooleanValue ENABLE_HOTBATH_INTEGRATION;
     public static final ModConfigSpec.IntValue HOTBATH_POLL_INTERVAL_TICKS;
@@ -121,6 +145,8 @@ public class IntegrationConfig {
         ENABLE_QUANTIFIED_INTEGRATION = BUILDER.define("enableQuantifiedIntegration", true);
         ENABLE_WEATHER2_WIND_INTEGRATION = BUILDER.comment("Use Weather2's wind field for wind scent and windshield calculations when Weather2 is installed.")
                 .define("enableWeather2WindIntegration", true);
+        ENABLE_PROJECT_ATMOSPHERE_WIND_INTEGRATION = BUILDER.comment("Prefer Project Atmosphere's surface wind for wind scent and windshield calculations when it is installed.")
+                .define("enableProjectAtmosphereWindIntegration", true);
         ENABLE_SMART_BRAIN_LIB_INTEGRATION = BUILDER.define("enableSmartBrainLibIntegration", true);
         ENABLE_CUSTOM_NPCS_INTEGRATION = BUILDER.define("enableCustomNpcsIntegration", true);
         ENABLE_TACZ_NPC_INTEGRATION = BUILDER.comment("Enable optional flashbang and smoke targeting behavior for TACZ NPCs when TACZ NPC is installed.")
@@ -182,6 +208,15 @@ public class IntegrationConfig {
         XRAY_CHANCE = BUILDER.comment("Chance [0..1] for a mob in the XRAY tag to get the XRAY range (fallback when EnhancedAI is not present).")
                 .defineInRange("xrayChance", 0.5, 0.0, 1.0);
 
+        BUILDER.pop();
+
+        BUILDER.push("relentless_undead_inspired");
+        ENABLE_RELENTLESS_CLIMBING = BUILDER.define("enableRelentlessClimbing", false);
+        RELENTLESS_ELIGIBLE_MOBS = BUILDER.defineListAllowEmpty("relentlessEligibleMobs",
+                List.of("minecraft:zombie", "minecraft:husk", "minecraft:drowned"), value -> value instanceof String);
+        ZOMBIES_IGNORE_HEIGHT = BUILDER.define("zombiesIgnoreHeight", false);
+        ZOMBIES_CAN_STACK = BUILDER.define("zombiesCanStack", true);
+        ZOMBIE_FALL_DAMAGE_MULTIPLIER = BUILDER.defineInRange("zombieFallDamageMultiplier", 0.5, 0.0, 10.0);
         BUILDER.pop();
 
 
@@ -266,6 +301,66 @@ public class IntegrationConfig {
         BUILDER.pop();
 
 
+
+        BUILDER.comment("CS Grenades integration settings").push("csgrenades_integration");
+        ENABLE_CSGRENADES_INTEGRATION = BUILDER
+                .comment("Master switch for all CS Grenades integration behaviors.")
+                .define("enableCsgrenadesIntegration", true);
+        ENABLE_FLASHBANG_BLINDING = BUILDER
+                .comment("Flashbang blinds mobs within range + LOS + FOV.")
+                .define("enableFlashbangBlinding", true);
+        FLASHBANG_BLIND_RADIUS = BUILDER
+                .comment("Maximum blocks from flash at which a mob can still be blinded.")
+                .defineInRange("flashbangBlindRadius", 16.0, 2.0, 64.0);
+        FLASHBANG_BLIND_DURATION_TICKS = BUILDER
+                .comment("Base blind duration; actual = base * (1 - dist/radius).")
+                .defineInRange("flashbangBlindDurationTicks", 300, 1, 6000);
+        FLASHBANG_REQUIRE_LINE_OF_SIGHT = BUILDER
+                .comment("If true, mob must have LOS to the flash to be blinded.")
+                .define("flashbangRequireLineOfSight", true);
+        FLASHBANG_REQUIRE_FOV = BUILDER
+                .comment("If true, mob must have the flash inside its FOV to be blinded.")
+                .define("flashbangRequireFov", true);
+        FLASHBANG_MOB_SCAN_BUDGET = BUILDER
+                .comment("Max mobs evaluated per flashbang activation (hard cap).")
+                .defineInRange("flashbangMobScanBudget", 64, 8, 512);
+        ENABLE_SMOKE_LOS_BLOCKING = BUILDER
+                .comment("Active smoke grenades block line-of-sight through their cloud.")
+                .define("enableSmokeLosBlocking", true);
+        SMOKE_CLOUD_RADIUS = BUILDER
+                .comment("Radius of the smoke sphere used for LOS intersection.")
+                .defineInRange("smokeCloudRadius", 4.0, 1.0, 16.0);
+        SMOKE_LIFETIME_MAX_TICKS = BUILDER
+                .comment("Safety cap: ignore smoke entities older than this many ticks since activation.")
+                .defineInRange("smokeLifetimeMaxTicks", 400, 20, 6000);
+        ENABLE_FIRE_FLEE = BUILDER
+                .comment("Eligible non-fire-immune mobs flee from active incendiary/molotov grenades.")
+                .define("enableFireFlee", true);
+        FIRE_FLEE_DANGER_RADIUS = BUILDER
+                .comment("A mob this close to an active fire grenade is considered in danger.")
+                .defineInRange("fireFleeDangerRadius", 6.0, 1.0, 32.0);
+        FIRE_FLEE_AWAY_DISTANCE = BUILDER
+                .comment("Blocks the mob tries to sprint away from fire.")
+                .defineInRange("fireFleeAwayDistance", 16.0, 4.0, 64.0);
+        FIRE_FLEE_SPEED_MODIFIER = BUILDER
+                .comment("Speed multiplier applied while fleeing fire.")
+                .defineInRange("fireFleeSpeedModifier", 1.4, 0.5, 3.0);
+        FIRE_FLEE_COOLDOWN_TICKS = BUILDER
+                .comment("Minimum ticks between re-triggering flee for the same mob.")
+                .defineInRange("fireFleeCooldownTicks", 40, 1, 600);
+        FLEE_FROM_FIRE_ELIGIBLE_MOBS = BUILDER
+                .comment("Entity IDs eligible to receive FleeFromFireGoal. TACZ Hostiles and TACZ NPC entities are also included automatically. mob.fireImmune()==true is always excluded.")
+                .defineList("fleeFromFireEligibleMobs", java.util.Arrays.asList(
+                        "minecraft:zombie","minecraft:husk","minecraft:drowned","minecraft:skeleton",
+                        "minecraft:stray","minecraft:creeper","minecraft:spider","minecraft:cave_spider",
+                        "minecraft:wolf","minecraft:villager","minecraft:iron_golem","minecraft:piglin",
+                        "minecraft:piglin_brute","minecraft:zoglin","minecraft:hoglin","minecraft:witch",
+                        "minecraft:pillager","minecraft:vindicator","minecraft:evoker","minecraft:ravager"
+                ), obj -> obj instanceof String);
+        CSGRENADES_TRACKER_SCAN_INTERVAL_TICKS = BUILDER
+                .comment("How often the active-grenade cache rebuilds (smoke/fire).")
+                .defineInRange("csgrenadesTrackerScanIntervalTicks", 5, 1, 40);
+        BUILDER.pop();
 
         BUILDER.comment("HotBath integration settings").push("hotbath");
         ENABLE_HOTBATH_INTEGRATION = BUILDER.comment("Enable optional HotBath integration for scent and camouflage wash behavior.")

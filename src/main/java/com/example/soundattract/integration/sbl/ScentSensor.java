@@ -104,7 +104,7 @@ public class ScentSensor<E extends PathfinderMob> extends ExtendedSensor<E> {
         } else {
 
             bestNode = nodes.stream()
-                .filter(n -> n.getOwnerUUID().equals(targetScentOwner))
+                .filter(n -> java.util.Objects.equals(n.getOwnerUUID(), targetScentOwner))
                 .filter(n -> (currentTime - n.getTimestamp()) <= maxDuration)
                 .filter(n -> n.getTimestamp() > lastScentTime)
                 .min(Comparator.comparingLong(ScentNode::getTimestamp))

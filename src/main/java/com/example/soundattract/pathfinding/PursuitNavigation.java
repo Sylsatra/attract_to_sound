@@ -8,6 +8,13 @@ public final class PursuitNavigation {
     }
 
     public static boolean maybeMoveTo(Mob mob, Vec3 destination, double speed) {
-        return PursuitMoveExecutor.issueVanillaMove(mob, destination, speed);
+        return maybeMoveTo(mob, destination, speed, PathTaskScheduler.Priority.OPTIONAL);
+    }
+
+    public static boolean maybeMoveTo(Mob mob, Vec3 destination, double speed, PathTaskScheduler.Priority priority) {
+        if (mob == null || destination == null) {
+            return false;
+        }
+        return NavLimiter.maybeMoveTo(mob, destination.x, destination.y, destination.z, speed, priority);
     }
 }

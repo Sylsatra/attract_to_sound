@@ -25,6 +25,11 @@ public final class NavLimiter {
 
     private NavLimiter() {}
 
+    public static void clear() {
+        STATE.clear();
+        TEAM_BUDGET.clear();
+    }
+
     private static long teamBudgetKey(Mob mob) {
         int dim = 0;
         try { dim = mob.level().dimension().location().hashCode(); } catch (Throwable ignored) {}
@@ -57,13 +62,14 @@ public final class NavLimiter {
     }
 
     public static boolean maybeMoveTo(Mob mob, double x, double y, double z, double speed) {
+        return maybeMoveTo(mob, x, y, z, speed, PathTaskScheduler.Priority.OPTIONAL);
+    }
+
+    public static boolean maybeMoveTo(Mob mob, double x, double y, double z, double speed,
+                                      PathTaskScheduler.Priority priority) {
         if (mob == null || mob.level() == null) return false;
         State s = STATE.computeIfAbsent(mob, m -> new State());
         long now = mob.level().getGameTime();
-
-        if (!tryConsumeTeamMoveBudget(mob, now)) {
-            return false;
-        }
         int baseCooldown = 5;
         double baseMinDelta = 0.5;
         try {
@@ -98,52 +104,9 @@ public final class NavLimiter {
             return false;
         }
 
-        if (dist < 16.0) {
-            boolean walkable = NodeRouter.isWalkable(mob, desired);
-            if (walkable) {
-                net.minecraft.world.phys.HitResult res = mob.level().clip(new net.minecraft.world.level.ClipContext(
-                        mob.position().add(0, 0.5, 0),
-                        desired.add(0, 0.5, 0),
-                        net.minecraft.world.level.ClipContext.Block.COLLIDER,
-                        net.minecraft.world.level.ClipContext.Fluid.NONE,
-                        mob
-                ));
-                if (res == null || res.getType() == net.minecraft.world.phys.HitResult.Type.MISS) {
-                    mob.getMoveControl().setWantedPosition(x, y, z, speed);
-                    if (mob.horizontalCollision && mob.onGround()) mob.getJumpControl().jump();
-                    s.lastMoveTick = now;
-                    s.lastDest = desired;
-                    PFStats.moveToIssued++;
-                    return true;
-                }
-            }
-        }
-
-        Vec3 waypoint = NodeRouter.getWaypoint(mob, desired);
-        boolean ok;
-        try {
-            ok = mob.getNavigation().moveTo(waypoint.x, waypoint.y, waypoint.z, speed);
-        } catch (Throwable t) {
-            ok = false;
-        }
-        if (!ok) {
-            try {
-                PFStats.moveToFallbackAttempted++;
-                double vx = waypoint.x - mob.getX();
-                double vz = waypoint.z - mob.getZ();
-                double len = Math.sqrt(vx * vx + vz * vz);
-                if (len < 1e-3) len = 1.0;
-                double nx = -vz / len;
-                double nz = vx / len;
-                double off = 0.75;
-                boolean altOk = mob.getNavigation().moveTo(waypoint.x + nx * off, waypoint.y, waypoint.z + nz * off, speed)
-                        || mob.getNavigation().moveTo(waypoint.x - nx * off, waypoint.y, waypoint.z - nz * off, speed);
-                if (altOk) {
-                    ok = true;
-                    PFStats.moveToFallbackSucceeded++;
-                }
-            } catch (Throwable ignored) {}
-        }
+        if (!tryConsumeTeamMoveBudget(mob, now)) return false;
+        Vec3 waypoint = NodeRouter.getWaypoint(mob, desired, priority);
+        boolean ok = PursuitMoveExecutor.issueVanillaMove(mob, waypoint, speed, priority);
         if (ok) {
             s.lastMoveTick = now;
             s.lastDest = desired;

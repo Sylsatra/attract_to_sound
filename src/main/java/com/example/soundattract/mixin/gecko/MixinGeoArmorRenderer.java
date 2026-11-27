@@ -57,7 +57,9 @@ public abstract class MixinGeoArmorRenderer<T extends Item & GeoItem> implements
         if (!(entity instanceof LivingEntity living)) {
             return;
         }
-        if (living.isInvisible() && SoundAttractConfig.shouldHideWornGearWhileInvisible()) return;
+        if (living.isInvisible()
+                && !com.example.soundattract.client.FromTheFogVisualCompat.shouldKeepInvisibleEquipment(living)
+                && SoundAttractConfig.shouldHideWornGearWhileInvisible()) return;
 
         ItemStack stack = getCurrentStack();
         if (stack.isEmpty() || !CamoUtil.hasCustomTag(stack)) {

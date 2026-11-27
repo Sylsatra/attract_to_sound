@@ -36,7 +36,7 @@ displayName="${mod_name}" #mandatory
 displayURL="https://www.curseforge.com/minecraft/mc-mods/attract-to-sound"
 
 # A file name (in the root of the mod JAR) containing a logo for display
-logoFile="attract-to-sound-mod-logo.jpg" 
+logoFile="attract-to-sound-mod-logo.jpg"
 
 # A text field displayed in the mod UI
 #credits="" #optional
@@ -68,6 +68,9 @@ config="${mod_id}.hotbath.mixins.json"
 [[mixins]]
 config="${mod_id}.tacznpcs.mixins.json"
 
+[[mixins]]
+config="${mod_id}.taczhostiles.mixins.json"
+
 # The [[accessTransformers]] block allows you to declare where your AT file is.
 # If this block is omitted, a fallback attempt will be made to load an AT from META-INF/accesstransformer.cfg
 [[accessTransformers]]
@@ -86,7 +89,7 @@ file="META-INF/accesstransformer.cfg"
     # Optional field describing why the dependency is required or why it is incompatible
     # reason="..."
     # The version range of the dependency
-    versionRange="[${neo_version},)" #mandatory
+    versionRange="${neo_version_range}" #mandatory
     # An ordering relationship for the dependency.
     # BEFORE - This mod is loaded BEFORE the dependency
     # AFTER - This mod is loaded AFTER the dependency
@@ -147,6 +150,13 @@ file="META-INF/accesstransformer.cfg"
 
 [[dependencies.${mod_id}]]
     modId="weather2"
+    type="optional"
+    versionRange="[0,)"
+    ordering="AFTER"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="projectatmosphere"
     type="optional"
     versionRange="[0,)"
     ordering="AFTER"
@@ -216,7 +226,21 @@ file="META-INF/accesstransformer.cfg"
     side="BOTH"
 
 [[dependencies.${mod_id}]]
+    modId="csgrenades"
+    type="optional"
+    versionRange="[0,)"
+    ordering="AFTER"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
     modId="enhancedai"
+    type="optional"
+    versionRange="[0,)"
+    ordering="AFTER"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="tacz_hostiles"
     type="optional"
     versionRange="[0,)"
     ordering="AFTER"

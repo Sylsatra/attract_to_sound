@@ -8,6 +8,7 @@ import java.util.Map;
 public final class DebugLoggingConfig {
     public enum Feature {
         SOUND_ATTRACTION("ai", "soundAttraction"),
+        SECOND_BRAIN("ai", "secondBrain"),
         MOB_GROUPS("ai", "mobGroups"),
         BLOCK_BREAKING("ai", "blockBreaking"),
         RAIDS("ai", "raids"),
@@ -31,6 +32,7 @@ public final class DebugLoggingConfig {
         POINT_BLANK("integrations", "pointBlank"),
         SPORE("integrations", "spore"),
         SMART_BRAIN_LIB("integrations", "smartBrainLib"),
+        CS_GRENADES("integrations", "csGrenades"),
         HOT_BATH("integrations", "hotBath"),
         TOUGH_AS_NAILS("integrations", "toughAsNails"),
         VOICE_CHAT("integrations", "voiceChat"),
@@ -38,6 +40,7 @@ public final class DebugLoggingConfig {
         WEATHER2_WIND("integrations", "weather2Wind"),
         SPOILED("integrations", "spoiled"),
         TACZ_NPCS("integrations", "taczNpcs"),
+        TACZ_HOSTILES("integrations", "taczHostiles"),
         VANILLA("integrations", "vanilla"),
         DATAPACK_RELOAD("data", "datapackReload");
 

@@ -328,6 +328,7 @@ public class SoundAttractConfig {
     public static final Set<String> ATTRACTED_ENTITY_TYPES_CACHE = ConcurrentHashMap.newKeySet();
     public static final Set<ResourceLocation> STEALTH_BYPASS_ENTITY_TYPES_CACHE = ConcurrentHashMap.newKeySet();
     public static final Set<String> STEALTH_BYPASS_MOD_NAMESPACES_CACHE = ConcurrentHashMap.newKeySet();
+    public static volatile Set<String> FLEE_FROM_FIRE_ELIGIBLE_SET = Set.of();
 
     public static volatile boolean PLAYER_ACTION_SOUNDS_ENABLED_CACHE = true;
     public static volatile Map<String, Integer> PLAYER_ACTION_RANGES_CACHE = Map.of();
@@ -516,6 +517,7 @@ public class SoundAttractConfig {
 
         public final ModConfigSpec.BooleanValue edgeMobSmartBehavior = RaidConfig.EDGE_MOB_SMART_BEHAVIOR;
         public final ModConfigSpec.BooleanValue enableFleeFromUnseenAttackerGoal = GeneralConfig.ENABLE_FLEE_FROM_UNSEEN_ATTACKER_GOAL;
+        public final ModConfigSpec.BooleanValue enableSecondBrain = GeneralConfig.ENABLE_SECOND_BRAIN;
         public final ModConfigSpec.IntValue soundLifetimeTicks = GeneralConfig.SOUND_LIFETIME_TICKS;
         public final ModConfigSpec.DoubleValue arrivalDistance = GeneralConfig.ARRIVAL_DISTANCE;
         public final ModConfigSpec.DoubleValue followLeaderSpreadOutDistance = RaidConfig.FOLLOW_LEADER_SPREAD_OUT_DISTANCE;
@@ -531,10 +533,12 @@ public class SoundAttractConfig {
         public final ModConfigSpec.IntValue raycastCacheTtlTicks = PerformanceConfig.RAYCAST_CACHE_TTL_TICKS;
         public final ModConfigSpec.IntValue raycastCacheMaxEntries = PerformanceConfig.RAYCAST_CACHE_MAX_ENTRIES;
         public final ModConfigSpec.IntValue scanCooldownTicks = PerformanceConfig.SCAN_COOLDOWN_TICKS;
+        public final ModConfigSpec.IntValue cueScansPerTick = PerformanceConfig.CUE_SCANS_PER_TICK;
         public final ModConfigSpec.DoubleValue cooldownTicksPerMob = PerformanceConfig.COOLDOWN_TICKS_PER_MOB;
         public final ModConfigSpec.DoubleValue minTpsForScanCooldown = PerformanceConfig.MIN_TPS_FOR_SCAN_COOLDOWN;
         public final ModConfigSpec.DoubleValue maxTpsForScanCooldown = PerformanceConfig.MAX_TPS_FOR_SCAN_COOLDOWN;
         public final ModConfigSpec.BooleanValue enableTieredStealthPerformance = PerformanceConfig.ENABLE_TIERED_STEALTH_PERFORMANCE;
+        public final ModConfigSpec.BooleanValue legacyStealthVanillaFallback = PerformanceConfig.LEGACY_STEALTH_VANILLA_FALLBACK;
         public final ModConfigSpec.DoubleValue stealthTierSkipExpensiveChecksTps = PerformanceConfig.STEALTH_TIER_SKIP_EXPENSIVE_CHECKS_TPS;
         public final ModConfigSpec.DoubleValue stealthTierCurrentTargetsOnlyTps = PerformanceConfig.STEALTH_TIER_CURRENT_TARGETS_ONLY_TPS;
         public final ModConfigSpec.DoubleValue stealthTierSharedRangeTps = PerformanceConfig.STEALTH_TIER_SHARED_RANGE_TPS;
@@ -563,6 +567,7 @@ public class SoundAttractConfig {
         public final ModConfigSpec.DoubleValue moveToMinDelta = PathfindingConfig.MOVE_TO_MIN_DELTA;
         public final ModConfigSpec.IntValue moveToTeamBudgetPerTick = PathfindingConfig.MOVE_TO_TEAM_BUDGET_PER_TICK;
         public final ModConfigSpec.IntValue maxPathAttemptsPerTick = PathfindingConfig.MAX_PATH_ATTEMPTS_PER_TICK;
+        public final ModConfigSpec.IntValue maxPathAttemptsPerServerTick = PathfindingConfig.MAX_PATH_ATTEMPTS_PER_SERVER_TICK;
         public final ModConfigSpec.BooleanValue enableNodeRouter = PathfindingConfig.ENABLE_NODE_ROUTER;
         public final ModConfigSpec.BooleanValue enableSoundRaid = RaidConfig.ENABLE_SOUND_RAID;
         public final ModConfigSpec.BooleanValue enableScentRaid = RaidConfig.ENABLE_SCENT_RAID;
@@ -610,6 +615,7 @@ public class SoundAttractConfig {
         public final ModConfigSpec.IntValue windScentParticleIntervalTicks = ScentConfig.WIND_SCENT_PARTICLE_INTERVAL_TICKS;
         public final ModConfigSpec.IntValue windScentParticleMaxPerViewer = ScentConfig.WIND_SCENT_PARTICLE_MAX_PER_VIEWER;
         public final ModConfigSpec.BooleanValue enableWeather2WindIntegration = IntegrationConfig.ENABLE_WEATHER2_WIND_INTEGRATION;
+        public final ModConfigSpec.BooleanValue enableProjectAtmosphereWindIntegration = IntegrationConfig.ENABLE_PROJECT_ATMOSPHERE_WIND_INTEGRATION;
 
         public final ModConfigSpec.ConfigValue<List<? extends String>> attractedEntities = GeneralConfig.ATTRACTED_ENTITIES;
         public final ModConfigSpec.ConfigValue<List<? extends String>> stealthBypassMobIds = GeneralConfig.STEALTH_BYPASS_MOB_IDS;
@@ -765,7 +771,30 @@ public class SoundAttractConfig {
         public final ModConfigSpec.IntValue xrayMaxRange = IntegrationConfig.XRAY_MAX_RANGE;
         public final ModConfigSpec.DoubleValue xrayChance = IntegrationConfig.XRAY_CHANCE;
 
+        public final ModConfigSpec.BooleanValue enableRelentlessClimbing = IntegrationConfig.ENABLE_RELENTLESS_CLIMBING;
+        public final ModConfigSpec.ConfigValue<List<? extends String>> relentlessEligibleMobs = IntegrationConfig.RELENTLESS_ELIGIBLE_MOBS;
+        public final ModConfigSpec.BooleanValue zombiesIgnoreHeight = IntegrationConfig.ZOMBIES_IGNORE_HEIGHT;
+        public final ModConfigSpec.BooleanValue zombiesCanStack = IntegrationConfig.ZOMBIES_CAN_STACK;
+        public final ModConfigSpec.DoubleValue zombieFallDamageMultiplier = IntegrationConfig.ZOMBIE_FALL_DAMAGE_MULTIPLIER;
+
         public final ModConfigSpec.BooleanValue enableTaczNpcIntegration = IntegrationConfig.ENABLE_TACZ_NPC_INTEGRATION;
+        public final ModConfigSpec.BooleanValue enableCsgrenadesIntegration = IntegrationConfig.ENABLE_CSGRENADES_INTEGRATION;
+        public final ModConfigSpec.BooleanValue enableFlashbangBlinding = IntegrationConfig.ENABLE_FLASHBANG_BLINDING;
+        public final ModConfigSpec.DoubleValue flashbangBlindRadius = IntegrationConfig.FLASHBANG_BLIND_RADIUS;
+        public final ModConfigSpec.IntValue flashbangBlindDurationTicks = IntegrationConfig.FLASHBANG_BLIND_DURATION_TICKS;
+        public final ModConfigSpec.BooleanValue flashbangRequireLineOfSight = IntegrationConfig.FLASHBANG_REQUIRE_LINE_OF_SIGHT;
+        public final ModConfigSpec.BooleanValue flashbangRequireFov = IntegrationConfig.FLASHBANG_REQUIRE_FOV;
+        public final ModConfigSpec.IntValue flashbangMobScanBudget = IntegrationConfig.FLASHBANG_MOB_SCAN_BUDGET;
+        public final ModConfigSpec.BooleanValue enableSmokeLosBlocking = IntegrationConfig.ENABLE_SMOKE_LOS_BLOCKING;
+        public final ModConfigSpec.DoubleValue smokeCloudRadius = IntegrationConfig.SMOKE_CLOUD_RADIUS;
+        public final ModConfigSpec.IntValue smokeLifetimeMaxTicks = IntegrationConfig.SMOKE_LIFETIME_MAX_TICKS;
+        public final ModConfigSpec.BooleanValue enableFireFlee = IntegrationConfig.ENABLE_FIRE_FLEE;
+        public final ModConfigSpec.DoubleValue fireFleeDangerRadius = IntegrationConfig.FIRE_FLEE_DANGER_RADIUS;
+        public final ModConfigSpec.DoubleValue fireFleeAwayDistance = IntegrationConfig.FIRE_FLEE_AWAY_DISTANCE;
+        public final ModConfigSpec.DoubleValue fireFleeSpeedModifier = IntegrationConfig.FIRE_FLEE_SPEED_MODIFIER;
+        public final ModConfigSpec.IntValue fireFleeCooldownTicks = IntegrationConfig.FIRE_FLEE_COOLDOWN_TICKS;
+        public final ModConfigSpec.ConfigValue<List<? extends String>> fleeFromFireEligibleMobs = IntegrationConfig.FLEE_FROM_FIRE_ELIGIBLE_MOBS;
+        public final ModConfigSpec.IntValue csgrenadesTrackerScanIntervalTicks = IntegrationConfig.CSGRENADES_TRACKER_SCAN_INTERVAL_TICKS;
         public final ModConfigSpec.BooleanValue enableHotBathIntegration = IntegrationConfig.ENABLE_HOTBATH_INTEGRATION;
         public final ModConfigSpec.IntValue hotBathPollIntervalTicks = IntegrationConfig.HOTBATH_POLL_INTERVAL_TICKS;
         public final ModConfigSpec.DoubleValue hotBathMaxDirtyScentMultiplier = IntegrationConfig.HOTBATH_MAX_DIRTY_SCENT_MULTIPLIER;
@@ -1065,6 +1094,21 @@ public class SoundAttractConfig {
             saveConfigSpec(GeneralConfig.SPEC, "general");
         }
 
+        if (COMMON.configSchemaVersion.get() < 20) {
+            List<String> whitelist = new ArrayList<>(COMMON.soundIdWhitelist.get());
+            List<String> defaults = new ArrayList<>(COMMON.rawSoundDefaults.get());
+            for (String entry : GeneralConfig.SOUND_DEFAULTS.getDefault()) {
+                if (!entry.startsWith("csgrenades:")) continue;
+                String id = entry.substring(0, entry.indexOf(';'));
+                if (!whitelist.contains(id)) whitelist.add(id);
+                if (defaults.stream().noneMatch(rule -> rule.startsWith(id + ";"))) defaults.add(entry);
+            }
+            COMMON.soundIdWhitelist.set(whitelist);
+            COMMON.rawSoundDefaults.set(defaults);
+            COMMON.configSchemaVersion.set(20);
+            saveConfigSpec(GeneralConfig.SPEC, "general");
+        }
+
         ensureToughAsNailsArmorColorConfigEntries();
 
         SOUND_ID_WHITELIST_CACHE.clear();
@@ -1112,7 +1156,7 @@ public class SoundAttractConfig {
                     continue;
                 }
                 net.minecraft.world.entity.EntityType<?> type =
-                        BuiltInRegistries.ENTITY_TYPE.get(loc);
+                        BuiltInRegistries.ENTITY_TYPE.getOptional(loc).orElse(null);
                 if (type == null) {
                     if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.ARROW_INVESTIGATION)) {
                         if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.ARROW_INVESTIGATION)) {
@@ -1399,7 +1443,7 @@ public class SoundAttractConfig {
                 if (!mobIdString.isEmpty() && !mobIdString.equals("*")) {
                     mobId = net.minecraft.resources.ResourceLocation.tryParse(mobIdString);
                     if (mobId != null) {
-                         net.minecraft.world.entity.EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.get(mobId);
+                         net.minecraft.world.entity.EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getOptional(mobId).orElse(null);
                          if (type != null && type != net.minecraft.world.entity.EntityType.PIG && !mobId.equals(BuiltInRegistries.ENTITY_TYPE.getKey(net.minecraft.world.entity.EntityType.PIG))) {
                              predicateBuilder.of(type);
                          } else if (type == null) {
@@ -1564,10 +1608,15 @@ public class SoundAttractConfig {
         }
 
         parseAndCachePlayerActionConfig();
+        FLEE_FROM_FIRE_ELIGIBLE_SET = COMMON.fleeFromFireEligibleMobs.get().stream()
+                .map(String::trim)
+                .filter(id -> !id.isEmpty())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
         com.example.soundattract.camo.CamoMaterialRegistry.parseConfig();
         com.example.soundattract.integration.hotbath.HotBathScentRules.rebuildFromConfig();
 
         com.example.soundattract.event.StealthDetectionEvents.reinitializeCaches();
+        com.example.soundattract.ai.ClueDirector.invalidatePolicy();
         com.example.soundattract.event.ScentEvents.reinitializeCaches();
         com.example.soundattract.pathfinding.PathTaskScheduler.reinitializeCaches();
 

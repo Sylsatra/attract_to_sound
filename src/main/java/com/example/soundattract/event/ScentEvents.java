@@ -1,67 +1,76 @@
 package com.example.soundattract.event;
 
-import net.minecraft.core.registries.BuiltInRegistries;
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.camo.CamoAttachments;
 import com.example.soundattract.camo.CamouflageCapability;
+import com.example.soundattract.config.DebugLoggingConfig;
+import com.example.soundattract.config.PlayerProfile2;
+import com.example.soundattract.config.ScentVisibilityConfig;
 import com.example.soundattract.config.SoundAttractConfig;
+import com.example.soundattract.integration.wind.AtmosphericWindCompat;
+import com.example.soundattract.registration.ModParticles;
+import com.example.soundattract.scents.GlobalScentRateLimiter;
 import com.example.soundattract.scents.ScentManager;
 import com.example.soundattract.scents.ScentNode;
 import com.example.soundattract.scents.ScentBiomeModifier;
-import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.ChunkPos;
+import com.example.soundattract.scents.ScentParticleColorManager;
+import com.example.soundattract.scents.ScentSourceType;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.core.particles.DustParticleOptions;
-import com.example.soundattract.scents.ScentParticleColorManager;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.tick.LevelTickEvent;
+import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 import org.joml.Vector3f;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import net.neoforged.neoforge.event.tick.LevelTickEvent;
-import net.neoforged.neoforge.event.tick.PlayerTickEvent;
-import net.neoforged.neoforge.event.tick.ServerTickEvent;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.common.EventBusSubscriber;
-import java.util.concurrent.ConcurrentHashMap;
-import com.google.common.cache.CacheBuilder;
 import java.util.concurrent.TimeUnit;
 
 @EventBusSubscriber(modid = SoundAttractMod.MOD_ID)
 public class ScentEvents {
 
-    private static Map<UUID, Vec3> lastScentPos = new ConcurrentHashMap<>();
-    private static Map<UUID, Long> lastScentTime = new ConcurrentHashMap<>();
+    private static final int MAX_RUNTIME_GLOBAL_CACHE_SIZE = 65536;
+
+    private static volatile Map<UUID, Vec3> lastScentPos = newInitialCache();
+
+    private static <K, V> Map<K, V> newInitialCache() {
+        return Caffeine.newBuilder()
+                .maximumSize(8192)
+                .expireAfterWrite(10, TimeUnit.MINUTES)
+                .<K, V>build()
+                .asMap();
+    }
 
     public static void reinitializeCaches() {
-        int max = SoundAttractConfig.COMMON.globalCacheMaxSize.get();
+        int max = Math.min(MAX_RUNTIME_GLOBAL_CACHE_SIZE,
+                Math.max(100, SoundAttractConfig.COMMON.globalCacheMaxSize.get()));
         int mins = SoundAttractConfig.COMMON.globalCacheExpireMins.get();
 
-        Map<UUID, Vec3> oldObj1 = lastScentPos;
-        lastScentPos = CacheBuilder.newBuilder().expireAfterWrite(mins, TimeUnit.MINUTES).maximumSize(max).concurrencyLevel(4).<UUID, Vec3>build().asMap();
-        lastScentPos.putAll(oldObj1);
+        Map<UUID, Vec3> oldPositions = lastScentPos;
+        lastScentPos = Caffeine.newBuilder()
+                .expireAfterWrite(mins, TimeUnit.MINUTES)
+                .maximumSize(max)
+                .<UUID, Vec3>build()
+                .asMap();
+        lastScentPos.putAll(oldPositions);
 
-        Map<UUID, Long> oldObj2 = lastScentTime;
-        lastScentTime = CacheBuilder.newBuilder().expireAfterWrite(mins, TimeUnit.MINUTES).maximumSize(max).concurrencyLevel(4).<UUID, Long>build().asMap();
-        lastScentTime.putAll(oldObj2);
-
-        if (SoundAttractConfig.COMMON.debugLogging.get()) {
-            SoundAttractMod.LOGGER.info("[ScentEvents] Initialized Guava internal memory caches (max {}, {} mins)", max, mins);
+        if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
+            SoundAttractMod.LOGGER.info("[ScentEvents] Initialized Caffeine memory caches (max {}, {} mins)", max, mins);
         }
     }
 
     @SubscribeEvent
     public static void onPlayerTick(PlayerTickEvent.Post event) {
-        if (event.getEntity().level().isClientSide) return;
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
         if (!SoundAttractConfig.COMMON.enableScentSystem.get()) return;
 
-        ServerPlayer player = (ServerPlayer) event.getEntity();
-        
         if (player.isSpectator() || player.isCreative()) return;
         
         if (SoundAttractConfig.COMMON.waterStopsScent.get() && player.isInWater()) {
@@ -73,7 +82,6 @@ public class ScentEvents {
         long currentTime = player.level().getGameTime();
 
         Vec3 lastPos = lastScentPos.computeIfAbsent(playerId, k -> currentPos);
-        Long lastTime = lastScentTime.put(playerId, currentTime);
 
         double distSq = currentPos.distanceToSqr(lastPos);
         double interval = SoundAttractConfig.COMMON.scentCreationIntervalBlocks.get();
@@ -93,7 +101,7 @@ public class ScentEvents {
             baseStrength *= (float) com.example.soundattract.integration.toughasnails.ToughAsNailsStateCache.scentMultiplier(player, currentTime);
 
             if (baseStrength <= 0.05f) {
-                if (SoundAttractConfig.COMMON.debugLogging.get()) {
+                if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
                     SoundAttractMod.LOGGER.info("[ScentEvents] Scent for player {} fully blocked by camouflage.", player.getName().getString());
                 }
                 lastScentPos.put(playerId, currentPos);
@@ -101,7 +109,7 @@ public class ScentEvents {
             }
 
 
-            ScentNode node = new ScentNode(currentPos, currentTime, baseStrength, playerId, com.example.soundattract.scents.ScentSourceType.PLAYER_WALK);
+            ScentNode node = new ScentNode(currentPos, currentTime, baseStrength, playerId, ScentSourceType.PLAYER_WALK);
             
             ScentManager.get(player.level()).ifPresent(manager -> {
                 manager.addScentNode(node);
@@ -109,8 +117,8 @@ public class ScentEvents {
 
             lastScentPos.put(playerId, currentPos);
 
-            if (SoundAttractConfig.COMMON.debugLogging.get()) {
-                SoundAttractMod.LOGGER.info("[ScentEvents] Created scent node for player {} at {}. Strength: {}", 
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SCENT)) {
+                SoundAttractMod.LOGGER.info("[ScentEvents] Created scent node for player {} at {}. Strength: {}",
                     player.getName().getString(), currentPos, baseStrength);
             }
 
@@ -122,108 +130,107 @@ public class ScentEvents {
 
     @SubscribeEvent
     public static void onWorldTick(LevelTickEvent.Post event) {
-        if (event.getLevel().isClientSide) return;
-        if (!SoundAttractConfig.COMMON.enableScentSystem.get()) return;
-        
-
-        if (event.getLevel().getGameTime() % 200 == 0) {
-
+        if (!(event.getLevel() instanceof ServerLevel level)) return;
+        if (!SoundAttractConfig.COMMON.enableScentSystem.get()) {
+            ScentManager.get(level).ifPresent(ScentManager::clear);
+            return;
         }
 
-
-        if (!SoundAttractConfig.COMMON.enableGameplayScentParticles.get()) return;
-
-        int spawnInterval = SoundAttractConfig.COMMON.scentParticleSpawnInterval.get();
-        if (event.getLevel().getGameTime() % spawnInterval != 0) return;
-
-        ServerLevel serverLevel = (ServerLevel) event.getLevel();
-        long currentTime = serverLevel.getGameTime();
+        long currentTime = level.getGameTime();
         long maxDuration = SoundAttractConfig.COMMON.scentNodeDurationTicks.get();
-        double baseRenderDist = SoundAttractConfig.COMMON.scentParticleRenderDistance.get();
-        final double renderDistSq = baseRenderDist * baseRenderDist;
+        if (currentTime % 200L == 0L) {
+            ScentManager.get(level).ifPresent(manager -> manager.cleanupExpired(currentTime, maxDuration));
+        }
+        boolean renderExistingParticles = SoundAttractConfig.COMMON.enableGameplayScentParticles.get()
+                && currentTime % SoundAttractConfig.COMMON.scentParticleSpawnInterval.get() == 0;
+        boolean renderWindParticles = SoundAttractConfig.COMMON.enableWindScentParticles.get()
+                && currentTime % SoundAttractConfig.COMMON.windScentParticleIntervalTicks.get() == 0;
+        if (!renderExistingParticles && !renderWindParticles) return;
 
-        ScentManager.get(serverLevel).ifPresent(manager -> {
-
-            net.minecraft.server.MinecraftServer server = serverLevel.getServer();
-            if (server == null) return;
-
-            List<ScentNode> allNodes = manager.getAllNodes();
-
-
-            Map<UUID, Boolean> particleEnabledCache = new java.util.HashMap<>();
-            Map<UUID, org.joml.Vector3f> colorCache = new java.util.HashMap<>();
-
-            for (ScentNode node : allNodes) {
-                long age = currentTime - node.getTimestamp();
-                if (age > maxDuration || age < 0) continue;
-
-                UUID ownerUUID = node.getOwnerUUID();
-                if (ownerUUID == null) continue;
-
-
-                Boolean enabled = particleEnabledCache.get(ownerUUID);
-                if (enabled == null) {
-                    enabled = true;
-                    net.minecraft.server.level.ServerPlayer ownerPlayer = server.getPlayerList().getPlayer(ownerUUID);
-                    if (ownerPlayer != null) {
-                        com.example.soundattract.config.PlayerProfile2 profile = SoundAttractConfig.getMatchingPlayerProfile(ownerPlayer);
-                        if (profile != null && profile.scentEmission().isPresent()) {
-                            enabled = profile.scentEmission().get().showScentParticles();
-                        }
-                    }
-                    particleEnabledCache.put(ownerUUID, enabled);
-                }
-                if (!enabled) continue;
-
-
-                org.joml.Vector3f color = colorCache.get(ownerUUID);
-                if (color == null) {
-                    net.minecraft.server.level.ServerPlayer ownerPlayer = server.getPlayerList().getPlayer(ownerUUID);
-                    if (ownerPlayer != null) {
-                        color = ScentParticleColorManager.getColorForPlayer(ownerUUID, ownerPlayer);
-                    } else {
-                        color = ScentParticleColorManager.getColorForPlayer(ownerUUID);
-                    }
-                    colorCache.put(ownerUUID, color);
-                }
-
-
-                float lifeRatio = 1.0f - ((float) age / maxDuration);
-                float particleScale = 0.4f + (lifeRatio * 0.6f);
-                int particleCount = lifeRatio > 0.5f ? 2 : 1;
-
-                Vec3 pos = node.getPosition();
-
-
-                net.minecraft.core.particles.DustParticleOptions dustParticle =
-                        new net.minecraft.core.particles.DustParticleOptions(color, particleScale);
-
-                for (ServerPlayer nearbyPlayer : serverLevel.players()) {
-                    if (nearbyPlayer.position().distanceToSqr(pos) <= renderDistSq) {
-                        com.example.soundattract.config.PlayerProfile2 viewerProfile = SoundAttractConfig.getMatchingPlayerProfile(nearbyPlayer);
-                        boolean showScent = true;
-                        if (viewerProfile != null && viewerProfile.scentVisibility().isPresent()) {
-                            com.example.soundattract.config.ScentVisibilityConfig vis = viewerProfile.scentVisibility().get();
-                            showScent = switch (node.getSourceType()) {
-                                case PLAYER_WALK, PLAYER_WIND -> vis.showPlayerWalk();
-                                case ARROW_PATH, ARROW_ORIGIN, MOB_PROJECTILE_PATH, MOB_PROJECTILE_ORIGIN -> vis.showArrowScent();
-                            };
-                        }
-                        if (!showScent) continue;
-                        serverLevel.sendParticles(nearbyPlayer, dustParticle, true,
-                                pos.x, pos.y + 0.3, pos.z,
-                                particleCount, 0.1, 0.05, 0.1, 0.0);
-                    }
-                }
-            }
+        double renderDistance = SoundAttractConfig.COMMON.scentParticleRenderDistance.get();
+        ScentManager.get(level).ifPresent(manager -> {
+            List<ScentNode> nodes = manager.getNodesNearPlayers(level.players(), renderDistance);
+            renderScentParticles(level, nodes, currentTime, maxDuration, renderDistance * renderDistance,
+                    renderExistingParticles, renderWindParticles);
         });
+    }
+
+    private static void renderScentParticles(ServerLevel level, List<ScentNode> nodes, long currentTime,
+                                             long maxDuration, double renderDistanceSqr,
+                                             boolean renderExistingParticles, boolean renderWindParticles) {
+        MinecraftServer server = level.getServer();
+        Map<UUID, Boolean> ownerVisibility = new HashMap<>();
+        Map<UUID, Vector3f> ownerColors = new HashMap<>();
+        Map<UUID, Vec3> ownerWindDirections = new HashMap<>();
+        Map<UUID, Integer> windCounts = new HashMap<>();
+        Map<UUID, ScentVisibilityConfig> viewerVisibility = new HashMap<>();
+        int maxWindPerViewer = SoundAttractConfig.COMMON.windScentParticleMaxPerViewer.get();
+
+        for (ScentNode node : nodes) {
+            boolean wind = node.getSourceType() == ScentSourceType.PLAYER_WIND;
+            if (wind ? !renderWindParticles : !renderExistingParticles) continue;
+            long age = currentTime - node.getTimestamp();
+            UUID ownerId = node.getOwnerUUID();
+            if (age > maxDuration || age < 0 || ownerId == null) continue;
+
+            ServerPlayer owner = server.getPlayerList().getPlayer(ownerId);
+            if (!ownerVisibility.computeIfAbsent(ownerId, ignored -> showOwnerParticles(owner))) continue;
+            Vec3 position = node.getPosition();
+            if (wind) {
+                if (owner == null) continue;
+                Vec3 direction = ownerWindDirections.computeIfAbsent(ownerId,
+                        ignored -> AtmosphericWindCompat.direction(level, owner.blockPosition()));
+                for (ServerPlayer viewer : level.players()) {
+                    UUID viewerId = viewer.getUUID();
+                    if (viewer.position().distanceToSqr(position) > renderDistanceSqr
+                            || windCounts.getOrDefault(viewerId, 0) >= maxWindPerViewer
+                            || !viewerVisibility.computeIfAbsent(viewerId, ignored -> getViewerVisibility(viewer)).showWindScent()) {
+                        continue;
+                    }
+                    level.sendParticles(viewer, ModParticles.WIND_SCENT_WISP.get(), false,
+                            position.x, position.y + 0.35, position.z, 0,
+                            direction.x * 0.055, 0.008, direction.z * 0.055, 1.0);
+                    windCounts.merge(viewerId, 1, Integer::sum);
+                }
+                continue;
+            }
+
+            Vector3f color = ownerColors.computeIfAbsent(ownerId, ignored -> owner == null
+                    ? ScentParticleColorManager.getColorForPlayer(ownerId)
+                    : ScentParticleColorManager.getColorForPlayer(ownerId, owner));
+            float lifeRatio = 1.0f - ((float) age / maxDuration);
+            DustParticleOptions dustParticle = new DustParticleOptions(color, 0.4f + lifeRatio * 0.6f);
+            int particleCount = lifeRatio > 0.5f ? 2 : 1;
+            for (ServerPlayer viewer : level.players()) {
+                if (viewer.position().distanceToSqr(position) > renderDistanceSqr) continue;
+                ScentVisibilityConfig visibility = viewerVisibility.computeIfAbsent(viewer.getUUID(),
+                        ignored -> getViewerVisibility(viewer));
+                boolean showScent = switch (node.getSourceType()) {
+                    case PLAYER_WALK -> visibility.showPlayerWalk();
+                    case PLAYER_WIND -> visibility.showWindScent();
+                    case ARROW_PATH, ARROW_ORIGIN, MOB_PROJECTILE_PATH, MOB_PROJECTILE_ORIGIN -> visibility.showArrowScent();
+                };
+                if (!showScent) continue;
+                level.sendParticles(viewer, dustParticle, true, position.x, position.y + 0.3, position.z,
+                        particleCount, 0.1, 0.05, 0.1, 0.0);
+            }
+        }
+    }
+
+    private static boolean showOwnerParticles(ServerPlayer owner) {
+        PlayerProfile2 profile = owner == null ? null : SoundAttractConfig.getMatchingPlayerProfile(owner);
+        return profile == null || profile.scentEmission().isEmpty() || profile.scentEmission().get().showScentParticles();
+    }
+
+    private static ScentVisibilityConfig getViewerVisibility(ServerPlayer viewer) {
+        PlayerProfile2 profile = SoundAttractConfig.getMatchingPlayerProfile(viewer);
+        return profile == null ? ScentVisibilityConfig.DEFAULT : profile.scentVisibility().orElse(ScentVisibilityConfig.DEFAULT);
     }
 
     @SubscribeEvent
     public static void onPlayerLoggedOut(net.neoforged.neoforge.event.entity.player.PlayerEvent.PlayerLoggedOutEvent event) {
         UUID playerId = event.getEntity().getUUID();
         lastScentPos.remove(playerId);
-        lastScentTime.remove(playerId);
     }
 
     @SubscribeEvent
@@ -270,6 +277,9 @@ public class ScentEvents {
 
     @SubscribeEvent
     public static void onServerStoppedScentCache(net.neoforged.neoforge.event.server.ServerStoppedEvent event) {
+        lastScentPos.clear();
         com.example.soundattract.util.ScentQueryCache.clear();
+        GlobalScentRateLimiter.clear();
+        ScentParticleColorManager.clearCache();
     }
 }

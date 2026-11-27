@@ -8,8 +8,11 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.time.Duration;
 import java.util.stream.Collectors;
+
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import com.example.soundattract.ai.AttractionGoal;
 import com.example.soundattract.ai.BlockBreakerManager;
@@ -18,15 +21,20 @@ import com.example.soundattract.ai.FollowScentGoal;
 import com.example.soundattract.ai.FollowerEdgeRelayGoal;
 import com.example.soundattract.ai.LeaderAttractionGoal;
 import com.example.soundattract.ai.PickUpAndThrowToSoundGoal;
+import com.example.soundattract.ai.SoundClimbGoal;
 import com.example.soundattract.ai.TeleportToSoundGoal;
 import com.example.soundattract.SoundAttractMod;
 import com.example.soundattract.config.AttractedEntityIdResolver;
+import com.example.soundattract.config.DebugLoggingConfig;
 import com.example.soundattract.config.SoundAttractConfig;
 import com.example.soundattract.data.DataDrivenTags;
 import com.example.soundattract.worker.WorkerScheduler.GroupComputeResult;
 import com.example.soundattract.worker.WorkSchedulerManager;
+import com.example.soundattract.integration.relentlessundead.RelentlessUndeadIntegration;
 import com.example.soundattract.integration.smartbrainlib.SmartBrainLibCompat;
 import com.example.soundattract.tracking.SoundTracker;
+import com.example.soundattract.pathfinding.NavLimiter;
+import com.example.soundattract.pathfinding.PathTaskScheduler;
 
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.core.registries.Registries;
@@ -40,6 +48,7 @@ import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
+import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent; 
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModList;
@@ -48,7 +57,12 @@ import net.neoforged.fml.common.EventBusSubscriber;
 @EventBusSubscriber(modid = SoundAttractMod.MOD_ID, bus = EventBusSubscriber.Bus.GAME)
 public class SoundAttractionEvents {
 
-    private static final Map<Mob, List<GoalDefinition>> PENDING_GOAL_ADDITIONS = new ConcurrentHashMap<>();
+    private static final Cache<Mob, List<GoalDefinition>> PENDING_GOAL_ADDITIONS = Caffeine.newBuilder()
+            .weakKeys()
+            .maximumSize(8192)
+            .expireAfterWrite(Duration.ofSeconds(5))
+            .build();
+    private static final int MAX_PENDING_GOALS_PER_MOB = 16;
 
     private static long serverTickCounter = 0;
     private static boolean initialDelayHasPassed = false;
@@ -99,7 +113,17 @@ public class SoundAttractionEvents {
     }
 
     private static void scheduleAddGoal(Mob mob, int priority, Goal goal) {
-        PENDING_GOAL_ADDITIONS.computeIfAbsent(mob, k -> new ArrayList<>()).add(new GoalDefinition(priority, goal));
+        if (mob == null || goal == null || mob.isRemoved()) return;
+        PENDING_GOAL_ADDITIONS.asMap().compute(mob, (key, pending) -> {
+            List<GoalDefinition> goals = pending == null ? new ArrayList<>() : pending;
+            Class<?> goalClass = goal.getClass();
+            for (GoalDefinition existing : goals) {
+                if (existing.goalClass == goalClass) return goals;
+            }
+            if (goals.size() >= MAX_PENDING_GOALS_PER_MOB) return goals;
+            goals.add(new GoalDefinition(priority, goal));
+            return goals;
+        });
     }
 
     private static long lastMobCountUpdateTime_ServerTick = -1;
@@ -159,7 +183,7 @@ public class SoundAttractionEvents {
                     }
                 } else {
                     ResourceLocation id = ResourceLocation.parse(idStr);
-                    EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.get(id);
+                    EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getOptional(id).orElse(null);
                     if (type != null) {
                         configSet.add(type);
                     } else {
@@ -232,7 +256,7 @@ public class SoundAttractionEvents {
         for (String idStr : SoundAttractConfig.COMMON.mobBlacklist.get()) {
             try {
                 ResourceLocation id = ResourceLocation.parse(idStr);
-                EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.get(id);
+                EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getOptional(id).orElse(null);
                 if (type != null) {
                     configSet.add(type);
                 } else {
@@ -337,6 +361,7 @@ public class SoundAttractionEvents {
             mobCountForCooldownManager = cachedAttractedMobCount_ServerTick;
 
             com.example.soundattract.runtime.DynamicScanCooldownManager.update(currentTime, mobCountForCooldownManager);
+            WorkSchedulerManager.flushPendingSoundScores();
             SoundTracker.tick();
             BlockBreakerManager.processPendingActions();
             try {
@@ -355,8 +380,8 @@ public class SoundAttractionEvents {
                     SoundAttractMod.LOGGER.error("[SoundAttractionEvents] Applying group results failed", t);
                 }
             }
-            if (!PENDING_GOAL_ADDITIONS.isEmpty()) {
-                Iterator<Map.Entry<Mob, List<GoalDefinition>>> iterator = PENDING_GOAL_ADDITIONS.entrySet().iterator();
+            if (!PENDING_GOAL_ADDITIONS.asMap().isEmpty()) {
+                Iterator<Map.Entry<Mob, List<GoalDefinition>>> iterator = PENDING_GOAL_ADDITIONS.asMap().entrySet().iterator();
                 while (iterator.hasNext()) {
                     Map.Entry<Mob, List<GoalDefinition>> entry = iterator.next();
                     Mob mob = entry.getKey();
@@ -377,6 +402,18 @@ public class SoundAttractionEvents {
                     iterator.remove();
                 }
             }
+    }
+
+    @SubscribeEvent
+    public static void onServerStopped(ServerStoppedEvent event) {
+        PENDING_GOAL_ADDITIONS.invalidateAll();
+        NavLimiter.clear();
+        PathTaskScheduler.clear();
+        serverTickCounter = 0;
+        initialDelayHasPassed = false;
+        lastMobCountUpdateTime_ServerTick = -1;
+        cachedAttractedMobCount_ServerTick = 0;
+        invalidateCachedEntityTypes();
     }
 
     @SubscribeEvent
@@ -435,6 +472,11 @@ public class SoundAttractionEvents {
             return;
         }
 
+        if (com.example.soundattract.ai.MeleeJumpAttemptGoal.supports(mob)) {
+            scheduleAddGoal(mob, Integer.MAX_VALUE - 1,
+                    new com.example.soundattract.ai.MeleeJumpAttemptGoal(mob));
+        }
+
 
         if (isCustomNpcs && SoundAttractConfig.COMMON.enableCustomNpcsIntegration.get()) {
             if (SoundAttractConfig.COMMON.debugLogging.get()) {
@@ -451,6 +493,11 @@ public class SoundAttractionEvents {
                 }
                 return;
             }
+        }
+
+        if (SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()
+                && mob.getNavigation() instanceof net.minecraft.world.entity.ai.navigation.FlyingPathNavigation) {
+            scheduleAddGoal(mob, 2, new com.example.soundattract.ai.AerialEdgeScoutGoal(mob));
         }
 
         double moveSpeed = SoundAttractConfig.COMMON.mobMoveSpeed.get();
@@ -481,6 +528,13 @@ public class SoundAttractionEvents {
             }
         }
         
+        if (RelentlessUndeadIntegration.isMobEligibleForClimbing(mob)) {
+            scheduleAddGoal(mob, 0, new SoundClimbGoal(mob));
+            if (DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.SOUND_ATTRACTION)) {
+                SoundAttractMod.LOGGER.info("[SoundAttractionEvents] Scheduled SoundClimbGoal for mob {}", mob.getName().getString());
+            }
+        }
+
         if (SoundAttractConfig.COMMON.edgeMobSmartBehavior.get()) {
             scheduleAddGoal(mob, 3, new LeaderAttractionGoal(mob, moveSpeed));
             scheduleAddGoal(mob, 1, new FollowerEdgeRelayGoal(mob, moveSpeed));
@@ -488,6 +542,7 @@ public class SoundAttractionEvents {
             scheduleAddGoal(mob, 3, new AttractionGoal(mob, moveSpeed));
         }
         scheduleAddGoal(mob, 4, new FollowLeaderGoal(mob, moveSpeed));
+        scheduleAddGoal(mob, 6, new com.example.soundattract.ai.ClueInvestigationGoal(mob));
 
         if (SoundAttractConfig.COMMON.debugLogging.get()) {
             SoundAttractMod.LOGGER.info("[SoundAttractionEvents] Scheduled goals for mob {} of type {}", mob.getName().getString(), EntityType.getKey(mob.getType()));
@@ -526,9 +581,20 @@ public class SoundAttractionEvents {
                 .anyMatch(wrappedGoal -> wrappedGoal.getGoal() instanceof FollowerEdgeRelayGoal);
         boolean hasFollowLeaderGoal = mob.goalSelector.getAvailableGoals().stream()
                 .anyMatch(wrappedGoal -> wrappedGoal.getGoal() instanceof FollowLeaderGoal);
+        boolean hasAerialScoutGoal = mob.goalSelector.getAvailableGoals().stream()
+                .anyMatch(wrappedGoal -> wrappedGoal.getGoal() instanceof com.example.soundattract.ai.AerialEdgeScoutGoal);
 
         boolean smartEdge = SoundAttractConfig.COMMON.edgeMobSmartBehavior.get();
         int attractionPriority = 0;
+
+        if (smartEdge && mob.getNavigation() instanceof net.minecraft.world.entity.ai.navigation.FlyingPathNavigation && !hasAerialScoutGoal) {
+            mob.goalSelector.addGoal(2, new com.example.soundattract.ai.AerialEdgeScoutGoal(mob));
+        }
+        boolean hasClueInvestigationGoal = mob.goalSelector.getAvailableGoals().stream()
+                .anyMatch(wrappedGoal -> wrappedGoal.getGoal() instanceof com.example.soundattract.ai.ClueInvestigationGoal);
+        if (!hasClueInvestigationGoal) {
+            mob.goalSelector.addGoal(attractionPriority + 3, new com.example.soundattract.ai.ClueInvestigationGoal(mob));
+        }
 
         if (smartEdge) {
             if (!hasFollowerEdgeRelayGoal) {

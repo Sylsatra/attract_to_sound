@@ -7,35 +7,22 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.HitResult;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
-import java.util.concurrent.TimeUnit;
 
 public final class NodeRouter {
     private NodeRouter() {}
-    private static final Cache<Mob, Mem> MEMORY = Caffeine.newBuilder()
-            .weakKeys()
-            .maximumSize(8192)
-            .expireAfterAccess(2, TimeUnit.MINUTES)
-            .build();
-    private static final class Mem {
-        double off;
-        long until;
-        Vec3 lastPos;
-        Vec3 lastWaypoint;
-        long lastWaypointUntil;
-        int lastDx, lastDy, lastDz;
-    }
 
     public static Vec3 getWaypoint(Mob mob, Vec3 desired) {
+        return getWaypoint(mob, desired, PathTaskScheduler.Priority.OPTIONAL);
+    }
+
+    public static Vec3 getWaypoint(Mob mob, Vec3 desired, PathTaskScheduler.Priority priority) {
         if (mob == null || mob.level() == null || desired == null) return desired;
         if (!isFinite(desired)) return mob.position();
         if (HazardClassifier.isDangerous(mob.level(), mob, desired)) return mob.position();
+        if (mob.getNavigation() instanceof net.minecraft.world.entity.ai.navigation.FlyingPathNavigation) return desired;
         try {
             if (!SoundAttractConfig.COMMON.enableNodeRouter.get()) return desired;
         } catch (Throwable ignored) {}
-
-        Mem mem = MEMORY.get(mob, ignored -> new Mem());
 
         Vec3 pos = mob.position();
         double dx = desired.x - pos.x;
@@ -286,6 +273,10 @@ public final class NodeRouter {
     }
 
     public static boolean isPathable(Mob mob, Vec3 candidate) {
+        return isPathable(mob, candidate, PathTaskScheduler.Priority.OPTIONAL);
+    }
+
+    public static boolean isPathable(Mob mob, Vec3 candidate, PathTaskScheduler.Priority priority) {
         if (mob == null || !isFinite(candidate)) return false;
         try {
             Level lvl = mob.level();
@@ -312,6 +303,7 @@ public final class NodeRouter {
             }
 
             BlockPos bp = new BlockPos((int) Math.floor(candidate.x), (int) Math.floor(candidate.y), (int) Math.floor(candidate.z));
+            if (!PathTaskScheduler.tryConsumePathAttempt(lvl, priority)) return false;
             return mob.getNavigation().createPath(bp, 0) != null;
         } catch (Throwable ignored) {
             return false;
@@ -319,7 +311,6 @@ public final class NodeRouter {
     }
 
     public static void clear() {
-        MEMORY.invalidateAll();
     }
 
     private static boolean isFinite(Vec3 value) {

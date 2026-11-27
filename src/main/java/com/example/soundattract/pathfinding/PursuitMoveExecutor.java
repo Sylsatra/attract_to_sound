@@ -11,6 +11,10 @@ public final class PursuitMoveExecutor {
     }
 
     public static boolean issueVanillaMove(Mob mob, Vec3 destination, double speed) {
+        return issueVanillaMove(mob, destination, speed, PathTaskScheduler.Priority.OPTIONAL);
+    }
+
+    public static boolean issueVanillaMove(Mob mob, Vec3 destination, double speed, PathTaskScheduler.Priority priority) {
         if (mob == null || destination == null || mob.level() == null) {
             return false;
         }
@@ -19,6 +23,9 @@ public final class PursuitMoveExecutor {
         }
 
         PathNavigation navigation = mob.getNavigation();
+        if (!PathTaskScheduler.tryConsumePathAttempt(mob.level(), priority)) {
+            return false;
+        }
         Path path = navigation.createPath(BlockPos.containing(destination), 0);
         if (path == null || !isPathSafe(mob, path)) {
             navigation.stop();

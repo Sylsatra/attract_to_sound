@@ -41,7 +41,7 @@ public final class LivingWallConfig {
         ENABLE_LIVING_WALL = BUILDER.comment(
                 "Master switch for the living wall bridge system.",
                 "Build automatically when enough eligible mobs cluster near a wall or hazard.")
-            .define("enableLivingWall", true);
+            .define("enableLivingWall", false);
         ENABLE_MOTION_DIAGNOSTICS = BUILDER.comment(
                 "Enable bounded server-side diagnostics for structural members that fail to reach the bridge foundation.",
                 "Logs movement/navigation samples and push requests; observations do not prove causation.")

@@ -15,6 +15,7 @@
     "MobAccessor",
     "WalkNodeEvaluatorMixin",
     "LivingBridgePathNavigationMixin",
+    "SharedMeleeAttackGoalMixin",
     "SimpleTextureMixin",
     "HttpTextureMixin",
     "SimpleTextureTextureImageMixin",

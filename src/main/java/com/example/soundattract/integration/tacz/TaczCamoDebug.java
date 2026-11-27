@@ -71,7 +71,8 @@ public final class TaczCamoDebug {
     }
 
     private static boolean isEnabledForEitherIntegration() {
-        return DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.TACZ_NPCS);
+        return DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.TACZ_NPCS)
+                || DebugLoggingConfig.isEnabled(DebugLoggingConfig.Feature.TACZ_HOSTILES);
     }
 
     private static DebugLoggingConfig.Feature featureFor(EntityType<?> type) {
@@ -84,14 +85,15 @@ public final class TaczCamoDebug {
     private static Optional<DebugLoggingConfig.Feature> lookupFeature(EntityType<?> type) {
         ResourceLocation id = BuiltInRegistries.ENTITY_TYPE.getKey(type);
         DebugLoggingConfig.Feature feature = id == null ? null : switch (id.getNamespace()) {
-            case "tacz_npc" -> DebugLoggingConfig.Feature.TACZ_NPCS;
+            case "tacz_npc", "tacznpcs" -> DebugLoggingConfig.Feature.TACZ_NPCS;
+            case "tacz_hostiles" -> DebugLoggingConfig.Feature.TACZ_HOSTILES;
             default -> null;
         };
         return Optional.ofNullable(feature);
     }
 
     private static void log(DebugLoggingConfig.Feature feature, String message, Object... args) {
-        String integration = "TACZ NPCs";
+        String integration = feature == DebugLoggingConfig.Feature.TACZ_NPCS ? "TACZ NPCs" : "TACZ Hostiles";
         SoundAttractMod.LOGGER.info("[{}] " + message, prepend(integration, args));
     }
 

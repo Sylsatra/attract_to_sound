@@ -1,6 +1,7 @@
 package com.example.soundattract.integration.tacz;
 
 import com.example.soundattract.SoundAttractMod;
+import com.example.soundattract.integration.taczhostiles.TaczHostilesDebug;
 import com.example.soundattract.integration.tacznpcs.TaczNpcDebug;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -14,5 +15,6 @@ public final class TaczIntegrationDiagnostics {
     @SubscribeEvent
     public static void onServerStarted(ServerStartedEvent event) {
         TaczNpcDebug.reportStartupStatus();
+        TaczHostilesDebug.reportStartupStatus();
     }
 }

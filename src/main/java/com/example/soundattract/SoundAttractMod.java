@@ -66,6 +66,9 @@ public class SoundAttractMod {
 
         NeoForge.EVENT_BUS.register(new FloorCreekEvents());
         NeoForge.EVENT_BUS.register(new ArrowInvestigationEvents());
+        com.example.soundattract.ai.GroupTargetSharingManager.setConfirmedSightListener(sight ->
+                com.example.soundattract.ai.ClueDirector.onConfirmedSight(
+                        sight.level(), sight.position(), sight.seenTick(), sight.sourceId(), sight.targetId()));
         if (ModList.get().isLoaded("tacz")) {
             NeoForge.EVENT_BUS.register(com.example.soundattract.integration.tacz.TaczIntegration.class);
         }
@@ -117,6 +120,7 @@ public class SoundAttractMod {
             SoundAttractConfig.markConfigReady();
             QuantifiedIntegration.bootstrap();
             CustomNpcsStealthTargetBridge.registerIfPresent();
+            com.example.soundattract.integration.csgrenades.CsGrenadesIntegration.register();
             registerToughAsNailsIntegrationIfPresent();
             WorkSchedulerManager.refresh();
         });

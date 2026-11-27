@@ -29,7 +29,7 @@ public final class Weather2WindDebugLog {
         String key = dimension + ":" + component;
         String previous = LAST_REPORTED_STATES.asMap().put(key, state);
         if (!state.equals(previous)) {
-            SoundAttractMod.LOGGER.info("[Weather2 Wind] {}", message.get());
+            SoundAttractMod.LOGGER.info("[Wind Integration] {}", message.get());
         }
     }
 
